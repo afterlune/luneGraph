@@ -1,0 +1,97 @@
+# lune-graph
+
+`lune-graph` is a typed, stateful graph executor for Go. A graph defines nodes and allowed edges. Each execution owns an evolving state and can loop, branch, wait for input, and resume from a checkpoint. The core uses the Go standard library; the optional SQLite store uses `modernc.org/sqlite`.
+
+The public API stays in the `lune-graph` package. Its implementation is organized under `internal/model`, `internal/definition`, and `internal/executor`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`.
+
+## A small graph
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	graph "lune-graph"
+)
+
+func main() {
+	g := graph.New[int]("count")
+	err := g.AddNode(graph.NodeSpec[int]{
+		Name: "count",
+		Run: func(_ context.Context, n int) (graph.Transition[int], error) {
+			if n == 3 {
+				return graph.EndExecution(n), nil
+			}
+			return graph.To(n+1, "count"), nil
+		},
+	})
+	if err != nil { panic(err) }
+	if err := g.AddEdge("count", "count"); err != nil { panic(err) }
+	runner, err := g.Compile(graph.Config[int]{
+		MachineID: "counter-v1",
+		Clone: func(n int) (int, error) { return n, nil },
+	})
+	if err != nil { panic(err) }
+	result, err := runner.Start(context.Background(), "run-1", 0, graph.Options[int]{})
+	if err != nil { panic(err) }
+	fmt.Println(*result.Checkpoint.Final) // 3
+}
+```
+
+`Graph[S]` is a builder. `Compile` copies its definition into a `Runner[S]`; later builder changes do not affect that runner. The same runner may serve concurrent executions if node, continuation, merge, and clone functions are safe to call concurrently.
+
+Nodes return one of four explicit decisions:
+
+- `To(state, targets...)` continues to one edge or fans out to several edges.
+- `Wait(state, continuation, targets...)` suspends that invocation until it receives input.
+- `EndBranch(state)` ends one path and records its terminal state.
+- `EndExecution(state)` ends the entire execution, cancels other active invocations, and sets `Checkpoint.Final`.
+
+Targets must be declared with `AddEdge`. A node's ordinary error follows its `NodeSpec.OnError` policy: `FailInvocation` (the default), `FailGroup`, or `FailExecution`. A run can override that policy with `Options.FailureOverride`. `FailGroup` at the root escalates to an execution failure. Local failures remain in `Checkpoint.Failures` and do not become a top-level error. Panics from nodes, joins, continuation handlers, decoders, and state cloning become `*PanicError`; locally handled panics also retain their stack in `Failure.PanicStack`. Invalid actions, edges, or joins return `*TransitionError` regardless of failure policy. Clone errors and invalid transitions return the last committed checkpoint. Store panics are outside this callback boundary.
+
+## Parallel branches and joins
+
+Each fan-out creates a new activation group. The supplied `Clone` function gives each branch an independent state. Register a `JoinSpec[S]` with `From` set to the fan-out node and a `Merge` function, then connect branch paths to that join with edges. The join waits until every branch in that activation group has reached it, ended, or failed. `Merge` receives only the states that reached the join, in target order; it may receive an empty slice. A join may have one outgoing edge or end the parent branch. Groups may be nested, and loops can create new generations of the same group.
+
+`Clone` is required even for a graph without fan-out. The runner clones state before calling user code so an in-place mutation followed by an error cannot change an earlier checkpoint. `Clone` must copy mutable maps, slices, pointers, and other referenced data that callbacks may modify. Branch terminal states are retained in `Checkpoint.Terminals` in creation order; they are not merged.
+
+## Pausing, resuming, and storing
+
+Register each continuation with `RegisterContinuation`. Its decoder turns a `[]byte` resume payload into a concrete Go type, and its typed handler applies that value to the waiting state. `Wait` records the continuation key and allowed next targets. `Resume(ctx, checkpoint, []ResumeInput{{InvocationID: id, Payload: data}}, options)` applies input to the addressed invocation; other waiting invocations may remain paused. All supplied payloads are decoded before any input is applied. A decode error leaves the checkpoint unchanged; accepted inputs are then committed one at a time. If a later input fails, the returned checkpoint contains the successfully committed prefix and its revision. Passing no inputs advances ready invocations after a step budget was exhausted.
+
+`Start` and `Resume` return a `Result[S]` containing a `Checkpoint[S]`. The checkpoint holds invocation positions, activation groups, terminal states, failures, a revision, and cumulative completed steps. Treat it as immutable. Checkpoints carry `FormatVersion` (`CheckpointFormatVersion` is currently 1); `Resume` rejects incompatible or malformed checkpoints with `ErrInvalidCheckpoint`. `MaxSteps` defaults to 10,000 node starts per call and can be overridden; exhausting it returns `StatusBudget`. `MaxConcurrency` defaults to `GOMAXPROCS(0)`.
+
+Ready invocations receive starts in round-robin ID order, tracked by `ScheduleCursor` across resumes; older version-1 checkpoints without that field start at cursor zero. Concurrent results are committed in the order the scheduler receives them, so competing `EndExecution` results depend on completion timing. Cancellation waits for running callbacks to return. If a revision, step, or ID counter cannot advance, the runner returns `ErrExecutionLimit` with `StatusFailed` and the last committed checkpoint.
+
+An optional `graph.Store[S]` provides `Create`, `Load`, and revision-based `CompareAndSwap`. `checkpoint/memory` provides a concurrent in-memory implementation. `checkpoint/sqlite` persists the latest checkpoint for each run in a local SQLite file and supports CAS across processes on the same machine. `checkpoint.Codec[S]` encodes and decodes the complete checkpoint; `checkpoint.JSON[S]` uses `encoding/json`, so the state type must survive a JSON round trip. Applications with other state types can implement the codec interface. SQLite requires the database file's parent directory to exist.
+
+To resume a budgeted run after reopening the database, reconstruct the same graph and compile it with the same `MachineID`:
+
+```go
+ctx := context.Background()
+store, err := sqlite.Open(ctx, "runs.db", checkpoint.JSON[int]{})
+if err != nil { panic(err) }
+_, err = runner.Start(ctx, "run-2", 0, graph.Options[int]{Store: store, MaxSteps: 1})
+if err != nil { panic(err) }
+if err := store.Close(); err != nil { panic(err) }
+
+// The following calls can run in a new process with the same graph definition.
+store, err = sqlite.Open(ctx, "runs.db", checkpoint.JSON[int]{})
+if err != nil { panic(err) }
+defer store.Close()
+saved, err := store.Load(ctx, "run-2")
+if err != nil { panic(err) }
+result, err := runner.Resume(ctx, saved, nil, graph.Options[int]{Store: store})
+if err != nil { panic(err) }
+fmt.Println(*result.Checkpoint.Final) // 3
+```
+
+When configured, the runner saves the initial checkpoint and each accepted transition. Stores must reject stale revisions with `graph.ErrConflict`, which guarantees no write. Another storage error can leave the commit outcome uncertain: load the latest checkpoint before retrying. `Resume` uses its supplied checkpoint only as a run ID, machine ID, format, and revision reference; after checking for a conflict, it validates and executes the checkpoint loaded from the Store. Keep `MachineID` stable for one graph definition and change it when that definition becomes incompatible with existing checkpoints.
+
+Running nodes remain pending in persisted checkpoints until their result is committed. A crash, cancellation, or save failure can therefore cause a node to run again after recovery. External side effects should be idempotent or deduplicated by the application. Cancellation asks running nodes to stop through `context.Context` and waits for them to return.
+
+## API migration
+
+`Snapshot[S]`, `Result.Snapshot`, `ErrInvalidSnapshot`, and `SnapshotFormatVersion` are now `Checkpoint[S]`, `Result.Checkpoint`, `ErrInvalidCheckpoint`, and `CheckpointFormatVersion`. Import the in-memory store from `lune-graph/checkpoint/memory`; missing runs return `checkpoint.ErrNotFound`.
