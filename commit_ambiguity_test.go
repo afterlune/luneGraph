@@ -28,10 +28,10 @@ func (s *ambiguousStore) CompareAndSwap(ctx context.Context, expected uint64, ne
 
 func TestStoreErrorAfterCommitRequiresReload(t *testing.T) {
 	g := graph.New[int]("first")
-	node(t, g, "first", func(_ context.Context, value int) (graph.Transition[int], error) {
+	node(t, g, "first", func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
 		return graph.To(value+1, "done"), nil
 	})
-	node(t, g, "done", func(_ context.Context, value int) (graph.Transition[int], error) {
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
 		return graph.EndExecution(value), nil
 	})
 	edge(t, g, "first", "done")

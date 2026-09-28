@@ -22,7 +22,8 @@ func main() {
 	g := graph.New[int]("count")
 	err := g.AddNode(graph.NodeSpec[int]{
 		Name: "count",
-		Run: func(_ context.Context, n int) (graph.Transition[int], error) {
+		Run: func(_ context.Context, call graph.CallInfo, n int) (graph.Transition[int], error) {
+			// Use call.RunID and call.CallID for application-side deduplication.
 			if n == 3 {
 				return graph.EndExecution(n), nil
 			}
@@ -42,7 +43,7 @@ func main() {
 }
 ```
 
-`Graph[S]` is a builder. `Compile` copies its definition into a `Runner[S]`; later builder changes do not affect that runner. The same runner may serve concurrent executions if node, continuation, merge, and clone functions are safe to call concurrently.
+`Graph[S]` is a builder. `Compile` copies its definition into a `Runner[S]`; later builder changes do not affect that runner. The same runner may serve concurrent executions if node, continuation, merge, and clone functions are safe to call concurrently. Node, join, and continuation callbacks receive a `CallInfo` with the run ID, invocation ID, and persisted callback ID.
 
 Nodes return one of four explicit decisions:
 
@@ -63,9 +64,9 @@ Each fan-out creates a new activation group. The supplied `Clone` function gives
 
 Register each continuation with `RegisterContinuation`. Its decoder turns a `[]byte` resume payload into a concrete Go type, and its typed handler applies that value to the waiting state. `Wait` records the continuation key and allowed next targets. `Resume(ctx, checkpoint, []ResumeInput{{InvocationID: id, Payload: data}}, options)` applies input to the addressed invocation; other waiting invocations may remain paused. All supplied payloads are decoded before any input is applied. A decode error leaves the checkpoint unchanged; accepted inputs are then committed one at a time. If a later input fails under `FailExecution`, the failure terminal is committed after the accepted prefix and clears active invocations. Passing no inputs advances ready invocations after a step budget was exhausted.
 
-`Start`, `Resume`, and `Recover` return a `Result[S]` containing a `Checkpoint[S]`. The checkpoint holds invocation positions, activation groups, terminal states, failures, a revision, and cumulative completed steps. Treat it as immutable. Checkpoints carry `FormatVersion` (`CheckpointFormatVersion` is currently 1); `Resume` and `Recover` reject incompatible or malformed checkpoints with `ErrInvalidCheckpoint`. `MaxSteps` defaults to 10,000 node starts per call and can be overridden; exhausting it returns `StatusBudget`. `MaxConcurrency` defaults to `GOMAXPROCS(0)`.
+`Start`, `Resume`, and `Recover` return a `Result[S]` containing a `Checkpoint[S]`. The checkpoint holds invocation positions, activation groups, terminal states, failures, a revision, and cumulative completed steps. Treat it as immutable. Checkpoints carry `FormatVersion` (`CheckpointFormatVersion` is currently 2); `Resume` and `Recover` reject incompatible or malformed checkpoints with `ErrInvalidCheckpoint`. Version-1 checkpoints are not upgraded automatically and must be completed with the old runtime or migrated by the application. `MaxSteps` defaults to 10,000 node starts per call and can be overridden; exhausting it returns `StatusBudget`. `MaxConcurrency` defaults to `GOMAXPROCS(0)`.
 
-Ready invocations receive starts in round-robin ID order, tracked by `ScheduleCursor` across resumes; older version-1 checkpoints without that field start at cursor zero. Concurrent results are committed in the order the scheduler receives them, so competing `EndExecution` results depend on completion timing. Cancellation waits for running callbacks to return. If a revision, step, or ID counter cannot advance, the runner returns `ErrExecutionLimit` with `StatusFailed` and the last committed checkpoint.
+Ready invocations receive starts in round-robin ID order, tracked by `ScheduleCursor` across resumes. Concurrent results are committed in the order the scheduler receives them, so competing `EndExecution` results depend on completion timing. Cancellation waits for running callbacks to return. If a revision, step, or ID counter cannot advance, the runner returns `ErrExecutionLimit` with `StatusFailed` and the last committed checkpoint.
 
 An optional `graph.Store[S]` provides `Create`, `Load`, and revision-based `CompareAndSwap`. `checkpoint/memory` provides a concurrent in-memory implementation. `checkpoint/sqlite` persists the latest checkpoint for each run in a local SQLite file and supports CAS across processes on the same machine. `checkpoint.Codec[S]` encodes and decodes the complete checkpoint; `checkpoint.JSON[S]` uses `encoding/json`, so the state type must survive a JSON round trip. Applications with other state types can implement the codec interface. SQLite requires the database file's parent directory to exist.
 
@@ -90,8 +91,8 @@ fmt.Println(*result.Checkpoint.Final) // 3
 
 When configured, the runner saves the initial checkpoint and each accepted transition, including an execution-level failure. `Recover` loads the latest checkpoint by run ID and can return an already completed result without running callbacks or changing its revision. A stored execution-level failure returns `ErrRunFailed`; the original Go error type is available only to the call that produced it. Supplying inputs to any completed run returns its checkpoint with `StatusFailed` and `ErrRunCompleted`; the inputs are not consumed. Concurrent recoveries may race: a losing commit returns `ErrConflict` without an automatic retry. `Resume` instead uses its supplied checkpoint as a run ID, machine ID, format, and revision reference; it rejects a stale reference and an already completed run. Stores must reject stale revisions with `graph.ErrConflict`, which guarantees no write. Another storage error can leave the commit outcome uncertain: use `Recover` or load the latest checkpoint before retrying. Keep `MachineID` stable for one graph definition and change it when that definition becomes incompatible with existing checkpoints.
 
-Running nodes remain pending in persisted checkpoints until their result is committed. A crash, cancellation, or save failure can therefore cause a node to run again after recovery. External side effects should be idempotent or deduplicated by the application. Cancellation asks running nodes to stop through `context.Context` and waits for them to return.
+Running nodes remain pending in persisted checkpoints until their result is committed. A crash, cancellation, or save failure can therefore cause a callback to run again after recovery. Each node execution, continuation application, and join merge receives a `CallInfo.CallID` that is committed before the callback can start and reused if that logical callback is replayed. New loop visits, continuation applications, and fan-out joins receive new IDs. Use an application-specific namespace together with `RunID` and `CallID` as a deduplication key. This supports at-least-once handling; it does not make external side effects exactly once. Clone functions and continuation decoders should not perform side effects. Cancellation asks running nodes to stop through `context.Context` and waits for them to return.
 
 ## API migration
 
-`Snapshot[S]`, `Result.Snapshot`, `ErrInvalidSnapshot`, and `SnapshotFormatVersion` are now `Checkpoint[S]`, `Result.Checkpoint`, `ErrInvalidCheckpoint`, and `CheckpointFormatVersion`. Import the in-memory store from `lune-graph/checkpoint/memory`; missing runs return `checkpoint.ErrNotFound`.
+`Snapshot[S]`, `Result.Snapshot`, `ErrInvalidSnapshot`, and `SnapshotFormatVersion` are now `Checkpoint[S]`, `Result.Checkpoint`, `ErrInvalidCheckpoint`, and `CheckpointFormatVersion`. Callback signatures now include `graph.CallInfo`; update node, join, and continuation handlers. Checkpoint format 2 rejects version-1 snapshots, which need an application-managed migration or the old runtime. Import the in-memory store from `lune-graph/checkpoint/memory`; missing runs return `checkpoint.ErrNotFound`.

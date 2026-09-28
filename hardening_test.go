@@ -14,7 +14,7 @@ func TestCallbackPanicPolicies(t *testing.T) {
 	for _, scope := range []graph.FailureScope{graph.FailInvocation, graph.FailExecution} {
 		t.Run(string(rune('0'+scope)), func(t *testing.T) {
 			g := graph.New[int]("panic")
-			if err := g.AddNode(graph.NodeSpec[int]{Name: "panic", OnError: scope, Run: func(context.Context, int) (graph.Transition[int], error) {
+			if err := g.AddNode(graph.NodeSpec[int]{Name: "panic", OnError: scope, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 				panic(boom)
 			}}); err != nil {
 				t.Fatal(err)
@@ -43,8 +43,10 @@ func TestIllegalTransitionIsTopLevel(t *testing.T) {
 		{Action: graph.ActionContinue, Targets: []string{"next"}, Continuation: "stray"},
 	} {
 		g := graph.New[int]("start")
-		node(t, g, "start", func(context.Context, int) (graph.Transition[int], error) { return tr, nil })
-		node(t, g, "next", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+		node(t, g, "start", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) { return tr, nil })
+		node(t, g, "next", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.EndExecution(v), nil
+		})
 		edge(t, g, "start", "next")
 		out, err := intRunner(t, g).Start(context.Background(), "bad-transition", 0, graph.Options[int]{})
 		var transitionErr *graph.TransitionError
@@ -56,7 +58,9 @@ func TestIllegalTransitionIsTopLevel(t *testing.T) {
 
 func TestCloneAndMergePanics(t *testing.T) {
 	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	r, err := g.Compile(graph.Config[int]{MachineID: "panic-clone", Clone: func(int) (int, error) { panic("clone") }})
 	if err != nil {
 		t.Fatal(err)
@@ -68,9 +72,13 @@ func TestCloneAndMergePanics(t *testing.T) {
 	}
 
 	cloneFork := graph.New[int]("fork")
-	node(t, cloneFork, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "a", "b"), nil })
+	node(t, cloneFork, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "a", "b"), nil
+	})
 	for _, name := range []string{"a", "b"} {
-		node(t, cloneFork, name, func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndBranch(v), nil })
+		node(t, cloneFork, name, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.EndBranch(v), nil
+		})
 		edge(t, cloneFork, "fork", name)
 	}
 	cloneCalls := 0
@@ -90,12 +98,16 @@ func TestCloneAndMergePanics(t *testing.T) {
 	}
 
 	fork := graph.New[int]("fork")
-	node(t, fork, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "a", "b"), nil })
-	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(context.Context, []int) (int, error) { panic("merge") }}); err != nil {
+	node(t, fork, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "a", "b"), nil
+	})
+	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(context.Context, graph.CallInfo, []int) (int, error) { panic("merge") }}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
-		node(t, fork, name, func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "join"), nil })
+		node(t, fork, name, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.To(v, "join"), nil
+		})
 		edge(t, fork, "fork", name)
 		edge(t, fork, name, "join")
 	}
@@ -107,15 +119,17 @@ func TestCloneAndMergePanics(t *testing.T) {
 
 func TestWrongJoinIsTransitionError(t *testing.T) {
 	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "input", "join"), nil
 	})
-	node(t, g, "other", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndBranch(v), nil })
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, values []int) (int, error) { return 0, nil }}); err != nil {
+	node(t, g, "other", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndBranch(v), nil
+	})
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) { return 0, nil }}); err != nil {
 		t.Fatal(err)
 	}
 	edge(t, g, "start", "join")
-	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, state, _ int) (int, error) { return state, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		t.Fatal(err)
 	}
 	out, err := intRunner(t, g).Start(context.Background(), "wrong-join", 0, graph.Options[int]{})
@@ -129,17 +143,19 @@ func TestContinuationPanics(t *testing.T) {
 	for _, panicPhase := range []string{"decode", "apply"} {
 		t.Run(panicPhase, func(t *testing.T) {
 			g := graph.New[int]("wait")
-			node(t, g, "wait", func(_ context.Context, v int) (graph.Transition[int], error) {
+			node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 				return graph.Wait(v, "input", "done"), nil
 			})
-			node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+			node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+				return graph.EndExecution(v), nil
+			})
 			edge(t, g, "wait", "done")
 			if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) {
 				if panicPhase == "decode" {
 					panic("decoder")
 				}
 				return 2, nil
-			}, func(_ context.Context, state, value int) (int, error) {
+			}, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) {
 				if panicPhase == "apply" {
 					panic("apply")
 				}
@@ -167,12 +183,14 @@ func TestContinuationPanics(t *testing.T) {
 
 func TestStoreCheckpointIsAuthoritative(t *testing.T) {
 	g := graph.New[int]("wait")
-	node(t, g, "wait", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "add", "done"), nil
 	})
-	node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	edge(t, g, "wait", "done")
-	if err := graph.RegisterContinuation(g, "add", func([]byte) (int, error) { return 1, nil }, func(_ context.Context, state, value int) (int, error) { return state + value, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "add", func([]byte) (int, error) { return 1, nil }, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) { return state + value, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -196,11 +214,11 @@ func TestStoreCheckpointIsAuthoritative(t *testing.T) {
 
 func TestMalformedCheckpointRejected(t *testing.T) {
 	g := graph.New[int]("wait")
-	node(t, g, "wait", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "input", "wait"), nil
 	})
 	edge(t, g, "wait", "wait")
-	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, state, _ int) (int, error) { return state, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -209,7 +227,10 @@ func TestMalformedCheckpointRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*graph.Checkpoint[int]){
+		func(s *graph.Checkpoint[int]) { s.FormatVersion = 1 },
 		func(s *graph.Checkpoint[int]) { s.FormatVersion++ },
+		func(s *graph.Checkpoint[int]) { s.Invocations[0].CallID = "" },
+		func(s *graph.Checkpoint[int]) { s.Invocations[0].CallID = "c9999" },
 		func(s *graph.Checkpoint[int]) { s.Invocations[0].ID = "i99" },
 		func(s *graph.Checkpoint[int]) { s.Invocations[0].BranchIndex = 1 },
 		func(s *graph.Checkpoint[int]) {
@@ -224,5 +245,29 @@ func TestMalformedCheckpointRejected(t *testing.T) {
 		if _, err := r.Resume(context.Background(), bad, nil, graph.Options[int]{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 			t.Fatalf("malformed checkpoint accepted: %+v, %v", bad, err)
 		}
+	}
+}
+
+func TestDuplicateCallbackIDsRejected(t *testing.T) {
+	g := graph.New[int]("fork")
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "a", "b"), nil
+	})
+	for _, name := range []string{"a", "b"} {
+		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.EndBranch(state), nil
+		})
+		edge(t, g, "fork", name)
+	}
+	r := intRunner(t, g)
+	first, err := r.Start(context.Background(), "duplicate-call-id", 0, graph.Options[int]{MaxSteps: 1})
+	if err != nil || len(first.Checkpoint.Invocations) != 3 {
+		t.Fatalf("start = %+v, %v", first, err)
+	}
+	forged := first.Checkpoint
+	forged.Invocations = append([]graph.Invocation[int](nil), first.Checkpoint.Invocations...)
+	forged.Invocations[2].CallID = forged.Invocations[1].CallID
+	if _, err := r.Resume(context.Background(), forged, nil, graph.Options[int]{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+		t.Fatalf("duplicate callback ID error = %v", err)
 	}
 }

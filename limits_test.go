@@ -12,7 +12,7 @@ import (
 func TestSchedulerCountersDoNotWrap(t *testing.T) {
 	called := 0
 	g := graph.New[int]("loop")
-	node(t, g, "loop", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "loop", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		called++
 		return graph.To(state+1, "loop"), nil
 	})
@@ -42,16 +42,16 @@ func TestSchedulerCountersDoNotWrap(t *testing.T) {
 
 func TestFanoutIDReservationDoesNotWrap(t *testing.T) {
 	g := graph.New[int]("wait")
-	node(t, g, "wait", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Wait(state, "next", "a", "b"), nil
 	})
 	for _, name := range []string{"a", "b"} {
-		node(t, g, name, func(_ context.Context, state int) (graph.Transition[int], error) {
+		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			return graph.EndBranch(state), nil
 		})
 		edge(t, g, "wait", name)
 	}
-	if err := graph.RegisterContinuation(g, "next", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, state, _ int) (int, error) { return state, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "next", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -67,12 +67,67 @@ func TestFanoutIDReservationDoesNotWrap(t *testing.T) {
 	}
 }
 
-func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
-	g := graph.New[int]("wait")
-	node(t, g, "wait", func(_ context.Context, state int) (graph.Transition[int], error) {
+func TestWaitCallIDReservationDoesNotWrap(t *testing.T) {
+	g := graph.New[int]("seed")
+	node(t, g, "seed", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "wait"), nil
+	})
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Wait(state, "next", "done"), nil
 	})
-	node(t, g, "done", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "seed", "wait")
+	edge(t, g, "wait", "done")
+	if err := graph.RegisterContinuation(g, "next", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
+		t.Fatal(err)
+	}
+	r := intRunner(t, g)
+	first, err := r.Start(context.Background(), "wait-id-limit", 0, graph.Options[int]{MaxSteps: 1})
+	if err != nil || first.Status != graph.StatusBudget {
+		t.Fatalf("start = %+v, %v", first, err)
+	}
+	limited := first.Checkpoint
+	limited.NextID = math.MaxUint64
+	out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.NextID != limited.NextID {
+		t.Fatalf("wait call ID limit = %+v, %v", out, err)
+	}
+}
+
+func TestNodeCallIDReservationDoesNotWrap(t *testing.T) {
+	g := graph.New[int]("seed")
+	node(t, g, "seed", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "next"), nil
+	})
+	node(t, g, "next", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "done"), nil
+	})
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "seed", "next")
+	edge(t, g, "next", "done")
+	r := intRunner(t, g)
+	first, err := r.Start(context.Background(), "node-id-limit", 0, graph.Options[int]{MaxSteps: 1})
+	if err != nil || first.Status != graph.StatusBudget {
+		t.Fatalf("start = %+v, %v", first, err)
+	}
+	limited := first.Checkpoint
+	limited.NextID = math.MaxUint64
+	out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.NextID != limited.NextID {
+		t.Fatalf("node call ID limit = %+v, %v", out, err)
+	}
+}
+
+func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
+	g := graph.New[int]("wait")
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.Wait(state, "next", "done"), nil
+	})
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.EndExecution(state), nil
 	})
 	edge(t, g, "wait", "done")
@@ -80,7 +135,7 @@ func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
 	if err := graph.RegisterContinuation(g, "next", func([]byte) (int, error) {
 		decoded++
 		return 0, nil
-	}, func(_ context.Context, state, _ int) (int, error) { return state, nil }); err != nil {
+	}, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -98,12 +153,12 @@ func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
 
 func TestConcurrentLaunchesReserveCommitCapacity(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "a", "b"), nil
 	})
 	called := 0
 	for _, name := range []string{"a", "b"} {
-		node(t, g, name, func(_ context.Context, state int) (graph.Transition[int], error) {
+		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			called++
 			return graph.EndBranch(state), nil
 		})

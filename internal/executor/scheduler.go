@@ -95,13 +95,14 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 				return resultWith(s, StatusFailed), fmt.Errorf("clone node state: %w", err)
 			}
 			id := next.ID
+			call := CallInfo{RunID: s.RunID, InvocationID: id, CallID: next.CallID}
 			spec := r.nodes[next.Node]
 			nodeCtx, cancel := context.WithCancel(runCtx)
 			running[id] = cancel
 			used++
 			cursor = invocationNumber(id)
 			go func() {
-				transition, err := r.runNode(nodeCtx, id, spec, state)
+				transition, err := r.runNode(nodeCtx, call, spec, state)
 				results <- workResult[S]{id: id, transition: transition, err: err}
 			}()
 		}

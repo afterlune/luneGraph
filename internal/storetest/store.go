@@ -150,15 +150,15 @@ func fixture() graph.Checkpoint[State] {
 		MachineID:     "machine-v1",
 		Revision:      1,
 		Final:         &State{Values: map[string]int{"n": 1}},
-		Invocations:   []graph.Invocation[State]{{ID: "i1", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
-		Groups:        []graph.ActivationGroup{{ID: "g1", Children: []string{"i1"}}},
+		Invocations:   []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
+		Groups:        []graph.ActivationGroup{{ID: "g1", CallID: "c3", Children: []string{"i1"}}},
 		Terminals:     []graph.Terminal[State]{{InvocationID: "i1", State: State{Values: map[string]int{"n": 1}}}},
 	}
 }
 
 func assertFixture(t *testing.T, value graph.Checkpoint[State], revision uint64) {
 	t.Helper()
-	if value.Revision != revision || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || value.Terminals[0].State.Values["n"] != 1 || value.Final.Values["n"] != 1 {
+	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || value.Terminals[0].State.Values["n"] != 1 || value.Final.Values["n"] != 1 {
 		t.Fatalf("stored checkpoint was mutated: %+v", value)
 	}
 }

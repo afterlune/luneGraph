@@ -13,7 +13,7 @@ func FuzzCheckpointValidation(f *testing.F) {
 		f.Add(seed)
 	}
 	g := graph.New[int]("wait")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", Run: func(_ context.Context, state int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Wait(state, "input", "wait"), nil
 	}}); err != nil {
 		f.Fatal(err)
@@ -21,7 +21,7 @@ func FuzzCheckpointValidation(f *testing.F) {
 	if err := g.AddEdge("wait", "wait"); err != nil {
 		f.Fatal(err)
 	}
-	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, state, _ int) (int, error) { return state, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		f.Fatal(err)
 	}
 	r, err := g.Compile(graph.Config[int]{MachineID: "fuzz-v1", Clone: func(state int) (int, error) { return state, nil }})

@@ -8,7 +8,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 1
+const CheckpointFormatVersion uint32 = 2
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -23,9 +23,11 @@ const (
 )
 
 // Invocation is a resumable path. Node is the next node when ready and the
-// suspending node when waiting.
+// suspending node when waiting. CallID identifies its pending node or
+// continuation callback.
 type Invocation[S any] struct {
 	ID           string
+	CallID       string
 	Node         string
 	State        S
 	Status       InvocationStatus
@@ -37,8 +39,10 @@ type Invocation[S any] struct {
 }
 
 // ActivationGroup correlates branches started by one fan-out occurrence.
+// CallID identifies the pending join callback when JoinNode is set.
 type ActivationGroup struct {
 	ID       string
+	CallID   string
 	Source   string
 	ParentID string
 	JoinNode string

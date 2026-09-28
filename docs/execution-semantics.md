@@ -84,8 +84,23 @@ outcome commits. If the process stops in that interval, loading the checkpoint
 and resuming runs the node again. Cancellation and an uncertain Store write can
 also leave a callback's external effect ahead of the stored checkpoint.
 Therefore a callback may execute more than once across recovery. The runtime
-does not make callback side effects exactly once; applications should use
-idempotent operations or deduplicate them with a stable run and invocation key.
+does not make callback side effects exactly once.
+
+Node, join merge, and continuation apply callbacks receive a `CallInfo` with
+`RunID`, `InvocationID`, and `CallID`. The runtime persists a callback's ID
+before that callback can start. Recovery reuses the same ID when replaying that
+logical callback. A new node visit in a loop, a new continuation application,
+or a new fan-out join gets a new ID. Use an application-specific namespace with
+`RunID` and `CallID` as the deduplication key; invocation IDs identify paths
+and are reused across sequential node visits. This key lets an application
+recognize replays but cannot make an external effect atomic with checkpoint
+commit. The external system must provide idempotency or atomic deduplication.
+State clone functions and continuation decoders are expected to be pure and do
+not receive a `CallInfo`.
+
+Checkpoint format 2 persists callback IDs. Version-1 checkpoints are rejected
+by this runner with `ErrInvalidCheckpoint`; applications must finish those runs
+with the older runtime or migrate them before recovery.
 
 `graph.ErrConflict` from a Store write guarantees that the attempted write did
 not happen. Another Store error, including cancellation during a write, may

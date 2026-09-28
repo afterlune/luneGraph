@@ -43,14 +43,29 @@ func EndExecution[S any](state S) Transition[S] {
 	return Transition[S]{State: state, Action: ActionEndExecution}
 }
 
-// Node performs one invocation and chooses its next control action.
-type Node[S any] func(context.Context, S) (Transition[S], error)
+// Node performs one invocation and chooses its next control action. CallInfo
+// carries a stable callback ID across recovery replays.
+type Node[S any] func(context.Context, CallInfo, S) (Transition[S], error)
+
+// CallInfo identifies one logical user callback within a run. CallID is
+// persisted before the callback can start and remains stable if recovery
+// replays that callback. Use RunID and CallID as an application deduplication
+// key, with an application-specific namespace when needed.
+type CallInfo struct {
+	// RunID identifies the execution.
+	RunID string
+	// InvocationID identifies the path, which may visit several nodes.
+	InvocationID string
+	// CallID is unique within the run and stable across replay of this callback.
+	CallID string
+}
 
 // Clone makes an independent copy of state before a user callback runs.
 type Clone[S any] func(S) (S, error)
 
-// Merge combines values that reached one activation group's join.
-type Merge[S any] func(context.Context, []S) (S, error)
+// Merge combines values that reached one activation group's join. CallInfo
+// carries the activation group's stable join callback ID.
+type Merge[S any] func(context.Context, CallInfo, []S) (S, error)
 
 // FailureScope controls how a node or join error affects an execution.
 type FailureScope uint8
@@ -80,7 +95,7 @@ type JoinSpec[S any] struct {
 // Continuation adapts an untyped persisted payload to a typed state handler.
 type Continuation[S any] struct {
 	Decode func([]byte) (any, error)
-	Apply  func(context.Context, S, any) (S, error)
+	Apply  func(context.Context, CallInfo, S, any) (S, error)
 }
 
 // Config identifies a compiled graph and defines how state is copied.

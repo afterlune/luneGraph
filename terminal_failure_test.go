@@ -16,7 +16,7 @@ func TestExecutionFailureIsPersisted(t *testing.T) {
 			boom := errors.New("node failed")
 			calls := 0
 			g := graph.New[int]("work")
-			if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: scope, Run: func(context.Context, int) (graph.Transition[int], error) {
+			if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: scope, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 				calls++
 				return graph.Transition[int]{}, boom
 			}}); err != nil {
@@ -50,7 +50,7 @@ func TestExecutionFailureIsPersisted(t *testing.T) {
 func TestRejectMalformedFailedCheckpoint(t *testing.T) {
 	boom := errors.New("failure")
 	g := graph.New[int]("work")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		return graph.Transition[int]{}, boom
 	}}); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestRejectMalformedFailedCheckpoint(t *testing.T) {
 func TestFailureOverridePersistsTerminal(t *testing.T) {
 	boom := errors.New("override failure")
 	g := graph.New[int]("work")
-	node(t, g, "work", func(context.Context, int) (graph.Transition[int], error) {
+	node(t, g, "work", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		return graph.Transition[int]{}, boom
 	})
 	runner := intRunner(t, g)
@@ -96,16 +96,16 @@ func TestFailureOverridePersistsTerminal(t *testing.T) {
 func TestContinuationExecutionFailureIsPersisted(t *testing.T) {
 	boom := errors.New("apply failed")
 	g := graph.New[int]("wait")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", OnError: graph.FailExecution, Run: func(_ context.Context, state int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", OnError: graph.FailExecution, Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Wait(state, "input", "done"), nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	node(t, g, "done", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.EndExecution(state), nil
 	})
 	edge(t, g, "wait", "done")
-	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 1, nil }, func(context.Context, int, int) (int, error) {
+	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 1, nil }, func(context.Context, graph.CallInfo, int, int) (int, error) {
 		return 0, boom
 	}); err != nil {
 		t.Fatal(err)
@@ -128,16 +128,16 @@ func TestContinuationExecutionFailureIsPersisted(t *testing.T) {
 func TestJoinExecutionFailureIsPersisted(t *testing.T) {
 	boom := errors.New("merge failed")
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "a", "b"), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(context.Context, []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(context.Context, graph.CallInfo, []int) (int, error) {
 		return 0, boom
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
-		node(t, g, name, func(_ context.Context, state int) (graph.Transition[int], error) {
+		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			return graph.To(state, "join"), nil
 		})
 		edge(t, g, "fork", name)
@@ -157,7 +157,7 @@ func TestJoinExecutionFailureIsPersisted(t *testing.T) {
 func TestExecutionPanicKeepsOriginalErrorAndStoredStack(t *testing.T) {
 	boom := errors.New("panic cause")
 	g := graph.New[int]("panic")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "panic", OnError: graph.FailExecution, Run: func(context.Context, int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "panic", OnError: graph.FailExecution, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		panic(boom)
 	}}); err != nil {
 		t.Fatal(err)

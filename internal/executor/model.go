@@ -5,6 +5,7 @@ import "lune-graph/internal/model"
 type (
 	Action              = model.Action
 	ActivationGroup     = model.ActivationGroup
+	CallInfo            = model.CallInfo
 	Checkpoint[S any]   = model.Checkpoint[S]
 	Clone[S any]        = model.Clone[S]
 	Continuation[S any] = model.Continuation[S]

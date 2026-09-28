@@ -12,6 +12,7 @@ import (
 type (
 	Action            = model.Action
 	ActivationGroup   = model.ActivationGroup
+	CallInfo          = model.CallInfo
 	Checkpoint[S any] = model.Checkpoint[S]
 	Clone[S any]      = model.Clone[S]
 	Config[S any]     = model.Config[S]
@@ -75,7 +76,9 @@ var (
 func New[S any](entry string) *Graph[S] { return definition.New[S](entry) }
 
 // RegisterContinuation adapts a typed continuation handler to persisted bytes.
-func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, S, P) (S, error)) error {
+// Apply receives a stable CallInfo that remains the same if recovery replays
+// the application.
+func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, CallInfo, S, P) (S, error)) error {
 	return definition.RegisterContinuation(g, key, decode, apply)
 }
 

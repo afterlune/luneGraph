@@ -39,18 +39,18 @@ func TestRecoverWaitingRunAndCompletedResult(t *testing.T) {
 	ctx := context.Background()
 	g := graph.New[int]("wait")
 	calls := 0
-	node(t, g, "wait", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		calls++
 		return graph.Wait(state, "number", "done"), nil
 	})
-	node(t, g, "done", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		calls++
 		return graph.EndExecution(state), nil
 	})
 	edge(t, g, "wait", "done")
 	if err := graph.RegisterContinuation(g, "number", func(data []byte) (int, error) {
 		return strconv.Atoi(string(data))
-	}, func(_ context.Context, state, input int) (int, error) {
+	}, func(_ context.Context, _ graph.CallInfo, state, input int) (int, error) {
 		return state + input, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestRecoverWaitingRunAndCompletedResult(t *testing.T) {
 func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 	ctx := context.Background()
 	g := graph.New[int]("loop")
-	node(t, g, "loop", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "loop", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		if state == 2 {
 			return graph.EndExecution(state), nil
 		}
@@ -102,8 +102,10 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 		node   graph.Node[int]
 		status graph.Status
 	}{
-		{"branch", func(_ context.Context, state int) (graph.Transition[int], error) { return graph.EndBranch(state), nil }, graph.StatusCompleted},
-		{"failed", func(context.Context, int) (graph.Transition[int], error) {
+		{"branch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.EndBranch(state), nil
+		}, graph.StatusCompleted},
+		{"failed", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 			return graph.Transition[int]{}, errors.New("node failed")
 		}, graph.StatusCompletedWithFailures},
 	} {
@@ -127,7 +129,7 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 func TestRecoverRejectsInvalidStoredRun(t *testing.T) {
 	ctx := context.Background()
 	g := graph.New[int]("only")
-	node(t, g, "only", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "only", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.EndExecution(state), nil
 	})
 	runner := intRunner(t, g)
@@ -173,10 +175,10 @@ func TestConcurrentRecoverReturnsConflict(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	g := graph.New[int]("seed")
-	node(t, g, "seed", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "seed", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "work"), nil
 	})
-	node(t, g, "work", func(ctx context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "work", func(ctx context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		started <- struct{}{}
 		select {
 		case <-release:
@@ -246,7 +248,7 @@ func TestRecoverAfterAmbiguousFinalCommit(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
 	g := graph.New[int]("only")
-	node(t, g, "only", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "only", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		calls++
 		return graph.EndExecution(state + 1), nil
 	})

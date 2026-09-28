@@ -125,7 +125,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Opt
 	if err != nil {
 		return resultWith(empty, StatusFailed), fmt.Errorf("clone initial state: %w", err)
 	}
-	s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, MachineID: r.id, Revision: 1, NextID: 2, Invocations: []Invocation[S]{{ID: "i1", Node: r.entry, State: state, Status: InvocationReady}}}
+	s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, MachineID: r.id, Revision: 1, NextID: 3, Invocations: []Invocation[S]{{ID: "i1", CallID: "c2", Node: r.entry, State: state, Status: InvocationReady}}}
 	if opts.Store != nil {
 		if err := opts.Store.Create(ctx, s); err != nil {
 			return resultWith(empty, errorStatus(err)), err

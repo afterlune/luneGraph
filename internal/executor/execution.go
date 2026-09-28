@@ -28,8 +28,12 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 			if _, ok := r.continuations[tr.Continuation]; !ok {
 				return false, &TransitionError{InvocationID: id, Node: source, Cause: fmt.Errorf("unknown continuation %q", tr.Continuation)}
 			}
+			if s.NextID == math.MaxUint64 {
+				return false, fmt.Errorf("allocate continuation call ID: %w", ErrExecutionLimit)
+			}
 			inv.State = tr.State
 			inv.Status = InvocationWaiting
+			inv.CallID = newID(s, "c")
 			inv.Continuation = tr.Continuation
 			inv.Next = append([]string(nil), tr.Targets...)
 			return false, nil
@@ -48,6 +52,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 		}
 		inv.State = tr.State
 		inv.Status = InvocationEnded
+		inv.CallID = ""
 		inv.Next = nil
 		inv.Continuation = ""
 		s.Terminals = append(s.Terminals, Terminal[S]{InvocationID: id, State: tr.State})
@@ -104,14 +109,40 @@ func (r *Runner[S]) route(s *Checkpoint[S], id, source string, state S, targets 
 		inv.Next = nil
 		return r.setTarget(s, inv, targets[0])
 	}
-	needed := uint64(len(targets)) + 1
+	needed := uint64(1) // activation group
+	addIDs := func(count uint64) bool {
+		if needed > math.MaxUint64-count {
+			return false
+		}
+		needed += count
+		return true
+	}
+	if !addIDs(uint64(len(targets))) { // child invocations
+		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
+	}
+	if r.joinBySource[source] != "" {
+		if !addIDs(1) { // join callback call ID
+			return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
+		}
+	}
+	for _, target := range targets {
+		if _, join := r.joins[target]; !join {
+			if !addIDs(1) { // child node callback call ID
+				return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
+			}
+		}
+	}
 	if s.NextID > math.MaxUint64-needed {
 		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
 	}
 	groupID := newID(s, "g")
 	group := ActivationGroup{ID: groupID, Source: source, ParentID: id, JoinNode: r.joinBySource[source]}
+	if group.JoinNode != "" {
+		group.CallID = newID(s, "c")
+	}
 	inv.State = state
 	inv.Status = InvocationGroup
+	inv.CallID = ""
 	inv.ChildGroupID = groupID
 	inv.Continuation = ""
 	inv.Next = nil
@@ -145,11 +176,16 @@ func (r *Runner[S]) setTarget(s *Checkpoint[S], inv *Invocation[S], target strin
 			return fmt.Errorf("invocation %q reached join %q for group %q", inv.ID, target, group.ID)
 		}
 		inv.Status = InvocationJoined
+		inv.CallID = ""
 	} else {
 		if _, ok := r.nodes[target]; !ok {
 			return fmt.Errorf("unknown node %q", target)
 		}
+		if s.NextID == math.MaxUint64 {
+			return fmt.Errorf("allocate node call ID: %w", ErrExecutionLimit)
+		}
 		inv.Status = InvocationReady
+		inv.CallID = newID(s, "c")
 	}
 	inv.Node = target
 	return nil
@@ -194,7 +230,8 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], override
 					values = append(values, value)
 				}
 			}
-			merged, mergeErr = r.mergeStates(ctx, parent.ID, r.joins[group.JoinNode], values)
+			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID}
+			merged, mergeErr = r.mergeStates(ctx, call, r.joins[group.JoinNode], values)
 		}
 		children := make(map[string]bool, len(group.Children))
 		for _, childID := range group.Children {

@@ -104,7 +104,9 @@ func (g *Graph[S]) AddEdge(from, to string) error {
 
 // RegisterContinuation keeps the external payload as bytes and makes each
 // handler's decoded value statically typed. Decode errors leave it waiting.
-func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, S, P) (S, error)) error {
+// Apply receives a stable CallInfo that remains the same if recovery replays
+// the application.
+func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, model.CallInfo, S, P) (S, error)) error {
 	if g == nil {
 		return errors.New("graph is nil")
 	}
@@ -119,7 +121,9 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 	}
 	g.continuations[key] = model.Continuation[S]{
 		Decode: func(payload []byte) (any, error) { return decode(payload) },
-		Apply:  func(ctx context.Context, state S, value any) (S, error) { return apply(ctx, state, value.(P)) },
+		Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
+			return apply(ctx, call, state, value.(P))
+		},
 	}
 	return nil
 }

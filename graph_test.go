@@ -38,7 +38,7 @@ func intRunner(t *testing.T, g *graph.Graph[int]) *graph.Runner[int] {
 
 func TestCycleBudgetAndResume(t *testing.T) {
 	g := graph.New[int]("loop")
-	node(t, g, "loop", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "loop", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		if v == 3 {
 			return graph.EndExecution(v), nil
 		}
@@ -63,13 +63,15 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 	g := graph.New[int]("fork")
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "a", "b"), nil })
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "a", "b"), nil
+	})
 	for _, item := range []struct {
 		name  string
 		delta int
 	}{{"a", 1}, {"b", 2}} {
 		item := item
-		node(t, g, item.name, func(ctx context.Context, v int) (graph.Transition[int], error) {
+		node(t, g, item.name, func(ctx context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 			started <- item.name
 			select {
 			case <-release:
@@ -80,7 +82,7 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 		})
 		edge(t, g, "fork", item.name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, values []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
 		if len(values) != 2 || values[0] != 1 || values[1] != 2 {
 			return 0, fmt.Errorf("wrong merge order: %v", values)
 		}
@@ -90,7 +92,9 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 	}
 	edge(t, g, "a", "join")
 	edge(t, g, "b", "join")
-	node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	edge(t, g, "join", "done")
 	r := intRunner(t, g)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -123,16 +127,34 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 
 func TestNestedGroups(t *testing.T) {
 	g := graph.New[int]("root")
-	node(t, g, "root", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "a", "b"), nil })
-	node(t, g, "a", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "c", "d"), nil })
-	node(t, g, "b", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v+10, "outer"), nil })
-	node(t, g, "c", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v+1, "inner"), nil })
-	node(t, g, "d", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v+2, "inner"), nil })
-	node(t, g, "after_inner", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "outer"), nil })
-	node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "root", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "a", "b"), nil
+	})
+	node(t, g, "a", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "c", "d"), nil
+	})
+	node(t, g, "b", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v+10, "outer"), nil
+	})
+	node(t, g, "c", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v+1, "inner"), nil
+	})
+	node(t, g, "d", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v+2, "inner"), nil
+	})
+	node(t, g, "after_inner", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "outer"), nil
+	})
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	for _, spec := range []graph.JoinSpec[int]{
-		{Name: "inner", From: "a", Merge: func(_ context.Context, values []int) (int, error) { return values[0] + values[1], nil }},
-		{Name: "outer", From: "root", Merge: func(_ context.Context, values []int) (int, error) { return values[0] + values[1], nil }},
+		{Name: "inner", From: "a", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+			return values[0] + values[1], nil
+		}},
+		{Name: "outer", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+			return values[0] + values[1], nil
+		}},
 	} {
 		if err := g.AddJoin(spec); err != nil {
 			t.Fatal(err)
@@ -149,12 +171,14 @@ func TestNestedGroups(t *testing.T) {
 
 func TestPauseResumeAndPayloadValidation(t *testing.T) {
 	g := graph.New[int]("wait")
-	node(t, g, "wait", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "add", "done"), nil
 	})
-	node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	edge(t, g, "wait", "done")
-	if err := graph.RegisterContinuation(g, "add", func(payload []byte) (int, error) { return strconv.Atoi(string(payload)) }, func(_ context.Context, state, value int) (int, error) { return state + value, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "add", func(payload []byte) (int, error) { return strconv.Atoi(string(payload)) }, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) { return state + value, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -177,15 +201,23 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 	boom := errors.New("boom")
 	build := func(scope graph.FailureScope) *graph.Runner[int] {
 		g := graph.New[int]("fork")
-		node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "good", "bad"), nil })
-		node(t, g, "good", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v+5, "join"), nil })
-		if err := g.AddNode(graph.NodeSpec[int]{Name: "bad", OnError: scope, Run: func(_ context.Context, v int) (graph.Transition[int], error) { return graph.Transition[int]{}, boom }}); err != nil {
+		node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.To(v, "good", "bad"), nil
+		})
+		node(t, g, "good", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.To(v+5, "join"), nil
+		})
+		if err := g.AddNode(graph.NodeSpec[int]{Name: "bad", OnError: scope, Run: func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.Transition[int]{}, boom
+		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, values []int) (int, error) { return values[0], nil }}); err != nil {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) { return values[0], nil }}); err != nil {
 			t.Fatal(err)
 		}
-		node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+		node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+			return graph.EndExecution(v), nil
+		})
 		for _, pair := range [][2]string{{"fork", "good"}, {"fork", "bad"}, {"good", "join"}, {"join", "done"}} {
 			edge(t, g, pair[0], pair[1])
 		}
@@ -206,7 +238,7 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 
 	type state struct{ Values map[string]int }
 	mutable := graph.New[state]("mutate")
-	node(t, mutable, "mutate", func(_ context.Context, s state) (graph.Transition[state], error) {
+	node(t, mutable, "mutate", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
 		s.Values["n"] = 99
 		return graph.Transition[state]{}, boom
 	})
@@ -272,11 +304,13 @@ func (m *failingStore) CompareAndSwap(ctx context.Context, expected uint64, next
 func TestStoreFailureReturnsLastCommittedCheckpoint(t *testing.T) {
 	g := graph.New[int]("first")
 	called := 0
-	node(t, g, "first", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "first", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		called++
 		return graph.To(v+1, "second"), nil
 	})
-	node(t, g, "second", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v + 1), nil })
+	node(t, g, "second", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v + 1), nil
+	})
 	edge(t, g, "first", "second")
 	r := intRunner(t, g)
 	store := &failingStore{inner: newMemoryStore(t), failNext: true}

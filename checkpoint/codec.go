@@ -16,7 +16,8 @@ var ErrNotFound = errors.New("checkpoint not found")
 var ErrCorrupt = errors.New("corrupt checkpoint")
 
 // Codec converts a complete checkpoint to and from an independent byte value.
-// Implementations must preserve all fields needed by Runner.Resume.
+// Implementations must preserve all fields needed by Runner.Resume, including
+// callback IDs required to keep recovery deduplication stable.
 type Codec[S any] interface {
 	Marshal(graph.Checkpoint[S]) ([]byte, error)
 	Unmarshal([]byte) (graph.Checkpoint[S], error)
