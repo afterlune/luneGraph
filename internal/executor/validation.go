@@ -29,6 +29,18 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 2 || s.ScheduleCursor >= s.NextID {
 		return invalidCheckpoint("invalid execution header")
 	}
+	terminalFailures := 0
+	for _, failure := range s.Failures {
+		if !validScope(failure.Scope) {
+			return invalidCheckpoint("invalid failure scope")
+		}
+		if failure.Scope == FailExecution {
+			terminalFailures++
+		}
+	}
+	if terminalFailures > 1 || (!s.Completed && terminalFailures != 0) {
+		return invalidCheckpoint("invalid execution failure")
+	}
 	invocations := make(map[string]Invocation[S], len(s.Invocations))
 	groups := make(map[string]ActivationGroup, len(s.Groups))
 	var maxID uint64
@@ -159,7 +171,14 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 	}
 	if s.Completed {
-		if s.Steps == 0 || len(s.Groups) != 0 || active || (s.Final != nil && len(s.Invocations) != 0) || (s.Final == nil && len(s.Invocations) == 0) {
+		if s.Steps == 0 || len(s.Groups) != 0 || active {
+			return invalidCheckpoint("invalid completed execution")
+		}
+		if terminalFailures == 1 {
+			if s.Final != nil || len(s.Invocations) != 0 {
+				return invalidCheckpoint("invalid failed execution")
+			}
+		} else if (s.Final != nil && len(s.Invocations) != 0) || (s.Final == nil && len(s.Invocations) == 0) {
 			return invalidCheckpoint("invalid completed execution")
 		}
 		return nil

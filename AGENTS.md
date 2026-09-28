@@ -10,6 +10,7 @@
 - 允许循环，并由节点显式终止 execution；步数上限是保险丝。暂停属于 invocation，恢复输入经已注册的 continuation 进入状态。
 - 并行分支必须有独立的状态副本；join 按一次 fan-out 的 activation group 汇合。`Clone` 必须复制状态中会被修改的引用数据。
 - 编译后的 Runner 不再改变图定义，可供并发 execution 共享。Store 负责保存独立的 checkpoint 副本；持久化执行按 at-least-once 语义处理，节点副作用由调用方保证幂等或去重。
+- `FailExecution`（包括根节点 `FailGroup` 升级）提交不可继续执行的失败终态；取消、非法转换和状态复制错误不触发失败终态。Store 错误可能使提交结果不确定，须重新加载确认。重新加载失败终态时只保证可检查的失败标记和持久化消息，不重建原始 Go 错误类型。
 - 状态保持通用且可持久化；大型数据应存放在外部存储，图状态和 checkpoint 中只保存引用。具体提交点、恢复边界及 Store 契约以 `docs/execution-semantics.md` 为准。
 - 根 `graph` 包是稳定、轻量的公共 API 门面。图定义、执行器和共享状态模型分别位于 `internal/definition`、`internal/executor` 和 `internal/model`；持久化实现放在独立子包中。保持依赖单向，避免为拆包循环依赖或扩大公开接口。
 - 实现时按职责拆分代码：一个文件聚焦一组相近行为；一个包承载过多独立职责时，提取边界清晰的子包。避免形成难以定位、修改和测试的巨型文件或巨型包。

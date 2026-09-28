@@ -6,8 +6,8 @@ import (
 )
 
 // Recover loads the latest checkpoint for runID from opts.Store and advances it.
-// A completed run is returned without executing callbacks or writing another
-// revision; supplying inputs to one returns ErrRunCompleted.
+// A terminal run is returned without executing callbacks or writing another
+// revision. A failed terminal returns ErrRunFailed; inputs return ErrRunCompleted.
 func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, opts Options[S]) (Result[S], error) {
 	var empty Checkpoint[S]
 	if ctx == nil {
@@ -45,6 +45,9 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 	if checkpoint.Completed {
 		if len(inputs) != 0 {
 			return resultWith(checkpoint, StatusFailed), ErrRunCompleted
+		}
+		if failure := recoveredFailure(checkpoint); failure != nil {
+			return resultWith(checkpoint, StatusFailed), failure
 		}
 		return resultWith(checkpoint, statusOf(checkpoint, false)), nil
 	}

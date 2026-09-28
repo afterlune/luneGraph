@@ -58,6 +58,7 @@ var (
 	ErrExecutionLimit    = model.ErrExecutionLimit
 	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
 	ErrRunCompleted      = model.ErrRunCompleted
+	ErrRunFailed         = model.ErrRunFailed
 )
 
 func validName(name string) bool         { return model.ValidName(name) }

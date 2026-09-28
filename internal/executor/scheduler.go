@@ -133,6 +133,10 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		running[finished.id]()
 		delete(running, finished.id)
+		if err := ctx.Err(); err != nil {
+			drain()
+			return resultWith(s, StatusCancelled), err
+		}
 		_, inv := invocation(&s, finished.id)
 		if inv == nil || inv.Status != InvocationReady {
 			continue
@@ -155,6 +159,12 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			candidate.Steps++
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
 			if failureErr := r.recordFailure(&candidate, inv.ID, inv.Node, scope, processErr); failureErr != nil {
+				if terminalFailureRecord(candidate) != nil {
+					candidate.ScheduleCursor = cursor
+					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
+					drain()
+					return result, commitErr
+				}
 				drain()
 				return resultWith(s, StatusFailed), failureErr
 			}
@@ -162,6 +172,11 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		candidate.ScheduleCursor = cursor
 		if !ended {
 			if err := r.settleGroups(ctx, &candidate, opts.FailureOverride); err != nil {
+				if terminalFailureRecord(candidate) != nil {
+					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
+					drain()
+					return result, commitErr
+				}
 				drain()
 				return resultWith(s, errorStatus(err)), err
 			}

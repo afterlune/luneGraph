@@ -36,25 +36,41 @@ losing data required by callbacks. `checkpoint.JSON[S]` uses `encoding/json`.
 When `Options.Store` is set, `Start` creates revision 1 with the entry
 invocation ready **before** calling its node. Every accepted node outcome then
 advances `Steps` and commits one new revision with `CompareAndSwap`. This
-includes a transition to waiting, a completed branch, or a locally handled
-failure. The latest committed checkpoint is the recovery point.
+includes a transition to waiting, a completed branch, a locally handled
+failure, or an execution-level failure. The latest committed checkpoint is the
+recovery point.
 
 `Resume` checks the supplied run, machine, format, and revision against the
 Store, then executes the checkpoint loaded from it. It decodes all supplied
 inputs before applying any. Each accepted input is applied and committed
-separately; a later input error leaves the already committed prefix available.
+separately. A later error under a local failure policy leaves the committed
+prefix available; `FailExecution` commits a failure terminal after that prefix.
 Calling `Resume` without inputs advances ready invocations after a step budget
 was exhausted. `Status` describes why the current call returned; the checkpoint
 holds the persisted execution position.
 
 `Recover(ctx, runID, inputs, opts)` requires a Store and loads its latest
 checkpoint once. An active run follows the same input and scheduling rules as
-`Resume`. A completed run with no inputs returns the stored result without
-executing callbacks or writing a new revision. Inputs to a completed run are
-rejected with `graph.ErrRunCompleted`, `StatusFailed`, and the stored checkpoint;
-the inputs are not consumed. `Resume` continues to reject completed checkpoints.
-If another executor commits between `Recover`'s load and CAS, the losing write
-returns `graph.ErrConflict`; `Recover` does not retry automatically.
+`Resume`. A successfully completed run with no inputs returns the stored result
+without executing callbacks or writing a new revision. A persisted
+execution-level failure returns `StatusFailed`, the stored checkpoint, and
+`graph.ErrRunFailed` with the recorded message; its original Go error type
+cannot be reconstructed from storage. Inputs to any terminal run return
+`graph.ErrRunCompleted`, `StatusFailed`, and the stored checkpoint without being
+consumed. `Resume` continues to reject terminal checkpoints. If another executor
+commits between `Recover`'s load and CAS, the losing write returns
+`graph.ErrConflict`; `Recover` does not retry automatically.
+
+`FailExecution`, including a root `FailGroup` escalation, commits a terminal
+checkpoint with `Completed=true`, no active invocations or groups, and one
+terminal `Failure` with effective scope `FailExecution`. Earlier local failures
+remain recorded. Node failures advance `Steps`; continuation failures only
+advance the revision. The originating call returns
+its original error after a successful commit. Cancellation, invalid transitions,
+and state-copy failures do not create a failed terminal. A Store error is not
+itself a terminal failure, but it may leave a terminal write's outcome unknown;
+reload before deciding whether to retry. A crash before the terminal commits
+can still cause the callback to run again.
 
 Concurrent node results commit in arrival order. `EndExecution` cancels other
 running callbacks and commits the winner's final state. A callback can finish
