@@ -27,6 +27,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], id, node string, scope Failu
 		return r.failGroup(s, inv.GroupID)
 	}
 	inv.Status = InvocationFailed
+	inv.CallID = ""
 	inv.Next = nil
 	inv.Continuation = ""
 	return nil
@@ -76,6 +77,7 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], id string) error {
 	}
 	parent.ChildGroupID = ""
 	parent.Status = InvocationFailed
+	parent.CallID = ""
 	return nil
 }
 

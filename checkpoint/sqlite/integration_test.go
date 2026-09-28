@@ -18,12 +18,13 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := graph.New[int]("wait")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", Run: func(_ context.Context, value int) (graph.Transition[int], error) {
+	var applyCall graph.CallInfo
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "wait", Run: func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
 		return graph.Wait(value, "add", "done"), nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "done", Run: func(_ context.Context, value int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "done", Run: func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
 		return graph.EndExecution(value), nil
 	}}); err != nil {
 		t.Fatal(err)
@@ -31,7 +32,8 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 	if err := g.AddEdge("wait", "done"); err != nil {
 		t.Fatal(err)
 	}
-	if err := graph.RegisterContinuation(g, "add", func([]byte) (int, error) { return 2, nil }, func(_ context.Context, state, input int) (int, error) {
+	if err := graph.RegisterContinuation(g, "add", func([]byte) (int, error) { return 2, nil }, func(_ context.Context, call graph.CallInfo, state, input int) (int, error) {
+		applyCall = call
 		return state + input, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -56,13 +58,16 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 5 {
 		t.Fatalf("recover after reopen = %+v, %v", last, err)
 	}
+	if applyCall.CallID != first.Checkpoint.Invocations[0].CallID || applyCall.RunID != "waiting" || applyCall.InvocationID != "i1" {
+		t.Fatalf("recovered continuation call info = %+v; checkpoint call ID = %q", applyCall, first.Checkpoint.Invocations[0].CallID)
+	}
 	finished, err := runner.Recover(ctx, "waiting", nil, graph.Options[int]{Store: store})
 	if err != nil || finished.Status != graph.StatusCompleted || finished.Checkpoint.Revision != last.Checkpoint.Revision {
 		t.Fatalf("completed run after reopen = %+v, %v", finished, err)
 	}
 
 	loop := graph.New[int]("loop")
-	if err := loop.AddNode(graph.NodeSpec[int]{Name: "loop", Run: func(_ context.Context, value int) (graph.Transition[int], error) {
+	if err := loop.AddNode(graph.NodeSpec[int]{Name: "loop", Run: func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
 		if value == 2 {
 			return graph.EndExecution(value), nil
 		}

@@ -14,21 +14,27 @@ import (
 
 func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "a", "b"), nil })
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "a", "b"), nil
+	})
 	for _, name := range []string{"a", "b"} {
-		node(t, g, name, func(_ context.Context, v int) (graph.Transition[int], error) {
+		node(t, g, name, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 			return graph.Wait(v, "add", "join"), nil
 		})
 		edge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, values []int) (int, error) { return values[0] + values[1], nil }}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+		return values[0] + values[1], nil
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	edge(t, g, "a", "join")
 	edge(t, g, "b", "join")
-	node(t, g, "done", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndExecution(v), nil })
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
 	edge(t, g, "join", "done")
-	if err := graph.RegisterContinuation(g, "add", func(b []byte) (int, error) { return strconv.Atoi(string(b)) }, func(_ context.Context, state, value int) (int, error) { return state + value, nil }); err != nil {
+	if err := graph.RegisterContinuation(g, "add", func(b []byte) (int, error) { return strconv.Atoi(string(b)) }, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) { return state + value, nil }); err != nil {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
@@ -63,18 +69,18 @@ func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 
 func TestGroupFailureCancelsSibling(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "bad", "waiting"), nil
 	})
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "bad", OnError: graph.FailGroup, Run: func(_ context.Context, _ int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "bad", OnError: graph.FailGroup, Run: func(_ context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		<-started
 		return graph.Transition[int]{}, errors.New("group failed")
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	node(t, g, "waiting", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "waiting", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		close(started)
 		<-ctx.Done()
 		close(cancelled)
@@ -116,9 +122,13 @@ func (n *notifyingStore) CompareAndSwap(ctx context.Context, expected uint64, ne
 
 func TestCancelledRunKeepsInFlightInvocationPending(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.To(v, "fast", "slow"), nil })
-	node(t, g, "fast", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndBranch(v + 1), nil })
-	node(t, g, "slow", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "fast", "slow"), nil
+	})
+	node(t, g, "fast", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndBranch(v + 1), nil
+	})
+	node(t, g, "slow", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		<-ctx.Done()
 		return graph.Transition[int]{}, ctx.Err()
 	})
@@ -170,11 +180,15 @@ func TestCancelledRunKeepsInFlightInvocationPending(t *testing.T) {
 
 func TestEndBranchTerminalOrder(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "first", "second"), nil
 	})
-	node(t, g, "first", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndBranch(v + 1), nil })
-	node(t, g, "second", func(_ context.Context, v int) (graph.Transition[int], error) { return graph.EndBranch(v + 2), nil })
+	node(t, g, "first", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndBranch(v + 1), nil
+	})
+	node(t, g, "second", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndBranch(v + 2), nil
+	})
 	edge(t, g, "fork", "first")
 	edge(t, g, "fork", "second")
 	out, err := intRunner(t, g).Start(context.Background(), "terminals", 0, graph.Options[int]{MaxConcurrency: 2})

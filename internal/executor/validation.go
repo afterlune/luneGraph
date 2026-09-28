@@ -26,7 +26,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	if s.FormatVersion != CheckpointFormatVersion {
 		return invalidCheckpoint("unsupported format version %d", s.FormatVersion)
 	}
-	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 2 || s.ScheduleCursor >= s.NextID {
+	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 3 || s.ScheduleCursor >= s.NextID {
 		return invalidCheckpoint("invalid execution header")
 	}
 	terminalFailures := 0
@@ -45,6 +45,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	groups := make(map[string]ActivationGroup, len(s.Groups))
 	var maxID uint64
 	active := false
+	callIDs := make(map[string]struct{})
 	for _, inv := range s.Invocations {
 		n, valid := checkpointID(inv.ID, "i")
 		if !valid || n >= s.NextID {
@@ -52,6 +53,19 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 		if n > maxID {
 			maxID = n
+		}
+		if inv.CallID != "" {
+			callID, valid := checkpointID(inv.CallID, "c")
+			if !valid || callID >= s.NextID {
+				return invalidCheckpoint("invalid callback ID %q for invocation %q", inv.CallID, inv.ID)
+			}
+			if _, exists := callIDs[inv.CallID]; exists {
+				return invalidCheckpoint("duplicate callback ID %q", inv.CallID)
+			}
+			callIDs[inv.CallID] = struct{}{}
+			if callID > maxID {
+				maxID = callID
+			}
 		}
 		if _, exists := invocations[inv.ID]; exists {
 			return invalidCheckpoint("duplicate invocation ID %q", inv.ID)
@@ -69,6 +83,9 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		switch inv.Status {
 		case InvocationReady, InvocationWaiting:
 			active = true
+			if inv.CallID == "" {
+				return invalidCheckpoint("active invocation %q has no callback ID", inv.ID)
+			}
 			if _, ok := r.nodes[inv.Node]; !ok {
 				return invalidCheckpoint("invocation %q has unknown node %q", inv.ID, inv.Node)
 			}
@@ -84,10 +101,16 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 				}
 			}
 		case InvocationGroup:
+			if inv.CallID != "" {
+				return invalidCheckpoint("group parent %q has a callback ID", inv.ID)
+			}
 			if _, ok := r.nodes[inv.Node]; !ok {
 				return invalidCheckpoint("group parent %q has unknown node", inv.ID)
 			}
 		case InvocationJoined, InvocationEnded, InvocationFailed:
+			if inv.CallID != "" {
+				return invalidCheckpoint("inactive invocation %q has a callback ID", inv.ID)
+			}
 		default:
 			return invalidCheckpoint("invocation %q has invalid status", inv.ID)
 		}
@@ -99,6 +122,21 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 		if n > maxID {
 			maxID = n
+		}
+		if group.JoinNode != "" {
+			callID, valid := checkpointID(group.CallID, "c")
+			if !valid || callID >= s.NextID {
+				return invalidCheckpoint("invalid callback ID %q for group %q", group.CallID, group.ID)
+			}
+			if _, exists := callIDs[group.CallID]; exists {
+				return invalidCheckpoint("duplicate callback ID %q", group.CallID)
+			}
+			callIDs[group.CallID] = struct{}{}
+			if callID > maxID {
+				maxID = callID
+			}
+		} else if group.CallID != "" {
+			return invalidCheckpoint("group %q has an unexpected callback ID", group.ID)
 		}
 		if _, exists := groups[group.ID]; exists {
 			return invalidCheckpoint("duplicate group ID %q", group.ID)

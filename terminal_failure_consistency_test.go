@@ -16,7 +16,7 @@ func TestTerminalFailureCommitOutcomes(t *testing.T) {
 	boom := errors.New("node failed")
 	calls := 0
 	g := graph.New[int]("work")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		calls++
 		return graph.Transition[int]{}, boom
 	}}); err != nil {
@@ -54,7 +54,7 @@ func TestCancellationDoesNotCommitTerminalFailure(t *testing.T) {
 	started := make(chan struct{})
 	var calls atomic.Int32
 	g := graph.New[int]("work")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(ctx context.Context, state int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(ctx context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		if calls.Add(1) == 1 {
 			close(started)
 			<-ctx.Done()
@@ -98,7 +98,7 @@ func TestCancellationDoesNotCommitTerminalFailure(t *testing.T) {
 
 func TestInvalidTransitionDoesNotCommitTerminalFailure(t *testing.T) {
 	g := graph.New[int]("work")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(_ context.Context, state int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "missing"), nil
 	}}); err != nil {
 		t.Fatal(err)
@@ -122,16 +122,16 @@ func TestTerminalFailureCancelsSibling(t *testing.T) {
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "fail", "slow"), nil
 	})
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "fail", OnError: graph.FailExecution, Run: func(context.Context, int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "fail", OnError: graph.FailExecution, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		<-started
 		return graph.Transition[int]{}, boom
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	node(t, g, "slow", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "slow", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		close(started)
 		<-ctx.Done()
 		close(cancelled)
@@ -164,10 +164,10 @@ func TestConcurrentTerminalFailureCommitConflict(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	g := graph.New[int]("seed")
-	node(t, g, "seed", func(_ context.Context, state int) (graph.Transition[int], error) {
+	node(t, g, "seed", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "fail"), nil
 	})
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "fail", OnError: graph.FailExecution, Run: func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "fail", OnError: graph.FailExecution, Run: func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		started <- struct{}{}
 		select {
 		case <-release:

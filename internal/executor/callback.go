@@ -23,22 +23,22 @@ func callClone[S any](clone Clone[S], state S, id string) (out S, err error) {
 	return clone(state)
 }
 
-func (r *Runner[S]) runNode(ctx context.Context, id string, spec NodeSpec[S], state S) (out Transition[S], err error) {
+func (r *Runner[S]) runNode(ctx context.Context, call CallInfo, spec NodeSpec[S], state S) (out Transition[S], err error) {
 	defer func() {
 		if value := recover(); value != nil {
-			err = panicAsError("node "+spec.Name, id, value)
+			err = panicAsError("node "+spec.Name, call.InvocationID, value)
 		}
 	}()
-	return spec.Run(ctx, state)
+	return spec.Run(ctx, call, state)
 }
 
-func (r *Runner[S]) mergeStates(ctx context.Context, id string, spec JoinSpec[S], states []S) (out S, err error) {
+func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpec[S], states []S) (out S, err error) {
 	defer func() {
 		if value := recover(); value != nil {
-			err = panicAsError("join "+spec.Name, id, value)
+			err = panicAsError("join "+spec.Name, call.InvocationID, value)
 		}
 	}()
-	return spec.Merge(ctx, states)
+	return spec.Merge(ctx, call, states)
 }
 
 func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err error) {
@@ -50,13 +50,13 @@ func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err er
 	return r.continuations[key].Decode(payload)
 }
 
-func (r *Runner[S]) applyInput(ctx context.Context, id, key string, state S, value any) (out S, err error) {
+func (r *Runner[S]) applyInput(ctx context.Context, call CallInfo, key string, state S, value any) (out S, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = panicAsError("apply "+key, id, recovered)
+			err = panicAsError("apply "+key, call.InvocationID, recovered)
 		}
 	}()
-	return r.continuations[key].Apply(ctx, state, value)
+	return r.continuations[key].Apply(ctx, call, state, value)
 }
 
 func panicStack(err error) string {

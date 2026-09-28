@@ -21,7 +21,7 @@ func TestExecutionFailureSurvivesReopen(t *testing.T) {
 	boom := errors.New("persistent failure")
 	calls := 0
 	g := graph.New[int]("work")
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "work", OnError: graph.FailExecution, Run: func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 		calls++
 		return graph.Transition[int]{}, boom
 	}}); err != nil {

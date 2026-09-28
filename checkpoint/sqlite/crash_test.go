@@ -20,7 +20,7 @@ func crashRunner(t *testing.T, marker string, block bool) *graph.Runner[int] {
 	g := graph.New[int]("work")
 	err := g.AddNode(graph.NodeSpec[int]{
 		Name: "work",
-		Run: func(ctx context.Context, state int) (graph.Transition[int], error) {
+		Run: func(ctx context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			file, err := os.OpenFile(marker, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 			if err != nil {
 				return graph.Transition[int]{}, err

@@ -12,15 +12,15 @@ import (
 
 func TestReadyBranchesRotateAcrossStoredResumes(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "loop", "once"), nil
 	})
 	loopCalls, onceCalls := 0, 0
-	node(t, g, "loop", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "loop", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		loopCalls++
 		return graph.To(v+1, "loop"), nil
 	})
-	node(t, g, "once", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "once", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		onceCalls++
 		return graph.EndBranch(v), nil
 	})
@@ -35,27 +35,27 @@ func TestReadyBranchesRotateAcrossStoredResumes(t *testing.T) {
 		t.Fatalf("fork = %+v, %v", first, err)
 	}
 	second, err := r.Resume(context.Background(), first.Checkpoint, nil, opts)
-	if err != nil || second.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 0 || second.Checkpoint.ScheduleCursor != 3 {
+	if err != nil || second.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 0 || second.Checkpoint.ScheduleCursor != 4 {
 		t.Fatalf("first branch = %+v, %v", second, err)
 	}
 	loaded, err := store.Load(context.Background(), "fair")
-	if err != nil || loaded.ScheduleCursor != 3 {
+	if err != nil || loaded.ScheduleCursor != 4 {
 		t.Fatalf("stored cursor = %+v, %v", loaded, err)
 	}
 	third, err := r.Resume(context.Background(), loaded, nil, opts)
-	if err != nil || third.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 1 || third.Checkpoint.ScheduleCursor != 4 {
+	if err != nil || third.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 1 || third.Checkpoint.ScheduleCursor != 6 {
 		t.Fatalf("rotated branch = %+v, %v", third, err)
 	}
 }
 
 func TestFirstReceivedEndExecutionWins(t *testing.T) {
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "slow", "winner"), nil
 	})
 	slowStarted := make(chan struct{})
 	slowExited := make(chan struct{})
-	node(t, g, "slow", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "slow", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		close(slowStarted)
 		<-ctx.Done()
 		close(slowExited)
@@ -63,7 +63,7 @@ func TestFirstReceivedEndExecutionWins(t *testing.T) {
 	})
 	winnerStarted := make(chan struct{})
 	releaseWinner := make(chan struct{})
-	node(t, g, "winner", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "winner", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		close(winnerStarted)
 		select {
 		case <-releaseWinner:
@@ -114,7 +114,7 @@ func TestCancellationWaitsForRunningNode(t *testing.T) {
 	started := make(chan struct{})
 	observedCancel := make(chan struct{})
 	release := make(chan struct{})
-	node(t, g, "work", func(ctx context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "work", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		close(started)
 		<-ctx.Done()
 		close(observedCancel)
@@ -163,18 +163,18 @@ func TestCancellationWaitsForRunningNode(t *testing.T) {
 func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	boom := errors.New("second input failed")
 	g := graph.New[int]("fork")
-	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
+	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "a", "b"), nil
 	})
-	node(t, g, "a", func(_ context.Context, _ int) (graph.Transition[int], error) {
+	node(t, g, "a", func(_ context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		return graph.Wait(1, "input", "join"), nil
 	})
-	if err := g.AddNode(graph.NodeSpec[int]{Name: "b", OnError: graph.FailExecution, Run: func(_ context.Context, _ int) (graph.Transition[int], error) {
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "b", OnError: graph.FailExecution, Run: func(_ context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		return graph.Wait(2, "input", "join"), nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, values []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
 		return values[0], nil
 	}}); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	applyCalls := 0
 	if err := graph.RegisterContinuation(g, "input", func(payload []byte) (int, error) {
 		return strconv.Atoi(string(payload))
-	}, func(_ context.Context, state, value int) (int, error) {
+	}, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) {
 		applyCalls++
 		if state == 2 {
 			return 0, boom

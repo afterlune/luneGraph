@@ -51,7 +51,7 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	path := databasePath(t)
 	store := openStore(t, path)
 	first := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1,
-		Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
+		Invocations: []graph.Invocation[state]{{ID: "i1", CallID: "c2", State: state{Values: map[string]int{"n": 1}}}}}
 	if err := store.Create(ctx, first); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	}
 	store = openStore(t, path)
 	loaded, err := store.Load(ctx, "run")
-	if err != nil || loaded.Invocations[0].State.Values["n"] != 1 {
+	if err != nil || loaded.Invocations[0].CallID != "c2" || loaded.Invocations[0].State.Values["n"] != 1 {
 		t.Fatalf("reopened checkpoint = %+v, %v", loaded, err)
 	}
 	loaded.Invocations[0].State.Values["n"] = 88

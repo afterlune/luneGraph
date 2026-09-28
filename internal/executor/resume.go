@@ -84,7 +84,8 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		if cloneErr != nil {
 			return resultWith(s, StatusFailed), fmt.Errorf("clone waiting state: %w", cloneErr)
 		}
-		updated, applyErr := r.applyInput(ctx, inv.ID, inv.Continuation, state, input.value)
+		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID}
+		updated, applyErr := r.applyInput(ctx, call, inv.Continuation, state, input.value)
 		candidate := copyCheckpoint(s)
 		if applyErr != nil {
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
