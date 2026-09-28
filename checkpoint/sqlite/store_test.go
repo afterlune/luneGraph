@@ -14,9 +14,22 @@ import (
 	graph "lune-graph"
 	"lune-graph/checkpoint"
 	"lune-graph/checkpoint/sqlite"
+	"lune-graph/internal/storetest"
 )
 
 type state struct{ Values map[string]int }
+
+func TestStoreContract(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) graph.Store[storetest.State] {
+		path := filepath.Join(t.TempDir(), "contract.db")
+		store, err := sqlite.Open(context.Background(), path, checkpoint.JSON[storetest.State]{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		return store
+	})
+}
 
 func databasePath(t *testing.T) string {
 	t.Helper()
