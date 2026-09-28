@@ -52,13 +52,13 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	loaded, err := store.Load(ctx, "waiting")
-	if err != nil || loaded.Revision != first.Checkpoint.Revision {
-		t.Fatalf("load after reopen = %+v, %v", loaded, err)
-	}
-	last, err := runner.Resume(ctx, loaded, []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{Store: store})
+	last, err := runner.Recover(ctx, "waiting", []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{Store: store})
 	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 5 {
-		t.Fatalf("resume after reopen = %+v, %v", last, err)
+		t.Fatalf("recover after reopen = %+v, %v", last, err)
+	}
+	finished, err := runner.Recover(ctx, "waiting", nil, graph.Options[int]{Store: store})
+	if err != nil || finished.Status != graph.StatusCompleted || finished.Checkpoint.Revision != last.Checkpoint.Revision {
+		t.Fatalf("completed run after reopen = %+v, %v", finished, err)
 	}
 
 	loop := graph.New[int]("loop")
@@ -88,12 +88,8 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ready, err := store.Load(ctx, "budgeted")
-	if err != nil {
-		t.Fatal(err)
-	}
-	completed, err := loopRunner.Resume(ctx, ready, nil, graph.Options[int]{Store: store})
+	completed, err := loopRunner.Recover(ctx, "budgeted", nil, graph.Options[int]{Store: store})
 	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 2 {
-		t.Fatalf("budgeted resume after reopen = %+v, %v", completed, err)
+		t.Fatalf("budgeted recover after reopen = %+v, %v", completed, err)
 	}
 }

@@ -83,14 +83,12 @@ if err := store.Close(); err != nil { panic(err) }
 store, err = sqlite.Open(ctx, "runs.db", checkpoint.JSON[int]{})
 if err != nil { panic(err) }
 defer store.Close()
-saved, err := store.Load(ctx, "run-2")
-if err != nil { panic(err) }
-result, err := runner.Resume(ctx, saved, nil, graph.Options[int]{Store: store})
+result, err := runner.Recover(ctx, "run-2", nil, graph.Options[int]{Store: store})
 if err != nil { panic(err) }
 fmt.Println(*result.Checkpoint.Final) // 3
 ```
 
-When configured, the runner saves the initial checkpoint and each accepted transition. Stores must reject stale revisions with `graph.ErrConflict`, which guarantees no write. Another storage error can leave the commit outcome uncertain: load the latest checkpoint before retrying. `Resume` uses its supplied checkpoint only as a run ID, machine ID, format, and revision reference; after checking for a conflict, it validates and executes the checkpoint loaded from the Store. Keep `MachineID` stable for one graph definition and change it when that definition becomes incompatible with existing checkpoints.
+When configured, the runner saves the initial checkpoint and each accepted transition. `Recover` loads the latest checkpoint by run ID and can return an already completed result without running callbacks or changing its revision. Supplying inputs to a completed run returns its checkpoint with `StatusFailed` and `ErrRunCompleted`; the inputs are not consumed. Concurrent recoveries may race: a losing commit returns `ErrConflict` without an automatic retry. `Resume` instead uses its supplied checkpoint as a run ID, machine ID, format, and revision reference; it rejects a stale reference and an already completed run. Stores must reject stale revisions with `graph.ErrConflict`, which guarantees no write. Another storage error can leave the commit outcome uncertain: use `Recover` or load the latest checkpoint before retrying. Keep `MachineID` stable for one graph definition and change it when that definition becomes incompatible with existing checkpoints.
 
 Running nodes remain pending in persisted checkpoints until their result is committed. A crash, cancellation, or save failure can therefore cause a node to run again after recovery. External side effects should be idempotent or deduplicated by the application. Cancellation asks running nodes to stop through `context.Context` and waits for them to return.
 

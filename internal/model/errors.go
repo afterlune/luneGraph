@@ -9,7 +9,10 @@ var ErrConflict = errors.New("checkpoint revision conflict")
 var ErrInvalidCheckpoint = errors.New("invalid checkpoint")
 var ErrExecutionLimit = errors.New("execution counter exhausted")
 
-// Status describes why a call to Start or Resume returned.
+// ErrRunCompleted reports that Recover was given inputs for a completed run.
+var ErrRunCompleted = errors.New("run already completed")
+
+// Status describes why a call to Start, Resume, or Recover returned.
 type Status string
 
 const (

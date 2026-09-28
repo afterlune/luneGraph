@@ -38,7 +38,16 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 	if err := r.validateCheckpoint(checkpoint); err != nil {
 		return resultWith(checkpoint, StatusFailed), err
 	}
+	if checkpoint.Completed {
+		return resultWith(checkpoint, StatusFailed), invalidCheckpoint("execution is already completed")
+	}
+	return r.resumeValidated(ctx, checkpoint, inputs, opts)
+}
+
+// resumeValidated advances a loaded active checkpoint without reading the Store again.
+func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S]) (Result[S], error) {
 	s := copyCheckpoint(checkpoint)
+	var err error
 	if len(inputs) != 0 && s.Revision == math.MaxUint64 {
 		return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
 	}
