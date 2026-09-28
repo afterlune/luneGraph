@@ -47,6 +47,15 @@ Calling `Resume` without inputs advances ready invocations after a step budget
 was exhausted. `Status` describes why the current call returned; the checkpoint
 holds the persisted execution position.
 
+`Recover(ctx, runID, inputs, opts)` requires a Store and loads its latest
+checkpoint once. An active run follows the same input and scheduling rules as
+`Resume`. A completed run with no inputs returns the stored result without
+executing callbacks or writing a new revision. Inputs to a completed run are
+rejected with `graph.ErrRunCompleted`, `StatusFailed`, and the stored checkpoint;
+the inputs are not consumed. `Resume` continues to reject completed checkpoints.
+If another executor commits between `Recover`'s load and CAS, the losing write
+returns `graph.ErrConflict`; `Recover` does not retry automatically.
+
 Concurrent node results commit in arrival order. `EndExecution` cancels other
 running callbacks and commits the winner's final state. A callback can finish
 without its result being committed if another result ends the run or a commit

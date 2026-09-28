@@ -67,6 +67,7 @@ var (
 	ErrConflict          = model.ErrConflict
 	ErrExecutionLimit    = model.ErrExecutionLimit
 	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
+	ErrRunCompleted      = model.ErrRunCompleted
 )
 
 // New creates a graph builder with the given entry node name.

@@ -131,7 +131,7 @@ func TestCrashRecoveryReplaysUncommittedNode(t *testing.T) {
 		t.Fatalf("checkpoint after crash = %+v", saved)
 	}
 	runner := crashRunner(t, marker, false)
-	result, err := runner.Resume(ctx, saved, nil, graph.Options[int]{Store: store})
+	result, err := runner.Recover(ctx, "crash-run", nil, graph.Options[int]{Store: store})
 	if err != nil || result.Status != graph.StatusCompleted || result.Checkpoint.Revision != 2 || result.Checkpoint.Steps != 1 || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 1 {
 		t.Fatalf("recovery result = %+v, %v", result, err)
 	}

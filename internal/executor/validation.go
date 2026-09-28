@@ -26,7 +26,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	if s.FormatVersion != CheckpointFormatVersion {
 		return invalidCheckpoint("unsupported format version %d", s.FormatVersion)
 	}
-	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || s.Completed || s.Final != nil || s.NextID < 2 || s.ScheduleCursor >= s.NextID {
+	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 2 || s.ScheduleCursor >= s.NextID {
 		return invalidCheckpoint("invalid execution header")
 	}
 	invocations := make(map[string]Invocation[S], len(s.Invocations))
@@ -157,6 +157,12 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 				}
 			}
 		}
+	}
+	if s.Completed {
+		if s.Steps == 0 || len(s.Groups) != 0 || active || (s.Final != nil && len(s.Invocations) != 0) || (s.Final == nil && len(s.Invocations) == 0) {
+			return invalidCheckpoint("invalid completed execution")
+		}
+		return nil
 	}
 	if !active {
 		return invalidCheckpoint("execution has no runnable or waiting invocation")
