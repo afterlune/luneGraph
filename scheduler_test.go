@@ -160,7 +160,7 @@ func TestCancellationWaitsForRunningNode(t *testing.T) {
 	}
 }
 
-func TestResumeBatchPreservesCommittedPrefix(t *testing.T) {
+func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	boom := errors.New("second input failed")
 	g := graph.New[int]("fork")
 	node(t, g, "fork", func(_ context.Context, v int) (graph.Transition[int], error) {
@@ -214,17 +214,12 @@ func TestResumeBatchPreservesCommittedPrefix(t *testing.T) {
 	}
 	inputs := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("4")}}
 	partial, err := r.Resume(context.Background(), first.Checkpoint, inputs, opts)
-	if !errors.Is(err, boom) || partial.Checkpoint.Revision != first.Checkpoint.Revision+1 || applyCalls != 2 {
+	if !errors.Is(err, boom) || partial.Checkpoint.Revision != first.Checkpoint.Revision+2 || !partial.Checkpoint.Completed || len(partial.Checkpoint.Failures) != 1 || partial.Checkpoint.Failures[0].Scope != graph.FailExecution || applyCalls != 2 {
 		t.Fatalf("partial resume = %+v, %v", partial, err)
 	}
 	stored, err := store.Load(context.Background(), "batch")
-	if err != nil || stored.Revision != partial.Checkpoint.Revision {
-		t.Fatalf("stored prefix = %+v, %v", stored, err)
-	}
-	_, a := findInvocation(stored, ids["a"])
-	_, b := findInvocation(stored, ids["b"])
-	if a == nil || a.Status != graph.InvocationJoined || a.State != 4 || b == nil || b.Status != graph.InvocationWaiting {
-		t.Fatalf("stored input states = %+v", stored.Invocations)
+	if err != nil || stored.Revision != partial.Checkpoint.Revision || !stored.Completed || len(stored.Invocations) != 0 {
+		t.Fatalf("stored failed run = %+v, %v", stored, err)
 	}
 }
 

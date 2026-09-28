@@ -89,6 +89,9 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		if applyErr != nil {
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
 			if failureErr := r.recordFailure(&candidate, inv.ID, inv.Node, scope, applyErr); failureErr != nil {
+				if terminalFailureRecord(candidate) != nil {
+					return r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
+				}
 				return resultWith(s, StatusFailed), failureErr
 			}
 		} else {
@@ -97,6 +100,9 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			}
 		}
 		if settleErr := r.settleGroups(ctx, &candidate, opts.FailureOverride); settleErr != nil {
+			if terminalFailureRecord(candidate) != nil {
+				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
+			}
 			return resultWith(s, StatusFailed), settleErr
 		}
 		markCompleted(&candidate)

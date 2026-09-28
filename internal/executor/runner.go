@@ -45,6 +45,9 @@ func errorStatus(err error) Status {
 
 func statusOf[S any](s Checkpoint[S], exhausted bool) Status {
 	if s.Completed {
+		if terminalFailureRecord(s) != nil {
+			return StatusFailed
+		}
 		if len(s.Failures) != 0 {
 			return StatusCompletedWithFailures
 		}

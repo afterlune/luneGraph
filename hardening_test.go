@@ -21,7 +21,7 @@ func TestCallbackPanicPolicies(t *testing.T) {
 			}
 			out, err := intRunner(t, g).Start(context.Background(), "node-panic", 1, graph.Options[int]{})
 			if scope == graph.FailExecution {
-				if !errors.Is(err, boom) || out.Checkpoint.Revision != 1 {
+				if !errors.Is(err, boom) || out.Checkpoint.Revision != 2 || out.Checkpoint.Steps != 1 || !out.Checkpoint.Completed || len(out.Checkpoint.Failures) != 1 || out.Checkpoint.Failures[0].Scope != graph.FailExecution || out.Checkpoint.Failures[0].PanicStack == "" {
 					t.Fatalf("execution panic = %+v, %v", out, err)
 				}
 				var panicErr *graph.PanicError

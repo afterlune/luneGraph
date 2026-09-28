@@ -51,7 +51,8 @@ type Terminal[S any] struct {
 	State        S
 }
 
-// Failure records a node or join error handled by a local policy.
+// Failure records a node, continuation, or join error handled by a failure
+// policy. FailExecution marks the final failure of a completed run.
 type Failure struct {
 	InvocationID string
 	Node         string
@@ -61,8 +62,9 @@ type Failure struct {
 }
 
 // Checkpoint contains the complete execution position. Treat a returned
-// checkpoint as immutable. Store implementations must own a deep copy of values
-// passed to them and return an independent copy from Load.
+// checkpoint as immutable. Completed includes execution-level failures, marked
+// by a Failure with scope FailExecution. Store implementations must own a deep
+// copy of values passed to them and return an independent copy from Load.
 type Checkpoint[S any] struct {
 	FormatVersion  uint32
 	RunID          string
@@ -79,7 +81,7 @@ type Checkpoint[S any] struct {
 	Failures       []Failure
 }
 
-// Result is the outcome of one call to Start or Resume.
+// Result is the outcome of one call to Start, Resume, or Recover.
 type Result[S any] struct {
 	Status     Status
 	Checkpoint Checkpoint[S]
