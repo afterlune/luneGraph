@@ -92,10 +92,13 @@ type ResumeInput struct {
 	Payload      []byte
 }
 
-// Store provides optional checkpoint persistence. Create must reject an
-// existing RunID. CompareAndSwap must reject stale revisions or machine IDs.
-// A conflict guarantees no write. Other storage errors may leave commit outcome
-// unknown; callers should Load the latest checkpoint before retrying.
+// Store provides optional checkpoint persistence. Create accepts revision one
+// and rejects an existing RunID. CompareAndSwap accepts the next revision for
+// the same run and machine, and rejects stale revisions or machine IDs. Both
+// writes reject malformed checkpoint headers with ErrInvalidCheckpoint.
+// Load returns an independent copy and reports a missing run with
+// checkpoint.ErrNotFound. ErrConflict guarantees no write. Other storage errors
+// may leave commit outcome unknown; callers should Load before retrying.
 type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)

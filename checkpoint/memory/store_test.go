@@ -9,6 +9,7 @@ import (
 	graph "lune-graph"
 	"lune-graph/checkpoint"
 	"lune-graph/checkpoint/memory"
+	"lune-graph/internal/storetest"
 )
 
 type state struct{ Values map[string]int }
@@ -21,13 +22,23 @@ func cloneState(s state) (state, error) {
 	return state{Values: values}, nil
 }
 
+func TestStoreContract(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) graph.Store[storetest.State] {
+		store, err := memory.New(storetest.CloneState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	})
+}
+
 func TestStoreCopiesAndComparesCheckpoints(t *testing.T) {
 	store, err := memory.New(cloneState)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	initial := graph.Checkpoint[state]{RunID: "run", MachineID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
+	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
 	if err := store.Create(ctx, initial); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +84,7 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := store.Create(ctx, graph.Checkpoint[int]{RunID: "run", Revision: 1}); err != nil {
+	if err := store.Create(ctx, graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	results := make(chan error, 2)
@@ -82,7 +93,7 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			results <- store.CompareAndSwap(ctx, 1, graph.Checkpoint[int]{RunID: "run", Revision: 2, Steps: uint64(value + 1)})
+			results <- store.CompareAndSwap(ctx, 1, graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 2, Steps: uint64(value + 1)})
 		}()
 	}
 	workers.Wait()

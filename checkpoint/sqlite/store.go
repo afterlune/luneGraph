@@ -7,22 +7,11 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	graph "lune-graph"
 	"lune-graph/checkpoint"
+	"lune-graph/internal/model"
 )
-
-func validIdentity(value string) bool {
-	return value != "" && strings.TrimSpace(value) == value
-}
-
-func validCheckpoint[S any](value graph.Checkpoint[S]) error {
-	if !validIdentity(value.RunID) || !validIdentity(value.MachineID) || value.Revision == 0 || value.FormatVersion != graph.CheckpointFormatVersion {
-		return graph.ErrInvalidCheckpoint
-	}
-	return nil
-}
 
 // Create stores revision one. An existing run returns graph.ErrConflict.
 func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error {
@@ -32,7 +21,7 @@ func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error 
 	if s == nil || s.db == nil {
 		return errors.New("store is nil")
 	}
-	if err := validCheckpoint(value); err != nil {
+	if err := model.ValidateCheckpointHeader(value); err != nil {
 		return err
 	}
 	if value.Revision != 1 {
@@ -100,7 +89,7 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 	if s == nil || s.db == nil {
 		return errors.New("store is nil")
 	}
-	if err := validCheckpoint(next); err != nil {
+	if err := model.ValidateCheckpointHeader(next); err != nil {
 		return err
 	}
 	if expected == math.MaxUint64 {

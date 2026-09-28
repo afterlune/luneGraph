@@ -10,6 +10,7 @@ import (
 
 	graph "lune-graph"
 	"lune-graph/checkpoint"
+	"lune-graph/internal/model"
 )
 
 // Store owns independent copies of its checkpoints. It is safe for concurrent
@@ -34,6 +35,12 @@ func (s *Store[S]) Create(ctx context.Context, checkpoint graph.Checkpoint[S]) e
 	}
 	if s == nil {
 		return errors.New("store is nil")
+	}
+	if err := model.ValidateCheckpointHeader(checkpoint); err != nil {
+		return err
+	}
+	if checkpoint.Revision != 1 {
+		return graph.ErrInvalidCheckpoint
 	}
 	clone, err := checkpoint.Clone(s.clone)
 	if err != nil {
@@ -76,6 +83,9 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 	}
 	if s == nil {
 		return errors.New("store is nil")
+	}
+	if err := model.ValidateCheckpointHeader(next); err != nil {
+		return err
 	}
 	if expected == math.MaxUint64 {
 		return graph.ErrExecutionLimit

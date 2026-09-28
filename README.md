@@ -1,8 +1,10 @@
 # lune-graph
 
-`lune-graph` is a typed, stateful graph executor for Go. A graph defines nodes and allowed edges. Each execution owns an evolving state and can loop, branch, wait for input, and resume from a checkpoint. The core uses the Go standard library; the optional SQLite store uses `modernc.org/sqlite`.
+`lune-graph` is a typed, resumable and durable graph execution runtime for Go. A graph defines nodes and allowed edges. Each execution owns an evolving state and can loop, branch, wait for input, and resume from a checkpoint. The runtime defines execution semantics; applications define the state and the meaning of each node. The core uses the Go standard library; the optional SQLite store uses `modernc.org/sqlite`.
 
 The public API stays in the `lune-graph` package. Its implementation is organized under `internal/model`, `internal/definition`, and `internal/executor`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`.
+
+The [execution contract](docs/execution-semantics.md) specifies commit points, crash recovery, Store errors, and the boundary between graph state and external side effects. LLMs, agents, and data modalities are application concerns built on this runtime.
 
 ## A small graph
 
