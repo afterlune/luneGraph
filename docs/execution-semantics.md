@@ -92,6 +92,13 @@ itself a terminal failure, but it may leave a terminal write's outcome unknown;
 reload before deciding whether to retry. A crash before the terminal commits
 can still cause the callback to run again.
 
+`FailGroup` from an invocation in an activation group removes that group's child
+invocations and all nested groups beneath them, then marks the group's parent
+invocation failed. Running callbacks in the removed subtree are canceled and
+drained. Enclosing groups remain active and settle under their own join rules;
+only children that reach an enclosing join contribute states. `FailGroup` at the
+root escalates to `FailExecution`.
+
 Concurrent node results commit in arrival order. `EndExecution` cancels other
 running callbacks and commits the winner's final state. A callback can finish
 without its result being committed if another result ends the run or a commit
