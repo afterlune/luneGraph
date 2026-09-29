@@ -6,6 +6,8 @@ The public API stays in the `lune-graph` package. Its implementation is organize
 
 The [execution contract](docs/execution-semantics.md) specifies commit points, crash recovery, Store errors, and the boundary between graph state and external side effects. LLMs, agents, and data modalities are application concerns built on this runtime.
 
+The project's performance, concurrency, and reliability standards and benchmark commands are documented in [docs/performance.md](docs/performance.md).
+
 ## A small graph
 
 ```go
