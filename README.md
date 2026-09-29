@@ -8,6 +8,8 @@ The [execution contract](docs/execution-semantics.md) specifies commit points, c
 
 The project's performance, concurrency, and reliability standards and benchmark commands are documented in [docs/performance.md](docs/performance.md).
 
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
+
 ## A small graph
 
 ```go
