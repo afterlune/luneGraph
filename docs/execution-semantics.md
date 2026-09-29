@@ -4,6 +4,26 @@
 edges, branches, joins, runs, failures, and checkpoints define the runtime.
 Applications define the meaning of their state and callbacks.
 
+## Subgraph composition
+
+`Graph[S].AddSubgraph` mounts another builder with the same `S`. `Compile`
+recursively expands each mount into the parent machine, so a run still has one
+state, one scheduler, and one checkpoint. A mount name acts as a graph vertex:
+incoming edges enter the child graph's configured entry, and its optional
+single outgoing edge is the destination for `Return(state)`. A return with no
+destination ends that invocation branch. `EndBranch` and `EndExecution` inside
+a child keep their run-wide behavior. `Return` from an unmounted node is an
+invalid transition.
+
+Nested and repeated mounts receive qualified node, join, and continuation
+names based on their mount paths. For example, a child node `review` mounted
+as `worker` is stored as `worker/review`; a continuation `approval` in that
+child is stored as `worker/approval`. Node targets and wait continuation keys
+are resolved within the graph where the callback was registered. These names
+are part of the checkpoint's execution position, so recovery requires the same
+expanded graph and a compatible `MachineID`. Subgraphs do not change the
+checkpoint format.
+
 ## State ownership
 
 Every run owns a `Checkpoint[S]`. The runner calls `Config.Clone` before passing

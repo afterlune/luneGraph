@@ -42,6 +42,7 @@ const (
 	ActionWait         = model.ActionWait
 	ActionEndBranch    = model.ActionEndBranch
 	ActionEndExecution = model.ActionEndExecution
+	ActionReturn       = model.ActionReturn
 
 	FailInvocation = model.FailInvocation
 	FailGroup      = model.FailGroup
@@ -72,7 +73,7 @@ var (
 	ErrRunFailed         = model.ErrRunFailed
 )
 
-// New creates a graph builder with the given entry node name.
+// New creates a graph builder with the given entry vertex name.
 func New[S any](entry string) *Graph[S] { return definition.New[S](entry) }
 
 // RegisterContinuation adapts a typed continuation handler to persisted bytes.
@@ -93,3 +94,6 @@ func Wait[S any](state S, continuation string, targets ...string) Transition[S] 
 func EndBranch[S any](state S) Transition[S] { return model.EndBranch(state) }
 
 func EndExecution[S any](state S) Transition[S] { return model.EndExecution(state) }
+
+// Return leaves a mounted subgraph and follows the edge leaving its mount point.
+func Return[S any](state S) Transition[S] { return model.Return(state) }

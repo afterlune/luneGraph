@@ -13,6 +13,7 @@ const (
 	ActionWait
 	ActionEndBranch
 	ActionEndExecution
+	ActionReturn
 )
 
 // Transition contains a node's new state and its explicit control decision.
@@ -41,6 +42,11 @@ func EndBranch[S any](state S) Transition[S] {
 // EndExecution finishes the whole run with state as its final result.
 func EndExecution[S any](state S) Transition[S] {
 	return Transition[S]{State: state, Action: ActionEndExecution}
+}
+
+// Return leaves the current subgraph and continues at its mount point.
+func Return[S any](state S) Transition[S] {
+	return Transition[S]{State: state, Action: ActionReturn}
 }
 
 // Node performs one invocation and chooses its next control action. CallInfo
@@ -114,6 +120,7 @@ type Machine[S any] struct {
 	JoinBySource  map[string]string
 	Edges         map[string]map[string]struct{}
 	Continuations map[string]Continuation[S]
+	ReturnTargets map[string]string
 }
 
 func ValidName(name string) bool {

@@ -43,14 +43,51 @@ func main() {
 }
 ```
 
-`Graph[S]` is a builder. `Compile` copies its definition into a `Runner[S]`; later builder changes do not affect that runner. The same runner may serve concurrent executions if node, continuation, merge, and clone functions are safe to call concurrently. Node, join, and continuation callbacks receive a `CallInfo` with the run ID, invocation ID, and persisted callback ID.
+`Graph[S]` is a builder. `Compile` copies its definition into a `Runner[S]`; later builder changes do not affect that runner. Subgraphs are expanded into the same compiled machine and checkpoint. The same runner may serve concurrent executions if node, continuation, merge, and clone functions are safe to call concurrently. Node, join, and continuation callbacks receive a `CallInfo` with the run ID, invocation ID, and persisted callback ID.
 
-Nodes return one of four explicit decisions:
+Nodes return one of five explicit decisions:
 
 - `To(state, targets...)` continues to one edge or fans out to several edges.
 - `Wait(state, continuation, targets...)` suspends that invocation until it receives input.
 - `EndBranch(state)` ends one path and records its terminal state.
 - `EndExecution(state)` ends the entire execution, cancels other active invocations, and sets `Checkpoint.Final`.
+- `Return(state)` leaves the current subgraph and follows the edge leaving its mount point.
+
+## Subgraphs
+
+`AddSubgraph(name, child)` mounts another `Graph[S]` under a vertex name. The child uses the same state type, and the compiled runner's `Clone` function applies to its nodes and branches. Edges entering the mount name enter the child's configured entry. Add zero or one outgoing edge from the mount name; that edge is the continuation for `Return(state)`. A mounted graph without an outgoing edge ends the current branch when it returns. `EndBranch` ends its current invocation and `EndExecution` ends the whole run, as they do in the parent graph. A `Return` from a node outside a mounted graph is an invalid transition.
+
+Compilation recursively expands nested mounts. Child node, join, and continuation names are qualified by their mount path, such as `worker/review` or `worker/review/approved`. Node transitions and wait continuations use names from their own graph definition; the compiler resolves them to these qualified names. Checkpoints therefore store qualified node and continuation names. Keep the same graph definition and `MachineID` when recovering a run; change the ID when a subgraph change makes the definition incompatible with saved checkpoints.
+
+```go
+child := graph.New[int]("work")
+if err := child.AddNode(graph.NodeSpec[int]{Name: "work", Run: func(_ context.Context, _ graph.CallInfo, n int) (graph.Transition[int], error) {
+	return graph.Return(n + 1), nil
+}}); err != nil {
+	panic(err)
+}
+
+parent := graph.New[int]("start")
+if err := parent.AddNode(graph.NodeSpec[int]{Name: "start", Run: func(_ context.Context, _ graph.CallInfo, n int) (graph.Transition[int], error) {
+	return graph.To(n, "worker"), nil
+}}); err != nil {
+	panic(err)
+}
+if err := parent.AddNode(graph.NodeSpec[int]{Name: "after", Run: func(_ context.Context, _ graph.CallInfo, n int) (graph.Transition[int], error) {
+	return graph.EndExecution(n), nil
+}}); err != nil {
+	panic(err)
+}
+if err := parent.AddSubgraph("worker", child); err != nil {
+	panic(err)
+}
+if err := parent.AddEdge("start", "worker"); err != nil {
+	panic(err)
+}
+if err := parent.AddEdge("worker", "after"); err != nil {
+	panic(err)
+}
+```
 
 Targets must be declared with `AddEdge`. A node's ordinary error follows its `NodeSpec.OnError` policy: `FailInvocation` (the default), `FailGroup`, or `FailExecution`. A run can override that policy with `Options.FailureOverride`. `FailGroup` at the root escalates to an execution failure. Local failures remain in `Checkpoint.Failures` and do not become a top-level error. `FailExecution` commits a failed terminal checkpoint and returns the original error; `Recover` later returns `StatusFailed`, the stored checkpoint, and `ErrRunFailed` with its recorded message. Panics from nodes, joins, continuation handlers, decoders, and state cloning become `*PanicError`; recorded panics retain their stack in `Failure.PanicStack`. Invalid actions, edges, or joins return `*TransitionError` regardless of failure policy. Clone errors and invalid transitions return the last committed checkpoint. Store panics are outside this callback boundary.
 

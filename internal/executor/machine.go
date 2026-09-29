@@ -12,6 +12,7 @@ type Runner[S any] struct {
 	joinBySource  map[string]string
 	edges         map[string]map[string]struct{}
 	continuations map[string]Continuation[S]
+	returnTargets map[string]string
 }
 
 func New[S any](machine Machine[S]) (*Runner[S], error) {
@@ -24,6 +25,7 @@ func New[S any](machine Machine[S]) (*Runner[S], error) {
 		joinBySource:  machine.JoinBySource,
 		edges:         machine.Edges,
 		continuations: machine.Continuations,
+		returnTargets: machine.ReturnTargets,
 	}, nil
 }
 

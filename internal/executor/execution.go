@@ -67,6 +67,35 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 		s.Invocations = nil
 		s.Groups = nil
 		return true, nil
+	case ActionReturn:
+		if len(tr.Targets) != 0 || tr.Continuation != "" {
+			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with Return")}
+		}
+		target, mounted := r.returnTargets[source]
+		if !mounted {
+			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("Return used outside a subgraph")}
+		}
+		if target == "" {
+			inv.State = tr.State
+			inv.Status = InvocationEnded
+			inv.CallID = ""
+			inv.Next = nil
+			inv.Continuation = ""
+			s.Terminals = append(s.Terminals, Terminal[S]{InvocationID: id, State: tr.State})
+			return false, nil
+		}
+		targets := []string{target}
+		if err := r.checkJoinTargets(s, inv, targets); err != nil {
+			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+		}
+		if err := r.route(s, id, source, tr.State, targets); err != nil {
+			var cloneErr *stateCopyError
+			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
+				return false, err
+			}
+			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+		}
+		return false, nil
 	default:
 		return false, &TransitionError{InvocationID: id, Node: source, Cause: fmt.Errorf("invalid action %d", tr.Action)}
 	}
