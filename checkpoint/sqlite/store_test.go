@@ -93,8 +93,8 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 
 type failingCodec struct{ failure error }
 
-func (c failingCodec) Marshal(graph.Checkpoint[state]) ([]byte, error) {
-	return nil, c.failure
+func (c failingCodec) Append(dst []byte, _ graph.Checkpoint[state]) ([]byte, error) {
+	return append(dst, "partial"...), c.failure
 }
 func (c failingCodec) Unmarshal([]byte) (graph.Checkpoint[state], error) {
 	return graph.Checkpoint[state]{}, c.failure
@@ -156,7 +156,7 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	if err := good.Close(); err != nil {
 		t.Fatal(err)
 	}
-	validPayload, err := (checkpoint.JSON[state]{}).Marshal(initial)
+	validPayload, err := (checkpoint.JSON[state]{}).Append(nil, initial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +212,52 @@ func TestConcurrentOpenFreshDatabase(t *testing.T) {
 	}
 }
 
+func TestConcurrentCreateAndCompareAndSwap(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, databasePath(t), checkpoint.JSON[int]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const runCount = 8
+	var workers sync.WaitGroup
+	errorsByRun := make(chan error, runCount)
+	for i := range runCount {
+		runID := "concurrent-" + strconv.Itoa(i)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			initial := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: runID, MachineID: "machine-v1", Revision: 1}
+			if err := store.Create(ctx, initial); err != nil {
+				errorsByRun <- err
+				return
+			}
+			next := initial
+			next.Revision = 2
+			if err := store.CompareAndSwap(ctx, 1, next); err != nil {
+				errorsByRun <- err
+				return
+			}
+			errorsByRun <- nil
+		}()
+	}
+	workers.Wait()
+	close(errorsByRun)
+	for err := range errorsByRun {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range runCount {
+		runID := "concurrent-" + strconv.Itoa(i)
+		stored, err := store.Load(ctx, runID)
+		if err != nil || stored.Revision != 2 {
+			t.Fatalf("Load(%q) = revision %d, error %v", runID, stored.Revision, err)
+		}
+	}
+}
+
 func TestRevisionUsesFullUint64Range(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
@@ -225,7 +271,7 @@ func TestRevisionUsesFullUint64Range(t *testing.T) {
 	}
 	wide := initial
 	wide.Revision = math.MaxUint64
-	payload, err := (checkpoint.JSON[state]{}).Marshal(wide)
+	payload, err := (checkpoint.JSON[state]{}).Append(nil, wide)
 	if err != nil {
 		t.Fatal(err)
 	}

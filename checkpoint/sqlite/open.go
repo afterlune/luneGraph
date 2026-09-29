@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	graph "lune-graph"
@@ -27,8 +28,9 @@ const schemaVersion = 1
 
 // Store is a concurrent-safe, persistent implementation of graph.Store.
 type Store[S any] struct {
-	db    *sql.DB
-	codec checkpoint.Codec[S]
+	db             *sql.DB
+	codec          checkpoint.Codec[S]
+	payloadBuffers sync.Pool
 }
 
 // Open opens or creates a local SQLite database. Its parent directory must
