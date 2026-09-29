@@ -8,6 +8,7 @@
 
 - 优先采用清晰、类型安全且易组合的 Go API。用显式的转换和错误表达控制流，保持核心库与业务框架解耦。
 - 允许循环，并由节点显式终止 execution；步数上限是保险丝。暂停属于 invocation，恢复输入经已注册的 continuation 进入状态。
+- 子图在 `Compile` 时展开为同一个执行机，保持相同的 `S`、调度器和 checkpoint；挂载点至多一个出口，`Return` 沿该出口继续，没有出口时结束当前 invocation。
 - 并行分支必须有独立的状态副本；join 按一次 fan-out 的 activation group 汇合。`Clone` 必须复制状态中会被修改的引用数据。
 - 编译后的 Runner 不再改变图定义，可供并发 execution 共享。Store 负责保存独立的 checkpoint 副本；持久化执行按 at-least-once 语义处理。节点、join 和 continuation 回调使用持久化的 `CallInfo.CallID` 识别重放；应用按命名空间、run ID 和 call ID 幂等或去重副作用。
 - `FailExecution`（包括根节点 `FailGroup` 升级）提交不可继续执行的失败终态；取消、非法转换和状态复制错误不触发失败终态。Store 错误可能使提交结果不确定，须重新加载确认。重新加载失败终态时只保证可检查的失败标记和持久化消息，不重建原始 Go 错误类型。

@@ -15,19 +15,21 @@ type Graph[S any] struct {
 	entry         string
 	nodes         map[string]model.NodeSpec[S]
 	joins         map[string]model.JoinSpec[S]
+	subgraphs     map[string]*Graph[S]
 	edges         map[string]map[string]struct{}
 	continuations map[string]model.Continuation[S]
 }
 
-// New creates a graph builder with the given entry node name.
+// New creates a graph builder with the given entry vertex name.
 func New[S any](entry string) *Graph[S] {
-	return &Graph[S]{entry: entry, nodes: make(map[string]model.NodeSpec[S]), joins: make(map[string]model.JoinSpec[S]), edges: make(map[string]map[string]struct{}), continuations: make(map[string]model.Continuation[S])}
+	return &Graph[S]{entry: entry, nodes: make(map[string]model.NodeSpec[S]), joins: make(map[string]model.JoinSpec[S]), subgraphs: make(map[string]*Graph[S]), edges: make(map[string]map[string]struct{}), continuations: make(map[string]model.Continuation[S])}
 }
 
 func (g *Graph[S]) occupied(name string) bool {
 	_, node := g.nodes[name]
 	_, join := g.joins[name]
-	return node || join
+	_, subgraph := g.subgraphs[name]
+	return node || join || subgraph
 }
 
 // AddNode registers a named node.
@@ -75,6 +77,29 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 		g.joins = make(map[string]model.JoinSpec[S])
 	}
 	g.joins[spec.Name] = spec
+	return nil
+}
+
+// AddSubgraph mounts child at name. The child must use the same state type.
+// A mounted graph may have zero or one outgoing edge from its mount vertex;
+// that edge is the destination of a Return transition.
+func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
+	if g == nil {
+		return errors.New("graph is nil")
+	}
+	if !model.ValidName(name) {
+		return errors.New("subgraph name must be non-empty and have no surrounding whitespace")
+	}
+	if child == nil {
+		return fmt.Errorf("subgraph %q is nil", name)
+	}
+	if g.occupied(name) {
+		return fmt.Errorf("duplicate vertex %q", name)
+	}
+	if g.subgraphs == nil {
+		g.subgraphs = make(map[string]*Graph[S])
+	}
+	g.subgraphs[name] = child
 	return nil
 }
 
@@ -139,49 +164,11 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	if config.Clone == nil {
 		return nil, errors.New("Clone is required")
 	}
-	if _, exists := g.nodes[g.entry]; !exists {
-		return nil, fmt.Errorf("entry node %q is not registered", g.entry)
+	definition, err := expand(g)
+	if err != nil {
+		return nil, err
 	}
-
-	nodes := make(map[string]model.NodeSpec[S], len(g.nodes))
-	for name, spec := range g.nodes {
-		nodes[name] = spec
-	}
-	joins := make(map[string]model.JoinSpec[S], len(g.joins))
-	joinBySource := make(map[string]string, len(g.joins))
-	for name, spec := range g.joins {
-		if _, exists := g.nodes[spec.From]; !exists {
-			return nil, fmt.Errorf("join %q has unknown fan-out source %q", name, spec.From)
-		}
-		if other := joinBySource[spec.From]; other != "" {
-			return nil, fmt.Errorf("fan-out %q has joins %q and %q", spec.From, other, name)
-		}
-		if len(g.edges[name]) > 1 {
-			return nil, fmt.Errorf("join %q must have at most one outgoing edge", name)
-		}
-		joins[name] = spec
-		joinBySource[spec.From] = name
-	}
-	edges := make(map[string]map[string]struct{}, len(g.edges))
-	for from, targets := range g.edges {
-		edges[from] = make(map[string]struct{}, len(targets))
-		for to := range targets {
-			edges[from][to] = struct{}{}
-		}
-	}
-	continuations := make(map[string]model.Continuation[S], len(g.continuations))
-	for key, continuation := range g.continuations {
-		continuations[key] = continuation
-	}
-
-	return executor.New(model.Machine[S]{
-		ID:            config.MachineID,
-		Entry:         g.entry,
-		Clone:         config.Clone,
-		Nodes:         nodes,
-		Joins:         joins,
-		JoinBySource:  joinBySource,
-		Edges:         edges,
-		Continuations: continuations,
-	})
+	definition.ID = config.MachineID
+	definition.Clone = config.Clone
+	return executor.New(definition)
 }

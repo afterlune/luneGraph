@@ -32,6 +32,7 @@ const (
 	ActionWait         = model.ActionWait
 	ActionEndBranch    = model.ActionEndBranch
 	ActionEndExecution = model.ActionEndExecution
+	ActionReturn       = model.ActionReturn
 
 	FailInvocation = model.FailInvocation
 	FailGroup      = model.FailGroup
