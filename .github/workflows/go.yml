@@ -31,8 +31,36 @@ jobs:
             printf '%s\n' "$unformatted"
             exit 1
           fi
-      - name: Test
-        run: go test ./...
+      - name: Test and check persistence coverage
+        run: |
+          if output="$(go test -cover ./... 2>&1)"; then
+            printf '%s\n' "$output"
+          else
+            status=$?
+            printf '%s\n' "$output"
+            exit "$status"
+          fi
+
+          for package in checkpoint checkpoint/memory checkpoint/sqlite; do
+            coverage=""
+            while read -r status name duration label percentage remainder; do
+              if [[ "$name" == "lune-graph/$package" && "$label" == "coverage:" ]]; then
+                coverage="${percentage%%%}"
+                break
+              fi
+            done <<< "$output"
+
+            if [[ -z "$coverage" || ! "$coverage" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+              printf 'coverage for %s is missing or invalid; want at least 80%%\n' "$package" >&2
+              exit 1
+            fi
+            whole="${coverage%%.*}"
+            if (( whole < 80 )); then
+              printf 'coverage for %s is %s%%; want at least 80%%\n' "$package" "$coverage" >&2
+              exit 1
+            fi
+            printf '%s coverage: %s%% (minimum 80%%)\n' "$package" "$coverage"
+          done
       - name: Vet
         run: go vet ./...
       - name: Race test
