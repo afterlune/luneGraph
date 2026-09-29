@@ -12,6 +12,11 @@ import (
 	"lune-graph/internal/model"
 )
 
+func executionTestIndex[S any](checkpoint Checkpoint[S]) *invocationIndex {
+	index := newInvocationIndex(checkpoint)
+	return &index
+}
+
 func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	nodes := []NodeSpec[int]{
 		executorTestNode("source", executorTestEnd, FailInvocation),
@@ -31,7 +36,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("continue", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		ended, err := runner.applyTransition(&checkpoint, "i1", model.To(7, "next"))
+		ended, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"))
 		if err != nil || ended || checkpoint.Invocations[0].Node != "next" || checkpoint.Invocations[0].State != 7 || checkpoint.Invocations[0].CallID != "c3" {
 			t.Fatalf("continue = %+v, ended=%t err=%v", checkpoint, ended, err)
 		}
@@ -40,7 +45,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("wait", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		_, err := runner.applyTransition(&checkpoint, "i1", model.Wait(8, "resume", "next"))
+		_, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"))
 		if err != nil || checkpoint.Invocations[0].Status != InvocationWaiting || checkpoint.Invocations[0].State != 8 || checkpoint.Invocations[0].Continuation != "resume" || !reflect.DeepEqual(checkpoint.Invocations[0].Next, []string{"next"}) {
 			t.Fatalf("wait = %+v, %v", checkpoint, err)
 		}
@@ -59,7 +64,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			checkpoint := executorTestReadyCheckpoint("source", 1)
-			if _, err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, "i1", transition); err == nil {
+			if _, err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition); err == nil {
 				t.Fatalf("invalid transition accepted: %+v", transition)
 			}
 		})
@@ -67,7 +72,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end branch", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, "i1", model.EndBranch(9))
+		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch(9))
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" || len(checkpoint.Terminals) != 1 || checkpoint.Terminals[0].State != 9 {
 			t.Fatalf("EndBranch = %+v, %v", checkpoint, err)
 		}
@@ -75,7 +80,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end execution", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		ended, err := makeRunner(nil).applyTransition(&checkpoint, "i1", model.EndExecution(11))
+		ended, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11))
 		if err != nil || !ended || !checkpoint.Completed || checkpoint.Final == nil || *checkpoint.Final != 11 || len(checkpoint.Invocations) != 0 {
 			t.Fatalf("EndExecution = %+v, ended=%t err=%v", checkpoint, ended, err)
 		}
@@ -83,7 +88,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return with destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, "i1", model.Return(12))
+		_, err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
 		if err != nil || checkpoint.Invocations[0].Node != "done" || checkpoint.Invocations[0].State != 12 {
 			t.Fatalf("Return route = %+v, %v", checkpoint, err)
 		}
@@ -91,7 +96,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return without destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, "i1", model.Return(12))
+		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || len(checkpoint.Terminals) != 1 || checkpoint.Terminals[0].State != 12 {
 			t.Fatalf("terminal Return = %+v, %v", checkpoint, err)
 		}
@@ -99,7 +104,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return outside mount", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, "i1", model.Return(12))
+		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
 		var transitionErr *TransitionError
 		if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), "outside a subgraph") {
 			t.Fatalf("root Return error = %v", err)
@@ -108,7 +113,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("missing invocation", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		if _, err := makeRunner(nil).applyTransition(&checkpoint, "missing", model.Return(0)); err == nil {
+		if _, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0)); err == nil {
 			t.Fatal("transition accepted missing invocation")
 		}
 	})
@@ -252,7 +257,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 	if err := runner.checkTargets("source", []string{"next"}); err == nil {
 		t.Fatal("unregistered edge accepted")
 	}
-	if err := runner.route(&checkpoint, "i99", "source", 1, []string{"source"}); err == nil {
+	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i99", "source", 1, []string{"source"}); err == nil {
 		t.Fatal("route accepted missing invocation")
 	}
 
@@ -265,7 +270,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 	}, nil, map[string][]string{"fork": {"a", "b"}}, nil, nil)
 	cloneFailure.clone = func(int) (int, error) { return 0, copyErr }
 	checkpoint = executorTestReadyCheckpoint("fork", 1)
-	err := cloneFailure.route(&checkpoint, "i1", "fork", 1, []string{"a", "b"})
+	err := cloneFailure.route(&checkpoint, executionTestIndex(checkpoint), "i1", "fork", 1, []string{"a", "b"})
 	var stateErr *stateCopyError
 	if !errors.As(err, &stateErr) || !errors.Is(err, copyErr) {
 		t.Fatalf("fan-out clone error = %v", err)
@@ -273,20 +278,20 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 
 	checkpoint = executorTestReadyCheckpoint("source", 1)
 	checkpoint.NextID = math.MaxUint64 - 1
-	if err := runner.route(&checkpoint, "i1", "source", 1, []string{"source", "source2"}); !errors.Is(err, ErrExecutionLimit) {
+	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i1", "source", 1, []string{"source", "source2"}); !errors.Is(err, ErrExecutionLimit) {
 		t.Fatalf("fan-out ID overflow = %v", err)
 	}
 
 	checkpoint = Checkpoint[int]{Invocations: []Invocation[int]{{ID: "i1", Node: "source", Status: InvocationWaiting}}}
-	if err := runner.recordFailure(&checkpoint, "missing", "source", FailInvocation, copyErr); err == nil {
+	if err := runner.recordFailure(&checkpoint, executionTestIndex(checkpoint), "missing", "source", FailInvocation, copyErr); err == nil {
 		t.Fatal("recordFailure accepted missing invocation")
 	}
 	checkpoint = executorTestReadyCheckpoint("source", 1)
-	if err := runner.recordFailure(&checkpoint, "i1", "source", FailInvocation, copyErr); err != nil || checkpoint.Invocations[0].Status != InvocationFailed {
+	if err := runner.recordFailure(&checkpoint, executionTestIndex(checkpoint), "i1", "source", FailInvocation, copyErr); err != nil || checkpoint.Invocations[0].Status != InvocationFailed {
 		t.Fatalf("local recordFailure = %+v, %v", checkpoint, err)
 	}
 	rootGroupFailure := executorTestReadyCheckpoint("source", 1)
-	if err := runner.recordFailure(&rootGroupFailure, "i1", "source", FailGroup, copyErr); !errors.Is(err, copyErr) || !rootGroupFailure.Completed || rootGroupFailure.Failures[0].Scope != FailExecution {
+	if err := runner.recordFailure(&rootGroupFailure, executionTestIndex(rootGroupFailure), "i1", "source", FailGroup, copyErr); !errors.Is(err, copyErr) || !rootGroupFailure.Completed || rootGroupFailure.Failures[0].Scope != FailExecution {
 		t.Fatalf("root FailGroup = %+v, %v", rootGroupFailure, err)
 	}
 	if !errors.Is(recoveredFailure(rootGroupFailure), ErrRunFailed) || recoveredFailure(Checkpoint[int]{}) != nil {

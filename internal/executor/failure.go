@@ -7,8 +7,8 @@ import (
 
 // recordFailure changes a candidate checkpoint. An execution-level error
 // leaves a terminal candidate for the caller to commit before returning.
-func (r *Runner[S]) recordFailure(s *Checkpoint[S], id, node string, scope FailureScope, cause error) error {
-	_, inv := invocation(s, id)
+func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, node string, scope FailureScope, cause error) error {
+	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("missing failed invocation %q", id)
 	}
@@ -21,10 +21,11 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], id, node string, scope Failu
 		s.Final = nil
 		s.Invocations = nil
 		s.Groups = nil
+		clearInvocationIndex(index)
 		return fmt.Errorf("%s: %w", node, cause)
 	}
 	if scope == FailGroup && inv.GroupID != "" {
-		return r.failGroup(s, inv.GroupID)
+		return r.failGroup(s, index, inv.GroupID)
 	}
 	inv.Status = InvocationFailed
 	inv.CallID = ""
@@ -33,7 +34,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], id, node string, scope Failu
 	return nil
 }
 
-func (r *Runner[S]) failGroup(s *Checkpoint[S], id string) error {
+func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id string) error {
 	_, activation := group(s, id)
 	if activation == nil {
 		return fmt.Errorf("missing failed group %q", id)
@@ -50,20 +51,14 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], id string) error {
 		removeGroups[groupID] = true
 		for _, childID := range current.Children {
 			removeInv[childID] = true
-			_, child := invocation(s, childID)
+			_, child := indexedInvocation(index, s, childID)
 			if child != nil && child.ChildGroupID != "" {
 				walk(child.ChildGroupID)
 			}
 		}
 	}
 	walk(id)
-	invocations := s.Invocations[:0]
-	for _, inv := range s.Invocations {
-		if !removeInv[inv.ID] {
-			invocations = append(invocations, inv)
-		}
-	}
-	s.Invocations = invocations
+	removeInvocations(index, s, removeInv)
 	groups := s.Groups[:0]
 	for _, group := range s.Groups {
 		if !removeGroups[group.ID] {
@@ -71,7 +66,7 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], id string) error {
 		}
 	}
 	s.Groups = groups
-	_, parent := invocation(s, parentID)
+	_, parent := indexedInvocation(index, s, parentID)
 	if parent == nil {
 		return fmt.Errorf("failed group %q lost parent", id)
 	}

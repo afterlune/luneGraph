@@ -28,6 +28,12 @@ The benchmarks report Go's `ns/op`, `B/op`, and `allocs/op` values. Graph compil
 
 For comparisons, run the command more than once on an otherwise idle machine and keep the Go version and `-cpu` values fixed. The tests validate every result inside the measured path; this adds a small amount of assertion work to each operation.
 
+For focused profiles, pass `-cpuprofile` and `-memprofile` to a single benchmark selection. Inspect CPU samples with `go tool pprof -top <cpu-profile>` and allocation volume with `go tool pprof -top -sample_index=alloc_space <memory-profile>`. Keep profile files and generated test binaries in a temporary directory.
+
+The executor reuses an alternate checkpoint-structure buffer while a run advances. This can retain slice capacity up to the run's peak invocation and group counts until the call returns. After each successful commit, the old buffer's state fields are cleared so it does not keep prior application state alive. The copy remains shallow for user state, matching `model.Copy`; it does not deep-copy application state.
+
+Invocation lookup uses a temporary ID index when a checkpoint has more than eight invocations. Shorter lists use a direct scan to avoid map setup cost. The index follows fan-out insertion and group compaction, is rebuilt when a saved execution resumes, and is never written to a checkpoint.
+
 ## Reliability checks
 
 Run the correctness and static checks alongside benchmark work:
