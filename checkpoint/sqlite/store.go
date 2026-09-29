@@ -27,13 +27,14 @@ func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error 
 	if value.Revision != 1 {
 		return graph.ErrInvalidCheckpoint
 	}
-	payload, err := s.codec.Marshal(value)
+	payload, err := s.encodePayload(value)
 	if err != nil {
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
+	defer s.releasePayloadBuffer(payload)
 	result, err := s.db.ExecContext(ctx,
 		"INSERT INTO checkpoints (run_id, machine_id, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING",
-		value.RunID, value.MachineID, strconv.FormatUint(value.Revision, 10), payload)
+		value.RunID, value.MachineID, strconv.FormatUint(value.Revision, 10), payload.data)
 	if err != nil {
 		return fmt.Errorf("create checkpoint: %w", err)
 	}
@@ -98,13 +99,14 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 	if next.Revision != expected+1 {
 		return graph.ErrConflict
 	}
-	payload, err := s.codec.Marshal(next)
+	payload, err := s.encodePayload(next)
 	if err != nil {
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
+	defer s.releasePayloadBuffer(payload)
 	result, err := s.db.ExecContext(ctx,
 		"UPDATE checkpoints SET revision = ?, payload = ? WHERE run_id = ? AND machine_id = ? AND revision = ?",
-		strconv.FormatUint(next.Revision, 10), payload, next.RunID, next.MachineID, strconv.FormatUint(expected, 10))
+		strconv.FormatUint(next.Revision, 10), payload.data, next.RunID, next.MachineID, strconv.FormatUint(expected, 10))
 	if err != nil {
 		return fmt.Errorf("compare and swap checkpoint: %w", err)
 	}
