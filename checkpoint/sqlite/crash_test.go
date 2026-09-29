@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,17 +16,20 @@ import (
 	"lune-graph/checkpoint/sqlite"
 )
 
-func crashRunner(t *testing.T, marker string, block bool) *graph.Runner[int] {
+func crashRunner(t *testing.T, marker string, block bool, calls chan<- graph.CallInfo) *graph.Runner[int] {
 	t.Helper()
 	g := graph.New[int]("work")
 	err := g.AddNode(graph.NodeSpec[int]{
 		Name: "work",
-		Run: func(ctx context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		Run: func(ctx context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+			if calls != nil {
+				calls <- call
+			}
 			file, err := os.OpenFile(marker, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 			if err != nil {
 				return graph.Transition[int]{}, err
 			}
-			if _, err = file.Write([]byte("x")); err == nil {
+			if _, err = file.Write([]byte(call.CallID + "\n")); err == nil {
 				err = file.Sync()
 			}
 			if closeErr := file.Close(); err == nil {
@@ -68,7 +72,7 @@ func TestCrashProcessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	runner := crashRunner(t, os.Getenv("LUNE_CHECKPOINT_CRASH_MARKER"), true)
+	runner := crashRunner(t, os.Getenv("LUNE_CHECKPOINT_CRASH_MARKER"), true, nil)
 	if _, err := runner.Start(ctx, "crash-run", 0, graph.Options[int]{Store: store}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +101,15 @@ func TestCrashRecoveryReplaysUncommittedNode(t *testing.T) {
 		}
 	}()
 	deadline := time.Now().Add(30 * time.Second)
+	var firstCallID string
 	for {
 		data, err := os.ReadFile(marker)
-		if err == nil && len(data) == 1 {
-			break
+		if err == nil && len(data) != 0 && data[len(data)-1] == '\n' {
+			calls := strings.Fields(string(data))
+			if len(calls) == 1 {
+				firstCallID = calls[0]
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
@@ -127,17 +136,31 @@ func TestCrashRecoveryReplaysUncommittedNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Revision != 1 || saved.Steps != 0 || len(saved.Invocations) != 1 || saved.Invocations[0].Status != graph.InvocationReady {
+	if saved.Revision != 1 || saved.Steps != 0 || len(saved.Invocations) != 1 || saved.Invocations[0].Status != graph.InvocationReady || saved.Invocations[0].CallID != firstCallID {
 		t.Fatalf("checkpoint after crash = %+v", saved)
 	}
-	runner := crashRunner(t, marker, false)
+	replayedCalls := make(chan graph.CallInfo, 1)
+	runner := crashRunner(t, marker, false, replayedCalls)
 	result, err := runner.Recover(ctx, "crash-run", nil, graph.Options[int]{Store: store})
 	if err != nil || result.Status != graph.StatusCompleted || result.Checkpoint.Revision != 2 || result.Checkpoint.Steps != 1 || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 1 {
 		t.Fatalf("recovery result = %+v, %v", result, err)
 	}
+	var replayedCall graph.CallInfo
+	select {
+	case replayedCall = <-replayedCalls:
+	default:
+		t.Fatal("recovery did not invoke the node")
+	}
+	if replayedCall.RunID != "crash-run" || replayedCall.InvocationID != "i1" || replayedCall.CallID != firstCallID {
+		t.Fatalf("replayed callback identity = %+v; initial call ID = %q", replayedCall, firstCallID)
+	}
 	data, err := os.ReadFile(marker)
-	if err != nil || string(data) != "xx" {
-		t.Fatalf("node starts = %q, %v", data, err)
+	if err != nil {
+		t.Fatalf("read callback identities: %v", err)
+	}
+	callIDs := strings.Fields(string(data))
+	if len(callIDs) != 2 || callIDs[0] != firstCallID || callIDs[1] != firstCallID {
+		t.Fatalf("node callback IDs across crash recovery = %q", data)
 	}
 	committed, err := store.Load(ctx, "crash-run")
 	if err != nil || committed.Revision != 2 || committed.Final == nil || *committed.Final != 1 {
