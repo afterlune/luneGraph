@@ -7,8 +7,8 @@ import (
 	"math"
 )
 
-func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S]) (bool, error) {
-	_, inv := invocation(s, id)
+func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S]) (bool, error) {
+	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return false, &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
 	}
@@ -38,7 +38,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 			inv.Next = append([]string(nil), tr.Targets...)
 			return false, nil
 		}
-		if err := r.route(s, id, source, tr.State, tr.Targets); err != nil {
+		if err := r.route(s, index, id, source, tr.State, tr.Targets); err != nil {
 			var cloneErr *stateCopyError
 			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
 				return false, err
@@ -66,6 +66,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 		s.Completed = true
 		s.Invocations = nil
 		s.Groups = nil
+		clearInvocationIndex(index)
 		return true, nil
 	case ActionReturn:
 		if len(tr.Targets) != 0 || tr.Continuation != "" {
@@ -88,7 +89,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], id string, tr Transition[S
 		if err := r.checkJoinTargets(s, inv, targets); err != nil {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		if err := r.route(s, id, source, tr.State, targets); err != nil {
+		if err := r.route(s, index, id, source, tr.State, targets); err != nil {
 			var cloneErr *stateCopyError
 			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
 				return false, err
@@ -127,8 +128,8 @@ type stateCopyError struct{ cause error }
 func (e *stateCopyError) Error() string { return e.cause.Error() }
 func (e *stateCopyError) Unwrap() error { return e.cause }
 
-func (r *Runner[S]) route(s *Checkpoint[S], id, source string, state S, targets []string) error {
-	_, inv := invocation(s, id)
+func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string) error {
+	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("invocation %q disappeared", id)
 	}
@@ -164,6 +165,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], id, source string, state S, targets 
 	if s.NextID > math.MaxUint64-needed {
 		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
 	}
+	reserveInvocationIndex(index, s, len(targets))
 	groupID := newID(s, "g")
 	group := ActivationGroup{ID: groupID, Source: source, ParentID: id, JoinNode: r.joinBySource[source]}
 	if group.JoinNode != "" {
@@ -176,15 +178,14 @@ func (r *Runner[S]) route(s *Checkpoint[S], id, source string, state S, targets 
 	inv.Continuation = ""
 	inv.Next = nil
 	s.Groups = append(s.Groups, group)
-	for index, target := range targets {
+	for branchIndex, target := range targets {
 		childState, err := r.cloneState(state, id)
 		if err != nil {
 			return &stateCopyError{cause: fmt.Errorf("clone fan-out state: %w", err)}
 		}
-		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: index}
+		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
 		s.Groups[len(s.Groups)-1].Children = append(s.Groups[len(s.Groups)-1].Children, child.ID)
-		s.Invocations = append(s.Invocations, child)
-		_, appended := invocation(s, child.ID)
+		appended := appendInvocation(index, s, child)
 		if err := r.setTarget(s, appended, target); err != nil {
 			return err
 		}
@@ -220,13 +221,13 @@ func (r *Runner[S]) setTarget(s *Checkpoint[S], inv *Invocation[S], target strin
 	return nil
 }
 
-func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], override *FailureScope) error {
+func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, override *FailureScope) error {
 	for {
 		index := -1
 		for i, group := range s.Groups {
 			complete := true
 			for _, childID := range group.Children {
-				_, child := invocation(s, childID)
+				_, child := indexedInvocation(invIndex, s, childID)
 				if child == nil || (child.Status != InvocationJoined && child.Status != InvocationEnded && child.Status != InvocationFailed) {
 					complete = false
 					break
@@ -241,7 +242,7 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], override
 			return nil
 		}
 		group := s.Groups[index]
-		_, parent := invocation(s, group.ParentID)
+		_, parent := indexedInvocation(invIndex, s, group.ParentID)
 		if parent == nil {
 			return fmt.Errorf("group %q has missing parent", group.ID)
 		}
@@ -250,7 +251,7 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], override
 		if group.JoinNode != "" {
 			values := make([]S, 0, len(group.Children))
 			for _, childID := range group.Children {
-				_, child := invocation(s, childID)
+				_, child := indexedInvocation(invIndex, s, childID)
 				if child.Status == InvocationJoined {
 					value, err := r.cloneState(child.State, childID)
 					if err != nil {
@@ -266,22 +267,16 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], override
 		for _, childID := range group.Children {
 			children[childID] = true
 		}
-		remaining := s.Invocations[:0]
-		for _, inv := range s.Invocations {
-			if !children[inv.ID] {
-				remaining = append(remaining, inv)
-			}
-		}
-		s.Invocations = remaining
+		removeInvocations(invIndex, s, children)
 		s.Groups = append(s.Groups[:index], s.Groups[index+1:]...)
-		_, parent = invocation(s, group.ParentID)
+		_, parent = indexedInvocation(invIndex, s, group.ParentID)
 		parent.ChildGroupID = ""
 		if mergeErr != nil {
 			scope := r.joins[group.JoinNode].OnError
 			if override != nil {
 				scope = *override
 			}
-			if err := r.recordFailure(s, parent.ID, group.JoinNode, scope, mergeErr); err != nil {
+			if err := r.recordFailure(s, invIndex, parent.ID, group.JoinNode, scope, mergeErr); err != nil {
 				return err
 			}
 			continue

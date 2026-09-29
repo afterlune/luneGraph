@@ -64,6 +64,8 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 	results := make(chan workResult[S], opts.MaxConcurrency)
 	running := make(map[string]context.CancelFunc)
 	s := start
+	index := newInvocationIndex(s)
+	var spare Checkpoint[S]
 	used := 0
 	cursor := s.ScheduleCursor
 	drain := func() {
@@ -138,16 +140,16 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			drain()
 			return resultWith(s, StatusCancelled), err
 		}
-		_, inv := invocation(&s, finished.id)
+		_, inv := indexedInvocation(&index, &s, finished.id)
 		if inv == nil || inv.Status != InvocationReady {
 			continue
 		}
-		candidate := copyCheckpoint(s)
+		candidate := copyCheckpointInto(&spare, s)
 		candidate.Steps++
 		var processErr error
 		ended := false
 		if finished.err == nil {
-			ended, processErr = r.applyTransition(&candidate, finished.id, finished.transition)
+			ended, processErr = r.applyTransition(&candidate, &index, finished.id, finished.transition)
 			if processErr != nil {
 				drain()
 				return resultWith(s, errorStatus(processErr)), processErr
@@ -156,10 +158,10 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			processErr = finished.err
 		}
 		if processErr != nil {
-			candidate = copyCheckpoint(s)
+			candidate = copyCheckpointInto(&spare, s)
 			candidate.Steps++
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
-			if failureErr := r.recordFailure(&candidate, inv.ID, inv.Node, scope, processErr); failureErr != nil {
+			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, processErr); failureErr != nil {
 				if terminalFailureRecord(candidate) != nil {
 					candidate.ScheduleCursor = cursor
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
@@ -172,7 +174,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		candidate.ScheduleCursor = cursor
 		if !ended {
-			if err := r.settleGroups(ctx, &candidate, opts.FailureOverride); err != nil {
+			if err := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride); err != nil {
 				if terminalFailureRecord(candidate) != nil {
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
 					drain()
@@ -183,13 +185,17 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			}
 			markCompleted(&candidate)
 		}
-		var err error
-		if s, err = r.commit(ctx, s, candidate, opts.Store); err != nil {
+		previous := s
+		committed, err := r.commit(ctx, s, candidate, opts.Store)
+		if err != nil {
 			drain()
-			return resultWith(s, errorStatus(err)), err
+			return resultWith(previous, errorStatus(err)), err
 		}
+		s = committed
+		spare = previous
+		clearCheckpointStateValues(&spare)
 		for id, cancel := range running {
-			_, current := invocation(&s, id)
+			_, current := indexedInvocation(&index, &s, id)
 			if current == nil || current.Status != InvocationReady {
 				cancel()
 			}

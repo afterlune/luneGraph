@@ -31,6 +31,81 @@ func TestCheckpointCopySeparatesStructure(t *testing.T) {
 	}
 }
 
+func TestCheckpointCopyIntoReusesStructure(t *testing.T) {
+	final := []int{5}
+	original := Checkpoint[[]int]{
+		RunID: "run",
+		Final: &final,
+		Invocations: []Invocation[[]int]{
+			{ID: "i1", State: []int{1}, Next: []string{"a", "b"}},
+			{ID: "i2", State: []int{2}, Next: []string{"c"}},
+		},
+		Groups:    []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Terminals: []Terminal[[]int]{{InvocationID: "i3", State: []int{3}}},
+		Failures:  []Failure{{InvocationID: "i4", Message: "failed"}},
+	}
+	destination := Copy(original)
+	invocationStorage := &destination.Invocations[0]
+	nextStorage := &destination.Invocations[0].Next[0]
+	groupStorage := &destination.Groups[0]
+	childrenStorage := &destination.Groups[0].Children[0]
+	terminalStorage := &destination.Terminals[0]
+	failureStorage := &destination.Failures[0]
+
+	next := Copy(original)
+	next.RunID = "next-run"
+	next.Revision = 2
+	next.Invocations[0].State = []int{11}
+	next.Invocations[0].Next = []string{"x", "y"}
+	next.Groups[0].Children = []string{"i7", "i8"}
+	next.Terminals[0].State = []int{33}
+	next.Failures[0].Message = "next failure"
+	CopyInto(&destination, next)
+
+	if !reflect.DeepEqual(destination, Copy(next)) {
+		t.Fatalf("CopyInto result = %+v, want %+v", destination, Copy(next))
+	}
+	if &destination.Invocations[0] != invocationStorage || &destination.Invocations[0].Next[0] != nextStorage ||
+		&destination.Groups[0] != groupStorage || &destination.Groups[0].Children[0] != childrenStorage ||
+		&destination.Terminals[0] != terminalStorage || &destination.Failures[0] != failureStorage {
+		t.Fatal("CopyInto did not reuse destination storage")
+	}
+	destination.Invocations[0].Next[0] = "changed"
+	destination.Groups[0].Children[0] = "changed"
+	destination.Terminals[0].State[0] = 99
+	destination.Failures[0].Message = "changed"
+	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i1" || original.Terminals[0].State[0] != 3 || original.Failures[0].Message != "failed" {
+		t.Fatalf("CopyInto shared structure with source: %+v", original)
+	}
+	if &destination.Invocations[0].State[0] != &next.Invocations[0].State[0] {
+		t.Fatal("CopyInto changed Copy's shallow state-copy behavior")
+	}
+}
+
+func TestCheckpointCopyIntoClearsUnusedEntries(t *testing.T) {
+	large := Checkpoint[int]{
+		Invocations: []Invocation[int]{
+			{ID: "i1", Next: []string{"a", "b"}},
+			{ID: "i2", Next: []string{"c"}},
+		},
+		Groups:    []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Terminals: []Terminal[int]{{InvocationID: "i3", State: 3}, {InvocationID: "i4", State: 4}},
+		Failures:  []Failure{{InvocationID: "i5", Message: "stale"}, {InvocationID: "i6", Message: "stale"}},
+	}
+	destination := Copy(large)
+	small := Checkpoint[int]{Invocations: []Invocation[int]{{ID: "i1", Next: []string{"only"}}}}
+	CopyInto(&destination, small)
+	if !reflect.DeepEqual(destination, Copy(small)) {
+		t.Fatalf("CopyInto after shrink = %+v, want %+v", destination, Copy(small))
+	}
+	if got := destination.Invocations[:cap(destination.Invocations)]; !reflect.DeepEqual(got[1], Invocation[int]{}) {
+		t.Fatalf("stale invocation retained in spare capacity: %+v", got[1])
+	}
+	if got := destination.Invocations[0].Next[:cap(destination.Invocations[0].Next)]; got[1] != "" {
+		t.Fatalf("stale edge retained in spare capacity: %v", got)
+	}
+}
+
 func TestCheckpointCloneCopiesEveryStateAndReportsFailures(t *testing.T) {
 	input := Checkpoint[[]int]{
 		Invocations: []Invocation[[]int]{{ID: "i1", State: []int{1}}},

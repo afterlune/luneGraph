@@ -121,22 +121,83 @@ type Options[S any] struct {
 
 // Copy returns a structural copy of a checkpoint. State values remain shared.
 func Copy[S any](s Checkpoint[S]) Checkpoint[S] {
+	var out Checkpoint[S]
+	CopyInto(&out, s)
+	return out
+}
+
+// CopyInto copies s into dst, reusing dst's structural slices when possible.
+// State values retain Copy's shallow-copy behavior. dst must not share its
+// slice storage with s; execution code uses separate alternating checkpoints
+// to maintain this ownership boundary.
+func CopyInto[S any](dst *Checkpoint[S], s Checkpoint[S]) {
+	previous := *dst
 	out := s
-	out.Invocations = append([]Invocation[S](nil), s.Invocations...)
-	for i := range out.Invocations {
-		out.Invocations[i].Next = append([]string(nil), s.Invocations[i].Next...)
-	}
-	out.Groups = append([]ActivationGroup(nil), s.Groups...)
-	for i := range out.Groups {
-		out.Groups[i].Children = append([]string(nil), s.Groups[i].Children...)
-	}
-	out.Terminals = append([]Terminal[S](nil), s.Terminals...)
-	out.Failures = append([]Failure(nil), s.Failures...)
+	out.Invocations = copyInvocations(previous.Invocations, s.Invocations)
+	out.Groups = copyGroups(previous.Groups, s.Groups)
+	out.Terminals = copySlice(previous.Terminals, s.Terminals)
+	out.Failures = copySlice(previous.Failures, s.Failures)
 	if s.Final != nil {
 		value := *s.Final
 		out.Final = &value
 	}
-	return out
+	*dst = out
+}
+
+func copyInvocations[S any](dst, src []Invocation[S]) []Invocation[S] {
+	if len(src) == 0 {
+		clear(dst)
+		return nil
+	}
+	old := dst
+	dst = resizeSlice(dst, len(src))
+	for i, invocation := range src {
+		var next []string
+		if i < len(old) {
+			next = old[i].Next
+		}
+		invocation.Next = copySlice(next, invocation.Next)
+		dst[i] = invocation
+	}
+	return dst
+}
+
+func copyGroups(dst, src []ActivationGroup) []ActivationGroup {
+	if len(src) == 0 {
+		clear(dst)
+		return nil
+	}
+	old := dst
+	dst = resizeSlice(dst, len(src))
+	for i, activation := range src {
+		var children []string
+		if i < len(old) {
+			children = old[i].Children
+		}
+		activation.Children = copySlice(children, activation.Children)
+		dst[i] = activation
+	}
+	return dst
+}
+
+func copySlice[T any](dst, src []T) []T {
+	if len(src) == 0 {
+		clear(dst)
+		return nil
+	}
+	dst = resizeSlice(dst, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func resizeSlice[T any](dst []T, size int) []T {
+	if cap(dst) < size {
+		return make([]T, size)
+	}
+	if size < len(dst) {
+		clear(dst[size:])
+	}
+	return dst[:size]
 }
 
 // Clone returns an independent checkpoint using copyState for every stored S.

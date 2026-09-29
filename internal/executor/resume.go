@@ -47,7 +47,8 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 // resumeValidated advances a loaded active checkpoint without reading the Store again.
 func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S]) (Result[S], error) {
 	s := copyCheckpoint(checkpoint)
-	var err error
+	index := newInvocationIndex(s)
+	var spare Checkpoint[S]
 	if len(inputs) != 0 && s.Revision == math.MaxUint64 {
 		return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
 	}
@@ -62,7 +63,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			return resultWith(s, StatusFailed), fmt.Errorf("duplicate resume input for %q", input.InvocationID)
 		}
 		seen[input.InvocationID] = true
-		_, inv := invocation(&s, input.InvocationID)
+		_, inv := indexedInvocation(&index, &s, input.InvocationID)
 		if inv == nil || inv.Status != InvocationWaiting {
 			return resultWith(s, StatusFailed), fmt.Errorf("invocation %q is not waiting", input.InvocationID)
 		}
@@ -76,7 +77,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		if s.Revision == math.MaxUint64 {
 			return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
 		}
-		_, inv := invocation(&s, input.id)
+		_, inv := indexedInvocation(&index, &s, input.id)
 		if inv == nil || inv.Status != InvocationWaiting {
 			return resultWith(s, StatusFailed), fmt.Errorf("invocation %q is no longer waiting", input.id)
 		}
@@ -86,30 +87,35 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		}
 		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID}
 		updated, applyErr := r.applyInput(ctx, call, inv.Continuation, state, input.value)
-		candidate := copyCheckpoint(s)
+		candidate := copyCheckpointInto(&spare, s)
 		if applyErr != nil {
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
-			if failureErr := r.recordFailure(&candidate, inv.ID, inv.Node, scope, applyErr); failureErr != nil {
+			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, applyErr); failureErr != nil {
 				if terminalFailureRecord(candidate) != nil {
 					return r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
 				}
 				return resultWith(s, StatusFailed), failureErr
 			}
 		} else {
-			if routeErr := r.route(&candidate, inv.ID, inv.Node, updated, inv.Next); routeErr != nil {
+			if routeErr := r.route(&candidate, &index, inv.ID, inv.Node, updated, inv.Next); routeErr != nil {
 				return resultWith(s, StatusFailed), routeErr
 			}
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, opts.FailureOverride); settleErr != nil {
+		if settleErr := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride); settleErr != nil {
 			if terminalFailureRecord(candidate) != nil {
 				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
 			}
 			return resultWith(s, StatusFailed), settleErr
 		}
 		markCompleted(&candidate)
-		if s, err = r.commit(ctx, s, candidate, opts.Store); err != nil {
-			return resultWith(s, errorStatus(err)), err
+		previous := s
+		committed, commitErr := r.commit(ctx, s, candidate, opts.Store)
+		if commitErr != nil {
+			return resultWith(previous, errorStatus(commitErr)), commitErr
 		}
+		s = committed
+		spare = previous
+		clearCheckpointStateValues(&spare)
 	}
 	if s.Completed {
 		return resultWith(s, statusOf(s, false)), nil
