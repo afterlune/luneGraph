@@ -259,3 +259,133 @@ Priorities supported by this baseline:
 The samples establish exercised sizes, recovery costs, and optimization inputs.
 They do not establish a maximum number of executions, a distributed scheduler,
 a run lease, or an Agent OS production readiness claim.
+
+## Scheduling optimization sample
+
+The follow-up uses the same Go 1.26.5, Windows/amd64, Ryzen 7 6800H host.
+Baseline source is commit `fcf5732`. Both versions were measured serially;
+baseline executables and profiles were kept outside the repository. Numeric
+ordering and string-keyed invocation lookup are now transient call-local
+metadata. Checkpoint format, cursor commits, state copying, and Store commit
+frequency are unchanged. See [performance.md](performance.md) for index lifetime
+and complexity details.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCapacityFanout$' -benchmem -benchtime=500ms -count=5 -cpu '1,8' ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkSequentialExecution$' -benchmem -benchtime=500ms -count=5 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin/storage=(memory|sqlite)/width=(2|8|32)/concurrency=default$' -benchmem -benchtime=200ms -count=3 -cpu '1,8' .
+```
+
+### Wide fan-out comparison
+
+Each latency is median [observed range] in ns/op over five samples. Percentages
+describe these medians, not a machine-independent speed guarantee.
+
+| Width | Node concurrency | Ps | Before ns/op | After ns/op | Median reduction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 32 | 1 | 1 | 299,126 [263,895–368,317] | 269,985 [242,381–331,105] | 9.7% |
+| 32 | 1 | 8 | 503,300 [499,789–514,271] | 462,647 [461,400–521,071] | 8.1% |
+| 32 | 8 | 1 | 334,186 [309,312–357,352] | 333,269 [308,951–336,535] | 0.3% |
+| 32 | 8 | 8 | 339,880 [333,512–344,969] | 369,584 [368,178–372,841] | -8.7% |
+| 128 | 1 | 1 | 1,701,660 [1,631,198–1,778,724] | 1,619,514 [1,594,328–1,700,793] | 4.8% |
+| 128 | 1 | 8 | 2,019,944 [1,926,501–2,287,198] | 2,322,208 [2,278,100–2,493,258] | -15.0% |
+| 128 | 8 | 1 | 1,983,523 [1,948,988–2,201,669] | 1,464,765 [1,427,826–1,508,364] | 26.2% |
+| 128 | 8 | 8 | 1,919,454 [1,880,343–1,931,553] | 1,910,323 [1,889,788–1,936,119] | 0.5% |
+| 512 | 1 | 1 | 15,411,008 [14,666,428–16,052,816] | 13,184,581 [12,874,865–13,967,790] | 14.4% |
+| 512 | 1 | 8 | 16,879,189 [15,996,261–17,193,886] | 15,667,738 [15,117,350–16,440,994] | 7.2% |
+| 512 | 8 | 1 | 13,536,044 [12,871,871–13,982,114] | 9,987,876 [9,666,797–10,413,644] | 26.2% |
+| 512 | 8 | 8 | 18,306,437 [17,297,442–18,914,950] | 15,526,667 [15,460,228–16,199,767] | 15.2% |
+
+The transient string-keyed map and numeric ordering add about 1,792 B/op at
+width 32, 6,528 B/op at width 128, and 27,264 B/op at width 512, about 1.2–1.3%
+of total allocated bytes in this fixture. Allocation counts increase by one or
+two per operation in these samples. The index uses O(invocation count) space;
+this is a speed/space tradeoff, not an allocation reduction.
+
+The two slower rows prompted a focused check of widths 32/128 with eight Ps,
+alternating baseline and new binaries three times with 500ms per case. The
+following medians [ranges] did not reproduce those regressions; the disagreement
+limits any latency conclusion for narrower graphs.
+
+| Width / node concurrency | Before ns/op | After ns/op |
+| --- | ---: | ---: |
+| 32 / 1 | 403,231 [358,096–403,858] | 362,743 [349,557–382,174] |
+| 32 / 8 | 318,871 [302,031–320,754] | 307,516 [295,781–312,656] |
+| 128 / 1 | 2,011,067 [1,978,227–2,095,729] | 1,826,145 [1,722,151–1,826,955] |
+| 128 / 8 | 1,851,706 [1,732,077–2,022,106] | 1,531,905 [1,458,415–1,695,639] |
+
+### Small and durable cases
+
+Sequential 1/16/128-step executions retain allocation counts 13/118/902 on
+both one and eight Ps. One-P B/op medians are respectively 1,256/5,856/40,289
+before and 1,256/5,856/40,290 after, with an observed difference of one byte.
+One-step/eight-P latency medians were 4,744 before [4,529–4,955] and 4,940 after
+[4,681–6,491]. Longer sequential cases had lower measured medians, but host
+variation is substantial and they do not use the large-set index.
+
+Durable comparison below reports eight-P medians from three 200ms samples.
+Width eight has **nine** invocations including its group parent and therefore
+uses the large-set index. Rebuilding and maintaining metadata in durable rounds
+can add more allocations than in a single nonpersistent fan-out.
+
+| Store / width | Before ns/op | After ns/op | Before → after B/op | Before → after allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| Memory / 2 | 67,314 | 64,479 | 26,795 → 26,783 | 174 → 174 |
+| Memory / 8 | 238,193 | 203,757 | 136,337 → 137,585 | 680 → 683 |
+| Memory / 32 | 2,208,061 | 2,296,249 | 1,419,260 → 1,424,638 | 5,517 → 5,520 |
+| SQLite / 2 | 9,205,488 | 9,828,996 | 40,714 → 40,458 | 678 → 678 |
+| SQLite / 8 | 23,497,367 | 23,639,811 | 171,394 → 171,753 | 3,502 → 3,505 |
+| SQLite / 32 | 84,292,400 | 85,600,300 | 1,488,925 → 1,494,168 | 38,611 → 38,616 |
+
+SQLite width-32 samples had only two or three measured iterations. Durable
+timings remain Store- and scheduler-dependent; this change does not establish
+a persistence speedup. One-P durable Memory width-eight medians increased from
+179,240 to 209,432 ns/op, while eight-P medians decreased. These mixed results
+are retained rather than generalized into an improvement claim.
+
+### Profile and semantic checks
+
+Fresh baseline and new profiles used the same width-512/concurrency-eight
+selection with `-benchtime=3s -cpu=8`; setup and calibration are included.
+Baseline `nextReady` accounted for 22.6% cumulative CPU time; new `selectReady`
+accounted for 0.16%. Numeric parsing no longer appears on the large lookup or
+dispatch path. Remaining cumulative stacks include invocation lookup (18.4%),
+`copyInvocations` (19.9%), and `settleGroups` (23.7%); these overlap and cannot
+be added. Relative shares describe separate sampled executions, not absolute
+time savings. The new allocation profile still attributes 67.5% of bytes to
+map Clone. Retained-heap samples show runtime/platform sites rather than
+application index or checkpoint allocations.
+
+Tests compare selection against an independent eligible-ID ordering oracle
+through 1,024 fixed-seed mixed-state/topology stages. Explicit cases cover
+unordered IDs, numeric rather than lexical order, near-limit IDs, cursor
+wrap/removal, active membership, compaction, buffer exchange, and index release.
+Memory and SQLite integration tests verify wide round-robin starts across
+one-step budgets and typed wait/resume. Nested group failure tests inject a CAS
+conflict after candidate compaction and join: the last acknowledged checkpoint
+retains both groups, and recovery replays identical node and join CallIDs before
+completing unaffected branches.
+
+The optimized version passed the 60-second-per-Store soak with eight Ps and
+the same 64-run/eight-caller/width-eight workload. Results below use the
+post-drain timing and the latest 1,024 successful call latencies.
+
+| Store | Successful calls | Calls/s | Rolling p50 / p95, ms | Cancelled calls | Sampled peak heap, B | After drain / recovery GC heap, B | Seed / peak / drain goroutines |
+| --- | ---: | ---: | --- | ---: | ---: | --- | --- |
+| Memory | 299,161 | 4,985.97 | 1.0674 / 1.8018 | 8 | 4,527,848 | 851,448 / 767,080 | 3 / 53 / 3 |
+| SQLite | 2,441 | 40.68 | 186.9521 / 289.1620 | 8 | 3,101,744 | 787,928 / 749,600 | 4 / 14 / 4 |
+
+All checkpoints passed reload and partial-round recovery, and goroutines
+returned to seed levels. Memory's interval includes transient latency spikes
+(a progress window had p95 65.2 ms); its total throughput is lower than the
+earlier sample and does not establish a throughput improvement or isolate the
+cause of that difference. These soaks validate recovery/resource behavior;
+focused before/after benchmarks and profiles provide the optimization evidence.
+
+Full tests, the race suite, and vet passed. A separate one-second-per-Store
+manual soak under the race detector also passed, exercising concurrent wide
+executions sharing a Runner and Store with the new transient indexes.
+
+The remaining optimization candidates are checkpoint structure copying and
+repeated group-readiness lookup. Their ownership and commit boundaries need
+separate designs; this change leaves both intact.

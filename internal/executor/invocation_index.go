@@ -1,32 +1,37 @@
 package executor
 
+import (
+	"cmp"
+	"slices"
+)
+
 // invocationIndex maps invocation IDs to positions in one working checkpoint.
-// It keys by each canonical ID's numeric part and stores positions rather than
-// pointers because checkpoint buffers may swap.
+// Its numeric ordering is transient; positions remain valid across checkpoint
+// buffer swaps. Neither index stores application state or invocation pointers.
 // Short invocation lists use a linear scan because building a map costs more.
 const invocationIndexThreshold = 8
 
 type invocationIndex struct {
-	positions    map[uint64]int
+	positions    map[string]int
+	order        []invocationOrder
 	capacityHint int
+}
+
+type invocationOrder struct {
+	id       string
+	number   uint64
+	position int
 }
 
 func newInvocationIndex[S any](checkpoint Checkpoint[S]) invocationIndex {
 	index := invocationIndex{}
-	if len(checkpoint.Invocations) <= invocationIndexThreshold {
-		return index
-	}
-	index.positions = make(map[uint64]int, len(checkpoint.Invocations))
-	index.capacityHint = len(checkpoint.Invocations)
-	for i := range checkpoint.Invocations {
-		index.positions[invocationNumber(checkpoint.Invocations[i].ID)] = i
-	}
+	reserveInvocationIndex(&index, &checkpoint, 0)
 	return index
 }
 
 func indexedInvocation[S any](index *invocationIndex, checkpoint *Checkpoint[S], id string) (int, *Invocation[S]) {
 	if index != nil && index.positions != nil {
-		position, ok := index.positions[invocationNumber(id)]
+		position, ok := index.positions[id]
 		if !ok || position < 0 || position >= len(checkpoint.Invocations) || checkpoint.Invocations[position].ID != id {
 			return -1, nil
 		}
@@ -45,9 +50,18 @@ func reserveInvocationIndex[S any](index *invocationIndex, checkpoint *Checkpoin
 	if expected <= invocationIndexThreshold || (index.positions != nil && index.capacityHint >= expected) {
 		return
 	}
-	positions := make(map[uint64]int, expected)
+	if index.positions == nil {
+		index.order = make([]invocationOrder, len(checkpoint.Invocations), expected)
+		for i, inv := range checkpoint.Invocations {
+			index.order[i] = invocationOrder{id: inv.ID, number: invocationNumber(inv.ID), position: i}
+		}
+		slices.SortFunc(index.order, func(a, b invocationOrder) int { return cmp.Compare(a.number, b.number) })
+	} else {
+		index.order = slices.Grow(index.order, expected-len(index.order))
+	}
+	positions := make(map[string]int, expected)
 	for i := range checkpoint.Invocations {
-		positions[invocationNumber(checkpoint.Invocations[i].ID)] = i
+		positions[checkpoint.Invocations[i].ID] = i
 	}
 	index.positions = positions
 	index.capacityHint = expected
@@ -58,7 +72,15 @@ func appendInvocation[S any](index *invocationIndex, checkpoint *Checkpoint[S], 
 	position := len(checkpoint.Invocations)
 	checkpoint.Invocations = append(checkpoint.Invocations, invocation)
 	if index.positions != nil {
-		index.positions[invocationNumber(invocation.ID)] = position
+		index.positions[invocation.ID] = position
+		entry := invocationOrder{id: invocation.ID, number: invocationNumber(invocation.ID), position: position}
+		// Allocated IDs grow monotonically; insert earlier IDs in numeric order
+		// as well when this helper is used to build an unordered set.
+		at := len(index.order)
+		if at != 0 && index.order[at-1].number > entry.number {
+			at, _ = slices.BinarySearchFunc(index.order, entry.number, func(a invocationOrder, number uint64) int { return cmp.Compare(a.number, number) })
+		}
+		index.order = slices.Insert(index.order, at, entry)
 	}
 	return &checkpoint.Invocations[position]
 }
@@ -75,22 +97,36 @@ func removeInvocations[S any](index *invocationIndex, checkpoint *Checkpoint[S],
 		}
 		invocations[write] = invocation
 		if positions != nil {
-			positions[invocationNumber(invocation.ID)] = write
+			positions[invocation.ID] = write
 		}
 		write++
 	}
 	clear(invocations[write:])
 	checkpoint.Invocations = invocations[:write]
 	if write <= invocationIndexThreshold {
-		index.positions = nil
-		index.capacityHint = 0
+		clearInvocationIndex(index)
 	} else if positions == nil {
 		reserveInvocationIndex(index, checkpoint, 0)
+	} else {
+		kept := 0
+		for _, entry := range index.order {
+			position, exists := positions[entry.id]
+			if !exists {
+				continue
+			}
+			entry.position = position
+			index.order[kept] = entry
+			kept++
+		}
+		clear(index.order[kept:])
+		index.order = index.order[:kept]
 	}
 }
 
 func clearInvocationIndex(index *invocationIndex) {
 	clear(index.positions)
+	clear(index.order)
 	index.positions = nil
+	index.order = nil
 	index.capacityHint = 0
 }

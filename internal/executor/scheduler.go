@@ -14,34 +14,6 @@ type workResult[S any] struct {
 	err        error
 }
 
-// nextReady rotates over invocation IDs rather than slice positions. The
-// cursor remains meaningful when a group removes invocations from the slice.
-func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) *Invocation[S] {
-	var after, wrapped *Invocation[S]
-	var afterNumber, wrappedNumber uint64
-	for i := range s.Invocations {
-		inv := &s.Invocations[i]
-		if inv.Status != InvocationReady {
-			continue
-		}
-		if _, active := running[inv.ID]; active {
-			continue
-		}
-		number := invocationNumber(inv.ID)
-		if number > cursor {
-			if after == nil || number < afterNumber {
-				after, afterNumber = inv, number
-			}
-		} else if wrapped == nil || number < wrappedNumber {
-			wrapped, wrappedNumber = inv, number
-		}
-	}
-	if after != nil {
-		return after
-	}
-	return wrapped
-}
-
 func hasReady[S any](s Checkpoint[S]) bool {
 	for _, inv := range s.Invocations {
 		if inv.Status == InvocationReady {
@@ -89,7 +61,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			if uint64(len(running)) >= availableCommits(s) {
 				break
 			}
-			next := nextReady(s, running, cursor)
+			next, number := selectReady(s, &index, running, cursor)
 			if next == nil {
 				break
 			}
@@ -104,7 +76,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			nodeCtx, cancel := context.WithCancel(runCtx)
 			running[id] = cancel
 			used++
-			cursor = invocationNumber(id)
+			cursor = number
 			if obs == nil {
 				go func() {
 					transition, err := r.runNode(nodeCtx, call, spec, state)

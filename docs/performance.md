@@ -95,6 +95,18 @@ The executor reuses an alternate checkpoint-structure buffer while a run advance
 
 Invocation lookup uses a temporary ID index when a checkpoint has more than eight invocations. Shorter lists use a direct scan to avoid map setup cost. The index follows fan-out insertion and group compaction, is rebuilt when a saved execution resumes, and is never written to a checkpoint.
 
+The large-set index keys positions directly by string ID and keeps a separate
+numeric ordering of ID/number/position metadata. Ready selection starts after
+`ScheduleCursor` using binary search and stops at the first ready invocation
+that is not running, wrapping when necessary. It reads status from the current
+checkpoint and never retains invocation pointers or user state. Numeric ID
+parsing happens on index creation/insertion rather than each large-set lookup
+or dispatch. Compaction updates positions and clears removed metadata; sets
+shrinking to eight invocations release the index. Setup and additional metadata
+cost remain workload-dependent; sparse sets may still scan every entry. See
+[the scheduling measurements](capacity.md#scheduling-optimization-sample) for
+the measured tradeoffs and retained round-robin/recovery checks.
+
 ## Observation cost
 
 `BenchmarkObservation` lives in `internal/observationtest`, keeping observer
