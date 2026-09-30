@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 type workResult[S any] struct {
@@ -58,7 +60,7 @@ func availableCommits[S any](s Checkpoint[S]) uint64 {
 	return revisions
 }
 
-func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S]) (Result[S], error) {
+func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S], obs *observation.Session) (Result[S], error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	results := make(chan workResult[S], opts.MaxConcurrency)
@@ -103,10 +105,18 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			running[id] = cancel
 			used++
 			cursor = invocationNumber(id)
-			go func() {
-				transition, err := r.runNode(nodeCtx, call, spec, state)
-				results <- workResult[S]{id: id, transition: transition, err: err}
-			}()
+			if obs == nil {
+				go func() {
+					transition, err := r.runNode(nodeCtx, call, spec, state)
+					results <- workResult[S]{id: id, transition: transition, err: err}
+				}()
+			} else {
+				revision := s.Revision
+				go func() {
+					transition, err := r.observedNode(nodeCtx, obs, revision, call, spec, state)
+					results <- workResult[S]{id: id, transition: transition, err: err}
+				}()
+			}
 		}
 		if len(running) == 0 {
 			if hasReady(s) && availableCommits(s) == 0 {
@@ -174,7 +184,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		candidate.ScheduleCursor = cursor
 		if !ended {
-			if err := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride); err != nil {
+			if err := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride, obs); err != nil {
 				if terminalFailureRecord(candidate) != nil {
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
 					drain()

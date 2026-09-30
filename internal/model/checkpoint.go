@@ -113,6 +113,9 @@ type Store[S any] interface {
 
 // Options controls one call's budget, concurrency, storage, and failure scope.
 type Options[S any] struct {
+	// Observer optionally receives transient execution events. Nil disables
+	// observation without allocating a session or reading clocks.
+	Observer        Observer
 	MaxSteps        int
 	MaxConcurrency  int
 	Store           Store[S]
