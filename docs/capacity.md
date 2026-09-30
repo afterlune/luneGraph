@@ -46,6 +46,261 @@ go test -run '^$' -bench '^BenchmarkCapacity' -benchmem -benchtime=100ms -count=
 Short SQLite cases may execute only once per sample. Use longer measurement
 intervals and an otherwise idle machine when comparing implementations.
 
+## Format-3 scale and cost diagnosis
+
+Collected on 2026-09-30 at commit `d6ed67e93757b0bb7b54f639fadf56e01590d86c`,
+with Go 1.26.5, Windows/amd64, and an AMD Ryzen 7 6800H. Capacity and control
+commands ran serially with 500ms intervals, three repetitions, and one/eight Ps:
+186 capacity samples (31 workloads) and 150 control samples (25 workloads).
+Every result check passed. No runtime, API, format, or Store settings changed.
+SQLite used its existing WAL, `synchronous=FULL`, and one open connection.
+
+```sh
+go test -run '^$' -bench '^(BenchmarkCapacityFanout|BenchmarkCapacityGroups|BenchmarkCapacityShared|BenchmarkCapacityPaused)$' -benchmem -benchtime=500ms -count=3 -cpu '1,8' ./internal/capacitytest
+go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin|BenchmarkDurableSequentialExecution|BenchmarkDurableFanoutJoin)$' -benchmem -benchtime=500ms -count=3 -cpu '1,8' .
+```
+
+Tables show median [observed range] in microseconds unless labelled otherwise;
+allocation columns are eight-P medians. These are diagnostics on an otherwise
+idle workload, not production limits or a comparison of format versions.
+Independent profile runs are excluded from these tables. The already completed
+[format-3 history measurements](#format-3-comparison) and
+[four sustained workload/Store checks](#format-3-sustained-validation) remain
+current evidence and were not repeated in this measurement-only change.
+
+### Wide and nested executions
+
+| Workload / size | Node concurrency | One P us/op [range] | Eight Ps us/op [range] | B/op, eight Ps | allocs/op, eight Ps |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fanout / 32 | 1 | 242.087 [237.409–260.952] | 366.284 [354.758–385.398] | 141,344 | 754 |
+| Fanout / 32 | 8 | 263.504 [259.572–296.241] | 281.287 [275.674–292.233] | 142,238 | 754 |
+| Fanout / 128 | 1 | 1,116.335 [1,111.729–1,182.030] | 1,480.083 [1,392.777–1,495.888] | 545,623 | 2,781 |
+| Fanout / 128 | 8 | 1,266.850 [1,225.653–1,361.407] | 1,263.669 [1,202.689–1,527.681] | 546,477 | 2,781 |
+| Fanout / 512 | 1 | 9,026.209 [8,673.413–9,053.144] | 10,967.448 [10,900.071–11,029.235] | 2,177,088 | 11,621 |
+| Fanout / 512 | 8 | 8,136.961 [8,051.828–8,340.763] | 21,486.580 [9,162.984–21,964.219] | 2,177,908 | 11,621 |
+| Groups / 8 | 1 | 593.029 [548.593–594.408] | 673.279 [650.896–714.800] | 233,540 | 1,325 |
+| Groups / 8 | 8 | 608.297 [595.658–616.918] | 553.556 [500.717–579.961] | 234,443 | 1,325 |
+| Groups / 32 | 1 | 3,605.018 [3,453.515–3,660.641] | 3,478.647 [3,405.077–3,513.371] | 934,939 | 5,516 |
+| Groups / 32 | 8 | 3,870.813 [3,737.425–4,148.558] | 2,910.575 [2,886.936–2,917.595] | 935,778 | 5,516 |
+| Groups / 128 | 1 | 28,107.529 [28,080.042–29,136.045] | 27,652.495 [27,187.355–29,645.747] | 3,713,417 | 22,615 |
+| Groups / 128 | 8 | 34,270.525 [34,160.742–39,097.255] | 33,067.672 [32,090.881–33,297.117] | 3,714,271 | 22,615 |
+
+Fan-out includes Start, the fork, all branches, join, and final node. Groups
+measure Resume from a seed with every nested activation established: each
+listed group has eight branches plus one shared root group. Thus group size
+128 resumes 1,024 branches with 129 activation groups and 1,153 invocations at
+its seed. State starts with a mutable 16-entry map; nested forks add a group key.
+
+Eight-P fan-out allocation bytes grow about 15.4 times from width 32 to 512,
+while serial-node median time grows about 29.9 times. Nested groups grow four
+times from 32 to 128, but serial-node time grows about eight times. These
+observations are consistent with repeatedly copying and compacting the active
+execution position; they are not an asymptotic complexity proof. Node
+parallelism does not guarantee lower cost for these small callbacks.
+Width-512/concurrency-eight spans 9.163–21.964ms in its three eight-P samples;
+that variation is retained rather than described as a regression or speedup.
+
+### Shared executions
+
+One operation advances a complete fixed batch, once per run. Caller workers
+never advance the same run concurrently. The per-execution figure divides
+batch time by run count; it is an average throughput cost, not call latency.
+
+| Store | Runs / callers | One P batch ms [range] | Eight Ps batch ms [range] | Eight Ps average us/execution | Eight Ps B/batch | Eight Ps allocs/batch |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| None | 16 / 1 | 0.235 [0.190–0.278] | 0.266 [0.266–0.267] | 16.644 | 62,728 | 621 |
+| None | 64 / 8 | 0.650 [0.619–1.020] | 0.202 [0.200–0.242] | 3.149 | 250,934 | 2,488 |
+| None | 256 / 32 | 2.563 [2.545–2.569] | 1.068 [1.016–1.071] | 4.172 | 1,002,398 | 9,813 |
+| Memory | 16 / 1 | 0.285 [0.258–0.297] | 0.306 [0.290–0.404] | 19.143 | 119,707 | 892 |
+| Memory | 64 / 8 | 1.034 [1.012–1.059] | 0.495 [0.478–0.520] | 7.742 | 478,793 | 3,564 |
+| Memory | 256 / 32 | 4.857 [4.151–5.515] | 1.921 [1.844–1.982] | 7.503 | 1,913,148 | 14,047 |
+| SQLite | 16 / 1 | 73.837 [72.493–92.736] | 75.096 [71.642–77.150] | 4,693.491 | 210,283 | 3,892 |
+| SQLite | 64 / 8 | 287.981 [285.503–299.505] | 291.227 [286.273–305.856] | 4,550.417 | 868,140 | 16,151 |
+| SQLite | 256 / 32 | 1,139.325 [1,133.848–1,852.410] | 1,345.003 [1,344.401–1,419.940] | 5,253.920 | 3,510,608 | 64,657 |
+
+None and Memory allocate roughly proportional to batch size. The None fixture
+retains checkpoints in its slots; persisted slots retain only bookkeeping,
+with the Store owning the checkpoint. Counts and worker counts change together,
+so this matrix does not independently measure caller-count scaling.
+SQLite's 64-run cases have only two timed batches per sample and its 256-run
+cases only one. With one connection and a transaction per accepted input and
+node outcome, independent callers do not remove the durable write cost.
+
+### Paused population
+
+| Store / runs | Mode | One P us/op [range] | Eight Ps us/op [range] | B/op, eight Ps | allocs/op, eight Ps | Eight Ps seed-heap bytes | Idle goroutines |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Memory / 128 | inspect | 4.953 [4.170–5.088] | 3.968 [3.854–3.985] | 2,861 | 17 | 212,472 | 3 |
+| Memory / 128 | advance | 14.879 [14.564–16.367] | 16.793 [16.140–17.744] | 7,469 | 54 | 212,360 | 3 |
+| Memory / 1,024 | inspect | 5.134 [4.843–5.253] | 4.761 [4.760–5.569] | 2,861 | 17 | 1,700,240 | 3 |
+| Memory / 1,024 | advance | 24.271 [22.289–25.568] | 18.575 [18.189–22.521] | 7,451 | 53 | 1,700,304 | 3 |
+| Memory / 8,192 | inspect | 6.341 [5.722–6.919] | 5.293 [5.257–5.957] | 2,860 | 17 | 13,610,352 | 3 |
+| Memory / 8,192 | advance | 22.969 [21.812–25.332] | 22.888 [22.770–23.108] | 7,443 | 53 | 13,610,016 | 3 |
+| SQLite / 128 | inspect | 65.529 [64.838–67.134] | 52.134 [51.224–68.470] | 6,515 | 104 | 35,336 | 4 |
+| SQLite / 128 | advance | 4,783.744 [4,596.940–6,712.539] | 5,252.151 [4,454.895–7,793.274] | 13,159 | 243 | 34,632 | 4 |
+| SQLite / 1,024 | inspect | 57.793 [56.897–63.924] | 54.271 [53.552–54.284] | 6,518 | 104 | 214,032 | 4 |
+| SQLite / 1,024 | advance | 4,558.508 [4,541.833–4,598.366] | 4,594.048 [4,531.398–4,903.238] | 13,091 | 243 | 214,768 | 4 |
+
+Population grows 64 times from 128 to 8,192 for Memory; eight-P inspection grows
+from 3.968 to 5.293us/op, while GC seed heap grows from 212,472 to 13,610,352
+bytes in the inspection fixtures. Recovery loads one run rather than scanning
+all stored runs. Idle goroutines remain three for Memory and four for SQLite.
+These observations distinguish per-run recovery cost from retained population
+cost; they do not claim constant latency at arbitrary population sizes.
+
+Seed heap is the fixture's positive process-wide GC difference, including
+bookkeeping and caches, not a precise per-run state budget. A missing negative
+metric must not be interpreted as zero retention. SQLite Go heap excludes its
+database/WAL files, native allocations, and filesystem cache. Each inspect and
+advance row is independently seeded, so heap differences are sampling results.
+The Stores continue retaining completed checkpoints until discarded by the
+application; these measurements introduce no retention or cleanup policy.
+
+### Sequential and durable controls
+
+Scalar controls use an integer state; durable controls use a 16-entry map.
+Durable fan-out loops keep their active group at the call boundary and persist
+every node outcome. Their per-operation costs include Recover and a complete
+round, not just a node callback. `default` node concurrency follows the P count.
+
+| Workload | One P us/op [range] | Eight Ps us/op [range] | B/op, eight Ps | allocs/op, eight Ps |
+| --- | ---: | ---: | ---: | ---: |
+| Scalar sequential / 1 steps | 2.869 [2.744–2.953] | 6.664 [6.532–6.766] | 1,928 | 13 |
+| Scalar sequential / 16 steps | 34.665 [34.640–34.932] | 93.748 [85.585–94.520] | 6,532 | 118 |
+| Scalar sequential / 128 steps | 280.897 [248.796–294.254] | 709.281 [709.150–723.338] | 40,987 | 902 |
+| Scalar fan-out / 2 / serial | 12.878 [12.391–13.538] | 30.548 [28.976–30.600] | 4,042 | 51 |
+| Scalar fan-out / 2 / default | 13.012 [12.733–14.641] | 36.185 [35.634–36.215] | 4,715 | 51 |
+| Scalar fan-out / 8 / serial | 36.899 [35.437–38.383] | 76.114 [75.373–76.296] | 12,223 | 114 |
+| Scalar fan-out / 8 / default | 41.750 [37.843–47.273] | 53.732 [50.055–64.930] | 12,896 | 114 |
+| Scalar fan-out / 32 / serial | 148.621 [144.094–155.469] | 251.213 [250.534–252.061] | 37,430 | 339 |
+| Scalar fan-out / 32 / default | 186.079 [151.423–204.082] | 194.010 [188.068–207.419] | 38,106 | 339 |
+| Memory sequential / 1 steps | 8.278 [8.261–8.838] | 17.127 [16.556–17.276] | 5,466 | 36 |
+| Memory sequential / 16 steps | 97.496 [93.070–103.618] | 182.361 [182.240–184.593] | 42,207 | 292 |
+| Memory fan-out / 2 / serial | 52.020 [45.276–52.156] | 80.038 [79.216–81.795] | 26,109 | 174 |
+| Memory fan-out / 2 / default | 49.539 [47.682–50.193] | 80.156 [80.047–85.660] | 26,784 | 175 |
+| Memory fan-out / 8 / serial | 252.225 [218.326–252.783] | 284.153 [284.096–288.199] | 136,905 | 684 |
+| Memory fan-out / 8 / default | 230.606 [226.748–246.033] | 243.969 [241.297–246.889] | 137,585 | 684 |
+| Memory fan-out / 32 / serial | 1,984.525 [1,912.795–2,008.720] | 2,259.321 [2,256.079–2,395.053] | 1,423,984 | 5,523 |
+| Memory fan-out / 32 / default | 1,827.316 [1,760.930–2,031.331] | 2,101.407 [2,091.450–2,203.068] | 1,424,690 | 5,523 |
+| SQLite sequential / 1 steps | 2,385.584 [2,381.657–2,416.193] | 2,370.413 [2,335.155–2,418.723] | 10,429 | 174 |
+| SQLite sequential / 16 steps | 36,671.133 [35,754.393–37,869.453] | 36,478.175 [36,392.200–37,519.633] | 64,067 | 1,228 |
+| SQLite fan-out / 2 / serial | 9,286.114 [9,196.409–9,560.745] | 9,411.618 [9,376.692–9,694.763] | 39,379 | 690 |
+| SQLite fan-out / 2 / default | 9,576.291 [9,291.856–10,245.685] | 9,760.698 [9,337.446–9,771.448] | 40,132 | 690 |
+| SQLite fan-out / 8 / serial | 24,178.171 [23,455.062–42,309.956] | 24,885.571 [24,183.782–25,119.388] | 169,685 | 3,532 |
+| SQLite fan-out / 8 / default | 23,907.977 [23,696.920–24,638.492] | 24,039.748 [23,487.552–37,160.448] | 170,350 | 3,534 |
+| SQLite fan-out / 32 / serial | 86,428.150 [85,390.167–106,887.014] | 91,016.483 [85,964.167–524,141.400] | 1,491,662 | 38,705 |
+| SQLite fan-out / 32 / default | 83,719.350 [83,608.486–85,937.543] | 84,409.100 [83,873.767–84,576.143] | 1,497,829 | 38,712 |
+
+The SQLite width-32 serial eight-P case includes a 524.141ms sample with only
+one timed iteration, versus 85.964–91.016ms for its other samples. The outlier
+is retained. Differences from the earlier 100ms control or format-2 samples
+cannot be attributed to a code change: this stage changes no runtime code.
+
+### Profiles and next optimization candidate
+
+Five separate CPU/memory profiles used `-benchtime=3s -count=1 -cpu=8`.
+Each memory profile was read with both `alloc_space` and `inuse_space`.
+CPU percentages below are cumulative sampled CPU; child and parent rows
+within a stack overlap and must not be added. They do not measure elapsed
+waiting time or predict a percentage improvement from removing a function.
+
+| Profile | Selected cumulative CPU | Allocation evidence |
+| --- | --- | --- |
+| Fan-out 512, node concurrency 8 | Clone 17.94%; CopyInto 17.05%; invocation copying 15.28%; old-state clearing 8.88% | Application map Clone accounts for 66.96% of allocated bytes. |
+| Nested groups 128, node concurrency 8 | settleGroups 32.88%; CopyInto 19.00%; removeInvocations 18.60%; readyGroup 8.76%; old-state clearing 5.93% | Map Clone accounts for 55.05%; CopyInto for 12.44%. |
+| Memory durable width 32, default concurrency | Checkpoint.Clone 37.77%; Store CAS 36.77%; application Clone 36.77% | Application map Clone accounts for 81.97%; Store CAS for 86.69%, including Clone. |
+| SQLite durable width 32, default concurrency | Store CAS 93.73%; Windows FlushFileBuffers path 79.85%; JSON Append 5.97% | JSON Append accounts for 76.40%; mapEncoder for 72.27%, including its descendants. |
+| Memory shared 256 runs / 32 callers | Application Clone 20.27%; Store CAS 17.38%; CopyInto 5.06%; RWMutex.Lock 4.03% | Map Clone accounts for 65.73%; CopyInto for 16.16%. |
+
+The shared lock/block profiles were collected separately from CPU/memory, with
+`-mutexprofilefraction=10 -blockprofilerate=1000000`. Store CAS appears in 82.19%
+of sampled aggregate mutex delay and 78.38% of sampled aggregate blocking delay;
+channels and the worker harness also contribute. Total delay is summed across
+waiting goroutines and can exceed wall time. This identifies contention on the
+Store-wide RWMutex, not that 82% of normal runtime is blocked.
+
+An initial attempt combined CPU/memory with sampling every mutex contention
+and blocking event. It was intentionally stopped after 237.391s because its
+instrumentation dominated the diagnostic run. Its output is retained as aborted,
+not counted as a production test failure or a benchmark sample. Separate normal
+CPU/memory and sampled lock/block runs passed in 3.917s and 4.429s respectively.
+The profiling runs' timing does not replace the uninstrumented baseline.
+
+End-of-run inuse profiles are dominated by runtime/platform initialization
+(about 2–4MiB) and do not show a prominent retained checkpoint subtree. Stores
+and fixtures are no longer kept alive at this profile boundary, and heap
+profiles are sampled. This is not a live-Store footprint or proof of leak freedom;
+the population GC measurements and existing soaks address different lifetimes.
+
+The first bounded executor optimization candidate is invocation compaction in
+`removeInvocations`, rather than another public interface or persistence mode.
+In the nested profile its 1.38s cumulative samples include 600ms at position-map
+repopulation and 310ms at survivor position lookups. The current code clears
+and rebuilds every position after each group settlement, including unchanged
+prefix positions. Investigate reusing those positions and updating only moved
+survivors, using the existing invocation index and arrays. This is a hypothesis
+for the next change, not a measured gain in this one.
+
+A follow-up must preserve invocation order, numeric ready selection, the
+small-index threshold, cleared removed references, group-failure deletion,
+immutable returned checkpoints, and committed-prefix/replay semantics. Compare
+nested 8/32/128 groups and wide 32/128/512 fan-out, plus the sequential/durable
+controls. This stage deliberately does not implement the candidate.
+
+Structural copying is the next executor CPU cost to monitor; avoiding full
+copies would require an ownership argument, not just a profile percentage.
+Application map Clone is the leading allocation cost for Memory workloads and
+cannot be skipped under the independent-state/Store ownership contracts.
+SQLite's durable commit path remains the leading sampled cost; changing commit
+points or synchronous mode is outside this diagnosis. Shared Memory contention
+is a separate Store concern, not evidence for changing scheduler semantics.
+
+### Reproduction artifacts
+
+Raw outputs, a checked median/range `summary.json`, five CPU/memory profile
+pairs, the separate shared mutex/block profiles, pprof top/cumulative/list
+reports, test binaries, and command scripts are outside the repository at:
+
+```text
+C:/Users/Code/AppData/Local/Temp/lunegraph-format3-d6ed67e-20260930-153420/
+```
+
+`manifest.json` records the commit, machine and settings. `capacity.txt` and
+`controls.txt` contain the 336 uninstrumented samples. `history-reused.txt` and
+`soak-reused.txt` preserve the already completed format-3 checks. Temporary
+artifacts are local diagnostics, not a committed or permanently hosted dataset.
+
+Use the following exact selectors for separate profiles; the first, second,
+and fifth belong to `./internal/capacitytest`, and the durable ones to `.`:
+
+```text
+^BenchmarkCapacityFanout/width=512/concurrency=8$
+^BenchmarkCapacityGroups/groups=128/concurrency=8$
+^BenchmarkDurableFanoutJoin/storage=memory/width=32/concurrency=default$
+^BenchmarkDurableFanoutJoin/storage=sqlite/width=32/concurrency=default$
+^BenchmarkCapacityShared/store=memory/runs=256/workers=32$
+```
+
+For each, add `-run '^$' -benchmem -benchtime=3s -count=1 -cpu=8`,
+`-cpuprofile <temp>/name-cpu.pprof -memprofile <temp>/name-memory.pprof`,
+and `-o <temp>/name.test.exe` to `go test -bench '<selector>' <package>`.
+For the separate shared diagnostic omit CPU/memory flags and add
+`-mutexprofile <temp>/shared-mutex.pprof -mutexprofilefraction=10`
+and `-blockprofile <temp>/shared-block.pprof -blockprofilerate=1000000`.
+Read CPU with `go tool pprof -top -cum`, memory with `-sample_index=alloc_space`
+and `-sample_index=inuse_space`, and delay profiles with `-top`. Profile captures
+include setup/calibration and test harness activity; none are added to benchmark
+medians. Paths must be adapted on another machine.
+
+Verification passed: `go test -count=1 ./...` on a serial retry,
+`go test -race -count=1 ./...`, `go vet ./...`, `gofmt -l`,
+`git diff --check`, and all 15 relative Markdown file/anchor links. The initial
+ordinary full suite hit the previously observed Windows subprocess termination
+error in `TestRecoveryAfterEffectCommitAndProcessCrash`:
+`TerminateProcess: Access is denied`. The isolated test passed on retry, as did
+the subsequent full suite. Its root cause was not established or repaired by
+this documentation-only change; the failed attempt is not hidden.
+
 ## Bounded correctness checks
 
 Ordinary `go test ./...` and `go test -race ./...` include:

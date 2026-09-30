@@ -34,6 +34,34 @@ The benchmarks report Go's `ns/op`, `B/op`, and `allocs/op` values. Graph compil
 
 The durable execution benchmarks create their initial run before timing and repeatedly call `Recover` with the same run ID. Every executed node outcome is persisted through the normal checkpoint path. The loop leaves a bounded checkpoint row with ready work after each measured call, so iterations measure recovery and execution without growing the number of stored runs. Each case loads the final checkpoint after timing and checks it against the returned result.
 
+## Current format-3 diagnosis
+
+The [format-3 scale and cost diagnosis](capacity.md#format-3-scale-and-cost-diagnosis)
+records 336 uninstrumented samples at commit `d6ed67e`, using 500ms intervals,
+three repetitions, and one/eight Ps. It covers wide fan-out, nested groups,
+shared executions, paused populations, and sequential/durable controls. Five
+separate CPU/memory profiles and a sampled shared-Store lock/block profile
+distinguish executor work, application Clone, serialization, and persistence.
+No runtime code or persistence settings changed in that measurement stage.
+
+The next bounded executor candidate is invocation compaction: nested 128-group
+profiling attributes 18.60% cumulative sampled CPU to `removeInvocations`,
+including repopulation and lookup of survivor positions after each settlement.
+Investigate reusing unchanged positions within the existing invocation index;
+the measurement does not establish an optimization benefit. Preserve ordered
+scheduling, removed-reference cleanup, checkpoint ownership, and replay/CAS
+semantics, and compare both nested workloads and small/durable controls.
+
+Memory durable allocation volume is dominated by application map Clone
+(81.97% in the width-32 profile). SQLite's CAS path accounts for 93.73% of
+sampled CPU and JSON Append for 76.40% of allocated bytes; these are different
+cost dimensions. Shared Memory has observed Store-wide lock contention, but
+aggregate delay across goroutines is not wall-clock latency. Independent
+profile percentages overlap; none justify skipping Clone or batching commits.
+The capacity record includes sample ranges, the aborted high-frequency
+instrumentation attempt, successful sampled replacements, and artifact paths.
+The older optimization profiles below remain historical evidence.
+
 ## Pre-Append durable-execution sample
 
 This diagnostic sample was collected on 2026-09-29 with Go 1.26.5, Windows/amd64, and an AMD Ryzen 7 6800H, before checkpoint JSON encoding switched to `Append`. It is a machine-specific reference, not a performance target. Each row summarizes five runs as median and observed range. `GOMAXPROCS` is selected by Go's `-cpu` flag.
@@ -100,7 +128,7 @@ Larger lists batch consecutive entries with nil `Next` through Go's built-in
 Non-nil empty routes still normalize to nil, and obsolete destination routes
 are cleared before their headers are replaced. No route storage is shared with
 the source, and application state remains shallow. The implementation adds no
-auxiliary index or state cache. See [the structural copy measurements](capacity.md#checkpoint-structural-copy-optimization-sample)
+auxiliary index or state cache. See [the structural copy measurements](capacity.md#checkpoint-structural-copy-optimization-sample-format-2)
 for the same-machine comparison and ownership checks.
 
 Invocation lookup uses a temporary ID index when a checkpoint has more than eight invocations. Shorter lists use a direct scan to avoid map setup cost. The index follows fan-out insertion and group compaction, is rebuilt when a saved execution resumes, and is never written to a checkpoint.
@@ -114,7 +142,7 @@ parsing happens on index creation/insertion rather than each large-set lookup
 or dispatch. Compaction updates positions and clears removed metadata; sets
 shrinking to eight invocations release the index. Setup and additional metadata
 cost remain workload-dependent; sparse sets may still scan every entry. See
-[the scheduling measurements](capacity.md#scheduling-optimization-sample) for
+[the scheduling measurements](capacity.md#scheduling-optimization-sample-format-2) for
 the measured tradeoffs and retained round-robin/recovery checks.
 
 Group readiness keeps a temporary confirmed-terminal child prefix per activation.
@@ -127,7 +155,7 @@ and map. Metadata can retain capacity up to the call's peak group count.
 Each drive or continuation-input batch starts its own cache; none is persisted
 or shared by concurrent executions. Group selection and merge input order still
 follow the checkpoint slices. Many groups can still require a linear traversal.
-See [the group readiness measurements](capacity.md#group-readiness-optimization-sample)
+See [the group readiness measurements](capacity.md#group-readiness-optimization-sample-format-2)
 for workload geometry, allocation tradeoffs, and semantic checks.
 
 ## Observation cost
