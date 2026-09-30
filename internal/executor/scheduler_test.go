@@ -219,3 +219,9 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 }
 
 func scopePointer(scope FailureScope) *FailureScope { return &scope }
+
+func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) *Invocation[S] {
+	index := newInvocationIndex(s)
+	inv, _ := selectReady(s, &index, running, cursor)
+	return inv
+}
