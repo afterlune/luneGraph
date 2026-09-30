@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func executorTestWaitingRunner(t *testing.T, apply func(context.Context, CallInfo, int, int) (int, error)) *Runner[int] {

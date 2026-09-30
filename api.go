@@ -4,9 +4,9 @@ package graph
 import (
 	"context"
 
-	"lune-graph/internal/definition"
-	"lune-graph/internal/executor"
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/definition"
+	"github.com/afterlune/luneGraph/internal/executor"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 type (

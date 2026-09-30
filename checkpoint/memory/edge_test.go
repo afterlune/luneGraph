@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/memory"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/memory"
 )
 
 func TestNewRequiresClone(t *testing.T) {

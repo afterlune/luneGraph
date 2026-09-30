@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
 )
 
 type codecState struct {

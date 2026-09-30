@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/memory"
-	"lune-graph/internal/storetest"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/memory"
+	"github.com/afterlune/luneGraph/internal/storetest"
 )
 
 type state struct{ Values map[string]int }

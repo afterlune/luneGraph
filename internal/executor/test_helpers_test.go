@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func executorTestRunner(t *testing.T, entry string, nodes []NodeSpec[int], joins []JoinSpec[int], edges map[string][]string, continuations map[string]Continuation[int], returnTargets map[string]string) *Runner[int] {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func executionTestIndex[S any](checkpoint Checkpoint[S]) *invocationIndex {

@@ -8,9 +8,9 @@ import (
 	"math"
 	"strconv"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/internal/model"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 // Create stores revision one. An existing run returns graph.ErrConflict.

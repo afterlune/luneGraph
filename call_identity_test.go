@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 type rejectNextCASStore struct {

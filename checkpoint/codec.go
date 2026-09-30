@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 // ErrNotFound reports that a run has no stored checkpoint.

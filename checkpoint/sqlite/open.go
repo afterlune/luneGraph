@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
 
 	sqliteDriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"

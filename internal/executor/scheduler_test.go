@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func TestSchedulerHelpers(t *testing.T) {

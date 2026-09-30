@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestTerminalFailureCommitOutcomes(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/sqlite"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/sqlite"
 )
 
 func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {

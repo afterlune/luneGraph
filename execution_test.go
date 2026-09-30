@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint/memory"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint/memory"
 )
 
 func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
