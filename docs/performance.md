@@ -30,6 +30,7 @@ The benchmarks report Go's `ns/op`, `B/op`, and `allocs/op` values. Graph compil
 | `BenchmarkDurableSequentialExecution` | Repeatedly recovers one persisted loop run with step budgets 1 and 16, using memory and SQLite. The state contains a 16-entry map. |
 | `BenchmarkDurableFanoutJoin` | Repeatedly recovers one persisted fan-out/join loop at widths 2, 8, and 32, with serial and default concurrency, using memory and SQLite. The state contains a 16-entry map. |
 | `BenchmarkObservation` | Disabled, no-op, and Debug-level JSON slog observers on 16-step sequential execution, width-32 fan-out/join, and durable 16-step recovery with memory and SQLite. State is a scalar. |
+| `BenchmarkCheckpointCopyInto` | Reused structural-copy buffers with 1/128/512 invocations, no routes/all waiting/alternating routes, reference state, and scalar/512-byte value controls. No application Clone or Store work is included. |
 
 The durable execution benchmarks create their initial run before timing and repeatedly call `Recover` with the same run ID. Every executed node outcome is persisted through the normal checkpoint path. The loop leaves a bounded checkpoint row with ready work after each measured call, so iterations measure recovery and execution without growing the number of stored runs. Each case loads the final checkpoint after timing and checks it against the returned result.
 
@@ -92,6 +93,15 @@ For comparisons, run the command more than once on an otherwise idle machine and
 For focused profiles, pass `-cpuprofile` and `-memprofile` to a single benchmark selection. Inspect CPU samples with `go tool pprof -top <cpu-profile>` and allocation volume with `go tool pprof -top -sample_index=alloc_space <memory-profile>`. Keep profile files and generated test binaries in a temporary directory.
 
 The executor reuses an alternate checkpoint-structure buffer while a run advances. This can retain slice capacity up to the run's peak invocation and group counts until the call returns. After each successful commit, the old buffer's state fields are cleared so it does not keep prior application state alive. The copy remains shallow for user state, matching `model.Copy`; it does not deep-copy application state.
+
+Structural invocation copying keeps the direct loop for lists of at most eight.
+Larger lists batch consecutive entries with nil `Next` through Go's built-in
+`copy`; non-nil routes are copied independently with destination-buffer reuse.
+Non-nil empty routes still normalize to nil, and obsolete destination routes
+are cleared before their headers are replaced. No route storage is shared with
+the source, and application state remains shallow. The implementation adds no
+auxiliary index or state cache. See [the structural copy measurements](capacity.md#checkpoint-structural-copy-optimization-sample)
+for the same-machine comparison and ownership checks.
 
 Invocation lookup uses a temporary ID index when a checkpoint has more than eight invocations. Shorter lists use a direct scan to avoid map setup cost. The index follows fan-out insertion and group compaction, is rebuilt when a saved execution resumes, and is never written to a checkpoint.
 
