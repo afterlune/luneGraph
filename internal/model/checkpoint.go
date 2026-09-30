@@ -8,7 +8,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 2
+const CheckpointFormatVersion uint32 = 3
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -49,25 +49,17 @@ type ActivationGroup struct {
 	Children []string
 }
 
-// Terminal records a path that ended without ending the whole execution.
-type Terminal[S any] struct {
-	InvocationID string
-	State        S
-}
-
-// Failure records a node, continuation, or join error handled by a failure
-// policy. FailExecution marks the final failure of a completed run.
+// Failure records the execution-level failure of a completed run.
 type Failure struct {
 	InvocationID string
 	Node         string
-	Scope        FailureScope
 	Message      string
 	PanicStack   string
 }
 
 // Checkpoint contains the complete execution position. Treat a returned
 // checkpoint as immutable. Completed includes execution-level failures, marked
-// by a Failure with scope FailExecution. Store implementations must own a deep
+// by a non-nil Failure. Store implementations must own a deep
 // copy of values passed to them and return an independent copy from Load.
 type Checkpoint[S any] struct {
 	FormatVersion  uint32
@@ -81,8 +73,11 @@ type Checkpoint[S any] struct {
 	Final          *S
 	Invocations    []Invocation[S]
 	Groups         []ActivationGroup
-	Terminals      []Terminal[S]
-	Failures       []Failure
+	// HadLocalFailures remains true after a committed local failure.
+	// Local error details and ended branch states are not retained.
+	HadLocalFailures bool
+	// Failure is non-nil only for a completed execution-level failure.
+	Failure *Failure
 }
 
 // Result is the outcome of one call to Start, Resume, or Recover.
@@ -135,13 +130,6 @@ func (s Checkpoint[S]) Clone(copyState Clone[S]) (Checkpoint[S], error) {
 			return Checkpoint[S]{}, fmt.Errorf("clone invocation %q: %w", s.Invocations[i].ID, err)
 		}
 		out.Invocations[i].State = state
-	}
-	for i := range out.Terminals {
-		state, err := callClone(copyState, s.Terminals[i].State, s.Terminals[i].InvocationID)
-		if err != nil {
-			return Checkpoint[S]{}, fmt.Errorf("clone terminal %q: %w", s.Terminals[i].InvocationID, err)
-		}
-		out.Terminals[i].State = state
 	}
 	if s.Final != nil {
 		state, err := callClone(copyState, *s.Final, "")

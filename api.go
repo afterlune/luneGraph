@@ -37,7 +37,6 @@ type (
 	Runner[S any]     = executor.Runner[S]
 	Status            = model.Status
 	Store[S any]      = model.Store[S]
-	Terminal[S any]   = model.Terminal[S]
 	Transition[S any] = model.Transition[S]
 	TransitionError   = model.TransitionError
 )
@@ -109,7 +108,8 @@ func Wait[S any](state S, continuation string, targets ...string) Transition[S] 
 	return model.Wait(state, continuation, targets...)
 }
 
-func EndBranch[S any](state S) Transition[S] { return model.EndBranch(state) }
+// EndBranch finishes the current invocation without producing a result.
+func EndBranch[S any]() Transition[S] { return model.EndBranch[S]() }
 
 func EndExecution[S any](state S) Transition[S] { return model.EndExecution(state) }
 

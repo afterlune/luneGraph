@@ -29,10 +29,10 @@ func TestSchedulerHelpers(t *testing.T) {
 	if errorStatus(context.Canceled) != StatusCancelled || errorStatus(context.DeadlineExceeded) != StatusCancelled || errorStatus(errors.New("failed")) != StatusFailed {
 		t.Fatal("errorStatus returned an incorrect status")
 	}
-	if statusOf(Checkpoint[int]{Completed: true, Failures: []Failure{{Scope: FailExecution}}}, false) != StatusFailed {
+	if statusOf(Checkpoint[int]{Completed: true, Failure: &Failure{}}, false) != StatusFailed {
 		t.Fatal("terminal execution failure was not reported")
 	}
-	if statusOf(Checkpoint[int]{Completed: true, Failures: []Failure{{Scope: FailInvocation}}}, false) != StatusCompletedWithFailures {
+	if statusOf(Checkpoint[int]{Completed: true, HadLocalFailures: true}, false) != StatusCompletedWithFailures {
 		t.Fatal("local failure was not reported")
 	}
 	if statusOf(Checkpoint[int]{Completed: true}, false) != StatusCompleted {
@@ -161,7 +161,7 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 			started <- name
 			select {
 			case <-release:
-				return model.EndBranch(value), nil
+				return model.EndBranch[int](), nil
 			case <-ctx.Done():
 				return Transition[int]{}, ctx.Err()
 			}
@@ -184,7 +184,7 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 		}
 	}
 	close(release)
-	if result := <-finished; result.Status != StatusCompleted || len(result.Checkpoint.Terminals) != 2 {
+	if result := <-finished; result.Status != StatusCompleted || len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
 		t.Fatalf("parallel result = %+v", result)
 	}
 

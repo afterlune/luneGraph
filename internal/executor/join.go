@@ -40,7 +40,9 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 			children[childID] = true
 		}
 		removeInvocations(invIndex, s, children)
-		s.Groups = append(s.Groups[:index], s.Groups[index+1:]...)
+		copy(s.Groups[index:], s.Groups[index+1:])
+		s.Groups[len(s.Groups)-1] = ActivationGroup{}
+		s.Groups = s.Groups[:len(s.Groups)-1]
 		_, parent = indexedInvocation(invIndex, s, group.ParentID)
 		parent.ChildGroupID = ""
 		if mergeErr != nil {
@@ -64,7 +66,6 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 		}
 		if next == "" {
 			parent.Status = InvocationEnded
-			s.Terminals = append(s.Terminals, Terminal[S]{InvocationID: parent.ID, State: merged})
 		} else if err := r.setTarget(s, parent, next); err != nil {
 			return &TransitionError{InvocationID: parent.ID, Node: group.JoinNode, Cause: err}
 		}

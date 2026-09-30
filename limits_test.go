@@ -47,7 +47,7 @@ func TestFanoutIDReservationDoesNotWrap(t *testing.T) {
 	})
 	for _, name := range []string{"a", "b"} {
 		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
-			return graph.EndBranch(state), nil
+			return graph.EndBranch[int](), nil
 		})
 		edge(t, g, "wait", name)
 	}
@@ -160,7 +160,7 @@ func TestConcurrentLaunchesReserveCommitCapacity(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			called++
-			return graph.EndBranch(state), nil
+			return graph.EndBranch[int](), nil
 		})
 		edge(t, g, "fork", name)
 	}

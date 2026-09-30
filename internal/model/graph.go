@@ -34,9 +34,9 @@ func Wait[S any](state S, continuation string, targets ...string) Transition[S] 
 	return Transition[S]{State: state, Action: ActionWait, Targets: append([]string(nil), targets...), Continuation: continuation}
 }
 
-// EndBranch finishes the current invocation and records a terminal state.
-func EndBranch[S any](state S) Transition[S] {
-	return Transition[S]{State: state, Action: ActionEndBranch}
+// EndBranch finishes the current invocation without producing a result.
+func EndBranch[S any]() Transition[S] {
+	return Transition[S]{Action: ActionEndBranch}
 }
 
 // EndExecution finishes the whole run with state as its final result.

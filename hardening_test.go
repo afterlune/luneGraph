@@ -4,10 +4,22 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	graph "github.com/afterlune/luneGraph"
 )
+
+type panicRecorder struct {
+	atomic.Pointer[graph.PanicError]
+}
+
+func (r *panicRecorder) Observe(_ context.Context, e graph.Event) {
+	var p *graph.PanicError
+	if e.Phase == graph.PhaseFinished && errors.As(e.Err, &p) {
+		r.Store(p)
+	}
+}
 
 func TestCallbackPanicPolicies(t *testing.T) {
 	boom := errors.New("callback boom")
@@ -19,16 +31,17 @@ func TestCallbackPanicPolicies(t *testing.T) {
 			}}); err != nil {
 				t.Fatal(err)
 			}
-			out, err := intRunner(t, g).Start(context.Background(), "node-panic", 1, graph.Options[int]{})
+			var observed panicRecorder
+			out, err := intRunner(t, g).Start(context.Background(), "node-panic", 1, graph.Options[int]{Observer: &observed})
 			if scope == graph.FailExecution {
-				if !errors.Is(err, boom) || out.Checkpoint.Revision != 2 || out.Checkpoint.Steps != 1 || !out.Checkpoint.Completed || len(out.Checkpoint.Failures) != 1 || out.Checkpoint.Failures[0].Scope != graph.FailExecution || out.Checkpoint.Failures[0].PanicStack == "" {
+				if !errors.Is(err, boom) || out.Checkpoint.Revision != 2 || out.Checkpoint.Steps != 1 || !out.Checkpoint.Completed || out.Checkpoint.Failure == nil || out.Checkpoint.Failure.PanicStack == "" {
 					t.Fatalf("execution panic = %+v, %v", out, err)
 				}
 				var panicErr *graph.PanicError
 				if !errors.As(err, &panicErr) || len(panicErr.Stack) == 0 {
 					t.Fatalf("panic error = %v", err)
 				}
-			} else if err != nil || out.Status != graph.StatusCompletedWithFailures || len(out.Checkpoint.Failures) != 1 || !strings.Contains(out.Checkpoint.Failures[0].PanicStack, "TestCallbackPanicPolicies") {
+			} else if err != nil || out.Status != graph.StatusCompletedWithFailures || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || observed.Load() == nil || !strings.Contains(string(observed.Load().Stack), "TestCallbackPanicPolicies") {
 				t.Fatalf("local panic = %+v, %v", out, err)
 			}
 		})
@@ -50,7 +63,7 @@ func TestIllegalTransitionIsTopLevel(t *testing.T) {
 		edge(t, g, "start", "next")
 		out, err := intRunner(t, g).Start(context.Background(), "bad-transition", 0, graph.Options[int]{})
 		var transitionErr *graph.TransitionError
-		if !errors.As(err, &transitionErr) || out.Checkpoint.Revision != 1 || out.Checkpoint.Steps != 0 || len(out.Checkpoint.Failures) != 0 {
+		if !errors.As(err, &transitionErr) || out.Checkpoint.Revision != 1 || out.Checkpoint.Steps != 0 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
 			t.Fatalf("transition %+v => %+v, %v", tr, out, err)
 		}
 	}
@@ -77,7 +90,7 @@ func TestCloneAndMergePanics(t *testing.T) {
 	})
 	for _, name := range []string{"a", "b"} {
 		node(t, cloneFork, name, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
-			return graph.EndBranch(v), nil
+			return graph.EndBranch[int](), nil
 		})
 		edge(t, cloneFork, "fork", name)
 	}
@@ -111,8 +124,9 @@ func TestCloneAndMergePanics(t *testing.T) {
 		edge(t, fork, "fork", name)
 		edge(t, fork, name, "join")
 	}
-	out, err = intRunner(t, fork).Start(context.Background(), "merge", 0, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || out.Status != graph.StatusCompletedWithFailures || len(out.Checkpoint.Failures) != 1 || !strings.Contains(out.Checkpoint.Failures[0].PanicStack, "TestCloneAndMergePanics") {
+	var observed panicRecorder
+	out, err = intRunner(t, fork).Start(context.Background(), "merge", 0, graph.Options[int]{MaxConcurrency: 1, Observer: &observed})
+	if err != nil || out.Status != graph.StatusCompletedWithFailures || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || observed.Load() == nil || !strings.Contains(string(observed.Load().Stack), "TestCloneAndMergePanics") {
 		t.Fatalf("merge panic = %+v, %v", out, err)
 	}
 }
@@ -123,7 +137,7 @@ func TestWrongJoinIsTransitionError(t *testing.T) {
 		return graph.Wait(v, "input", "join"), nil
 	})
 	node(t, g, "other", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
-		return graph.EndBranch(v), nil
+		return graph.EndBranch[int](), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) { return 0, nil }}); err != nil {
 		t.Fatal(err)
@@ -168,13 +182,14 @@ func TestContinuationPanics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := r.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("x")}}, graph.Options[int]{})
+			var observed panicRecorder
+			out, err := r.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("x")}}, graph.Options[int]{Observer: &observed})
 			if panicPhase == "decode" {
 				var panicErr *graph.PanicError
 				if !errors.As(err, &panicErr) || out.Checkpoint.Revision != first.Checkpoint.Revision || out.Checkpoint.Invocations[0].Status != graph.InvocationWaiting {
 					t.Fatalf("decode panic = %+v, %v", out, err)
 				}
-			} else if err != nil || out.Status != graph.StatusCompletedWithFailures || len(out.Checkpoint.Failures) != 1 || out.Checkpoint.Failures[0].PanicStack == "" {
+			} else if err != nil || out.Status != graph.StatusCompletedWithFailures || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || observed.Load() == nil || len(observed.Load().Stack) == 0 {
 				t.Fatalf("apply panic = %+v, %v", out, err)
 			}
 		})
@@ -255,7 +270,7 @@ func TestDuplicateCallbackIDsRejected(t *testing.T) {
 	})
 	for _, name := range []string{"a", "b"} {
 		node(t, g, name, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
-			return graph.EndBranch(state), nil
+			return graph.EndBranch[int](), nil
 		})
 		edge(t, g, "fork", name)
 	}

@@ -111,7 +111,7 @@ func TestInvalidTransitionDoesNotCommitTerminalFailure(t *testing.T) {
 		t.Fatalf("invalid transition = %+v, %v", first, err)
 	}
 	stored, err := store.Load(context.Background(), "invalid-transition")
-	if err != nil || stored.Revision != 1 || len(stored.Failures) != 0 {
+	if err != nil || stored.Revision != 1 || (stored.Failure != nil || stored.HadLocalFailures) {
 		t.Fatalf("stored checkpoint = %+v, %v", stored, err)
 	}
 }
@@ -153,7 +153,7 @@ func TestTerminalFailureCancelsSibling(t *testing.T) {
 		t.Fatal("sibling callback was not cancelled before return")
 	}
 	stored, err := store.Load(ctx, "parallel-failure")
-	if err != nil || stored.Revision != failed.Checkpoint.Revision || len(stored.Failures) != 1 {
+	if err != nil || stored.Revision != failed.Checkpoint.Revision || stored.Failure == nil {
 		t.Fatalf("stored failure = %+v, %v", stored, err)
 	}
 }

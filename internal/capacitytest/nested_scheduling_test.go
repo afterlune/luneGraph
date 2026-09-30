@@ -106,7 +106,7 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 				out, err = r.Recover(context.Background(), "nested", nil, opts)
 				if errors.Is(err, graph.ErrConflict) {
 					conflicts++
-					if out.Checkpoint.Revision != 18 || out.Checkpoint.Steps != 17 || len(out.Checkpoint.Invocations) != 27 || len(out.Checkpoint.Groups) != 2 || len(out.Checkpoint.Failures) != 0 {
+					if out.Checkpoint.Revision != 18 || out.Checkpoint.Steps != 17 || len(out.Checkpoint.Invocations) != 27 || len(out.Checkpoint.Groups) != 2 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
 						t.Fatalf("candidate compaction changed the last commit: %+v", out)
 					}
 					continue
@@ -115,7 +115,7 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if out.Status != graph.StatusCompletedWithFailures || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 15 || out.Checkpoint.Steps != 19 || len(out.Checkpoint.Failures) != 1 || out.Checkpoint.Failures[0].Scope != graph.FailGroup || conflicts != 1 {
+			if out.Status != graph.StatusCompletedWithFailures || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 15 || out.Checkpoint.Steps != 19 || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || conflicts != 1 {
 				t.Fatalf("nested failure recovery: %+v conflicts=%d", out, conflicts)
 			}
 			if len(nodeCalls) != 2 || nodeCalls[0] == "" || nodeCalls[0] != nodeCalls[1] || len(joinCalls) != 2 || joinCalls[0] == "" || joinCalls[0] != joinCalls[1] {

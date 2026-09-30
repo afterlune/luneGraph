@@ -47,7 +47,7 @@ type report struct {
 	SampledPeak    resourceSample `json:"sampled_peak"`
 }
 
-func (m *measurement) record(elapsed time.Duration, cancelled bool) {
+func (m *measurement) record(elapsed time.Duration, cancelled bool, steps uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if cancelled {
@@ -55,7 +55,7 @@ func (m *measurement) record(elapsed time.Duration, cancelled bool) {
 		return
 	}
 	m.calls++
-	m.steps += 10
+	m.steps += steps
 	m.latencies[m.next] = elapsed
 	m.next = (m.next + 1) % latencyWindow
 	if m.size < latencyWindow {
@@ -96,12 +96,23 @@ func soakDuration(raw string) (time.Duration, error) {
 	return d, nil
 }
 
+func TestMeasurementCountsWorkloadSteps(t *testing.T) {
+	var m measurement
+	m.record(time.Millisecond, false, 10)
+	m.record(time.Millisecond, false, 5)
+	m.record(time.Millisecond, true, 5)
+	r := m.snapshot("check", time.Second, resourceSample{})
+	if r.Calls != 2 || r.Steps != 15 || r.Cancelled != 1 {
+		t.Fatalf("workload accounting = %+v", r)
+	}
+}
+
 func TestBoundedMeasurements(t *testing.T) {
 	var m measurement
 	for i := 1; i <= 2048; i++ {
-		m.record(time.Duration(i)*time.Millisecond, false)
+		m.record(time.Duration(i)*time.Millisecond, false, 10)
 	}
-	m.record(time.Second, true)
+	m.record(time.Second, true, 0)
 	r := m.snapshot("check", time.Second, resourceSample{100, 7})
 	if r.Calls != 2048 || r.Steps != 20480 || r.Cancelled != 1 || r.LatencySamples != 1024 || r.P50MS != 1536 || r.P95MS != 1996 || r.SampledPeak.HeapBytes != 100 {
 		t.Fatalf("measurement = %+v", r)

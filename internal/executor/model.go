@@ -22,7 +22,6 @@ type (
 	ResumeInput         = model.ResumeInput
 	Status              = model.Status
 	Store[S any]        = model.Store[S]
-	Terminal[S any]     = model.Terminal[S]
 	Transition[S any]   = model.Transition[S]
 	TransitionError     = model.TransitionError
 )
@@ -76,9 +75,6 @@ func clearCheckpointStateValues[S any](value *Checkpoint[S]) {
 	var zero S
 	for i := range value.Invocations {
 		value.Invocations[i].State = zero
-	}
-	for i := range value.Terminals {
-		value.Terminals[i].State = zero
 	}
 	if value.Final != nil {
 		*value.Final = zero

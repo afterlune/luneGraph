@@ -145,7 +145,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			candidate.Steps++
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
 			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, processErr); failureErr != nil {
-				if terminalFailureRecord(candidate) != nil {
+				if candidate.Failure != nil {
 					candidate.ScheduleCursor = cursor
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
 					drain()
@@ -158,7 +158,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		candidate.ScheduleCursor = cursor
 		if !ended {
 			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); err != nil {
-				if terminalFailureRecord(candidate) != nil {
+				if candidate.Failure != nil {
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
 					drain()
 					return result, commitErr

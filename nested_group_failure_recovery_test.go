@@ -165,8 +165,8 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 	if err != nil || result.Status != graph.StatusCompletedWithFailures || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 17 {
 		t.Fatalf("nested group recovery = status %s, final %v, error %v", result.Status, result.Checkpoint.Final, err)
 	}
-	if len(result.Checkpoint.Failures) != 1 || result.Checkpoint.Failures[0].Node != "failer" || result.Checkpoint.Failures[0].Scope != graph.FailGroup || result.Checkpoint.Failures[0].Message != boom.Error() {
-		t.Fatalf("nested group failure record = %+v", result.Checkpoint.Failures)
+	if !result.Checkpoint.HadLocalFailures || result.Checkpoint.Failure != nil {
+		t.Fatalf("local failure marker = %+v", result.Checkpoint)
 	}
 	if !result.Checkpoint.Completed || len(result.Checkpoint.Groups) != 0 || len(result.Checkpoint.Invocations) != 0 {
 		t.Fatalf("completed checkpoint retained execution paths: %+v", result.Checkpoint)
@@ -188,7 +188,7 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 		}
 	}
 	stored, err := store.Load(ctx, runID)
-	if err != nil || !stored.Completed || stored.Revision != result.Checkpoint.Revision || stored.Final == nil || *stored.Final != 17 || len(stored.Groups) != 0 || len(stored.Invocations) != 0 || len(stored.Failures) != 1 || stored.Failures[0].Scope != graph.FailGroup {
+	if err != nil || !stored.Completed || stored.Revision != result.Checkpoint.Revision || stored.Final == nil || *stored.Final != 17 || len(stored.Groups) != 0 || len(stored.Invocations) != 0 || (!stored.HadLocalFailures || stored.Failure != nil) {
 		t.Fatalf("stored final checkpoint = %+v, error %v", stored, err)
 	}
 	again, err := runner.Recover(ctx, runID, nil, graph.Options[int]{Store: store, MaxConcurrency: 4})

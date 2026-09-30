@@ -83,7 +83,7 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 				armed = true
 				out, err := r.Recover(ctx, "batch", []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("a")}, {InvocationID: ids["b"], Payload: []byte("b")}}, graph.Options[state]{Store: store, MaxConcurrency: 1})
 				if fault == "join" {
-					if !errors.Is(err, boom) || !out.Checkpoint.Completed || out.Checkpoint.Revision != seed.Checkpoint.Revision+2 || len(out.Checkpoint.Failures) != 1 {
+					if !errors.Is(err, boom) || !out.Checkpoint.Completed || out.Checkpoint.Revision != seed.Checkpoint.Revision+2 || out.Checkpoint.Failure == nil {
 						t.Fatalf("join failure: %+v %v", out, err)
 					}
 					if _, err := r.Recover(ctx, "batch", nil, graph.Options[state]{Store: store}); !errors.Is(err, graph.ErrRunFailed) {
@@ -95,7 +95,7 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 				if fault == "cas" {
 					wantErr = graph.ErrConflict
 				}
-				if !errors.Is(err, wantErr) || out.Checkpoint.Revision != seed.Checkpoint.Revision+1 || len(out.Checkpoint.Groups) != 1 || len(out.Checkpoint.Failures) != 0 {
+				if !errors.Is(err, wantErr) || out.Checkpoint.Revision != seed.Checkpoint.Revision+1 || len(out.Checkpoint.Groups) != 1 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
 					t.Fatalf("partial: %+v %v", out, err)
 				}
 				loaded, err := store.Load(ctx, "batch")

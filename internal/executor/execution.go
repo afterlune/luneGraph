@@ -49,12 +49,10 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if len(tr.Targets) != 0 || tr.Continuation != "" {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with EndBranch")}
 		}
-		inv.State = tr.State
 		inv.Status = InvocationEnded
 		inv.CallID = ""
 		inv.Next = nil
 		inv.Continuation = ""
-		s.Terminals = append(s.Terminals, Terminal[S]{InvocationID: id, State: tr.State})
 		return false, nil
 	case ActionEndExecution:
 		if len(tr.Targets) != 0 || tr.Continuation != "" {
@@ -81,7 +79,6 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			inv.CallID = ""
 			inv.Next = nil
 			inv.Continuation = ""
-			s.Terminals = append(s.Terminals, Terminal[S]{InvocationID: id, State: tr.State})
 			return false, nil
 		}
 		targets := []string{target}

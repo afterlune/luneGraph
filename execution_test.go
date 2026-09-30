@@ -92,7 +92,7 @@ func TestGroupFailureCancelsSibling(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err := r.Start(ctx, "group-failure", 0, graph.Options[int]{MaxConcurrency: 2})
-	if err != nil || out.Status != graph.StatusCompletedWithFailures || len(out.Checkpoint.Failures) != 1 {
+	if err != nil || out.Status != graph.StatusCompletedWithFailures || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) {
 		t.Fatalf("group failure = %+v, %v", out, err)
 	}
 	select {
@@ -111,7 +111,7 @@ func (n *notifyingStore) CompareAndSwap(ctx context.Context, expected uint64, ne
 	if err := n.Store.CompareAndSwap(ctx, expected, next); err != nil {
 		return err
 	}
-	if len(next.Terminals) != 0 {
+	if next.Steps == 2 {
 		select {
 		case n.committed <- copyIntCheckpoint(next):
 		default:
@@ -126,7 +126,7 @@ func TestCancelledRunKeepsInFlightInvocationPending(t *testing.T) {
 		return graph.To(v, "fast", "slow"), nil
 	})
 	node(t, g, "fast", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
-		return graph.EndBranch(v + 1), nil
+		return graph.EndBranch[int](), nil
 	})
 	node(t, g, "slow", func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		<-ctx.Done()
@@ -161,8 +161,8 @@ func TestCancelledRunKeepsInFlightInvocationPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Terminals) != 1 {
-		t.Fatalf("terminals = %+v", stored.Terminals)
+	if stored.Steps != 2 {
+		t.Fatalf("accepted branch outcome missing: %+v", stored)
 	}
 	var pending bool
 	for _, inv := range stored.Invocations {
@@ -178,30 +178,38 @@ func TestCancelledRunKeepsInFlightInvocationPending(t *testing.T) {
 	}
 }
 
-func TestEndBranchTerminalOrder(t *testing.T) {
+func TestEndBranchCompletesWithoutResult(t *testing.T) {
 	g := graph.New[int]("fork")
+	recovering := false
 	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		if recovering {
+			t.Error("completed recovery executed a callback")
+		}
 		return graph.To(v, "first", "second"), nil
 	})
 	node(t, g, "first", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
-		return graph.EndBranch(v + 1), nil
+		return graph.EndBranch[int](), nil
 	})
 	node(t, g, "second", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
-		return graph.EndBranch(v + 2), nil
+		return graph.EndBranch[int](), nil
 	})
 	edge(t, g, "fork", "first")
 	edge(t, g, "fork", "second")
-	out, err := intRunner(t, g).Start(context.Background(), "terminals", 0, graph.Options[int]{MaxConcurrency: 2})
-	if err != nil || out.Status != graph.StatusCompleted || len(out.Checkpoint.Terminals) != 2 {
+	runner := intRunner(t, g)
+	opts := graph.Options[int]{MaxConcurrency: 2, Store: newMemoryStore(t)}
+	out, err := runner.Start(context.Background(), "ended-branches", 0, opts)
+	if err != nil || out.Status != graph.StatusCompleted || len(out.Checkpoint.Invocations) != 0 {
 		t.Fatalf("terminals = %+v, %v", out, err)
-	}
-	if out.Checkpoint.Terminals[0].State != 1 || out.Checkpoint.Terminals[1].State != 2 {
-		t.Fatalf("terminal order = %+v", out.Checkpoint.Terminals)
 	}
 	if out.Checkpoint.Final != nil {
 		t.Fatal("unjoined branches produced a single final state")
 	}
 	if len(out.Checkpoint.Groups) != 0 {
 		t.Fatal(fmt.Sprint("unsettled group: ", out.Checkpoint.Groups))
+	}
+	recovering = true
+	recovered, err := runner.Recover(context.Background(), out.Checkpoint.RunID, nil, opts)
+	if err != nil || recovered.Status != graph.StatusCompleted || recovered.Checkpoint.Revision != out.Checkpoint.Revision || recovered.Checkpoint.Final != nil || recovered.Checkpoint.Failure != nil || len(recovered.Checkpoint.Invocations) != 0 || len(recovered.Checkpoint.Groups) != 0 {
+		t.Fatalf("natural completion recovery = %+v, %v", recovered, err)
 	}
 }

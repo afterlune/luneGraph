@@ -2,6 +2,7 @@ package observationtest
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -78,7 +79,7 @@ func BenchmarkObservation(b *testing.B) {
 					} else if result.Status != graph.StatusCompleted {
 						b.Fatalf("result = %+v", result)
 					} else if workload == "fanout" {
-						if len(result.Checkpoint.Terminals) != 1 || result.Checkpoint.Terminals[0].State != 32 {
+						if len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
 							b.Fatal("invalid merge")
 						}
 					} else if result.Checkpoint.Final == nil || *result.Checkpoint.Final != 16 {
@@ -122,6 +123,9 @@ func fanoutRunner(t testing.TB, width int) *graph.Runner[int] {
 		var sum int
 		for _, v := range values {
 			sum += v
+		}
+		if len(values) != 32 || sum != 32 {
+			return 0, fmt.Errorf("invalid fan-out merge: %d values, sum=%d", len(values), sum)
 		}
 		return sum, nil
 	}}); err != nil {
