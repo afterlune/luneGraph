@@ -136,6 +136,40 @@ to retry. Rebuild the same graph with a compatible `MachineID` when resuming in
 a new process. An incompatible graph definition needs a new machine ID or an
 application-managed migration.
 
+### Transactional application receipts
+
+The [effect example](../examples/effects) demonstrates this boundary using a
+local counter. Its application ledger owns a separate SQLite file and stores
+the increment and original result under `(namespace, RunID, CallID)`.
+An immediate write transaction serializes the receipt lookup, counter update,
+and receipt insert across connections. Both writes commit together or roll
+back together. A matching receipt returns the stored result rather than the
+counter's current value; reusing its key with a different increment returns a
+checkable application error. The namespace versions the operation semantics.
+
+The recovery sequence is:
+
+1. The callback commits the counter update and receipt in the application DB.
+2. The graph commits the callback outcome in its independent checkpoint DB.
+3. If step 2 fails or the process crashes before it, recovery loads the latest
+   checkpoint. A pending callback replays with the same CallID and reads the
+   receipt, restoring the original result without another counter update.
+4. If the checkpoint write succeeded but its acknowledgement was lost, recovery
+   advances the committed checkpoint instead of repeating an accepted callback.
+
+Applications must retain receipts while a callback can still be replayed.
+Completed-run recovery returns persisted state without invoking callbacks.
+The example uses `FailExecution` for business errors; it adds no automatic
+retry policy. A ledger commit error can itself have an uncertain outcome:
+inspect the receipt before deciding how to resolve a business failure. A
+terminal graph failure is not made resumable by finding a receipt.
+
+This pattern protects effects performed inside the application transaction.
+A receipt inserted separately from a remote write does not provide the same
+guarantee. Remote effects still need the destination's idempotency or an
+application-managed protocol. There is no atomic transaction between this
+ledger and graph checkpoints, and the runtime's contract remains at-least-once.
+
 ## Observation
 
 `Options.Observer` receives a `graph.Event` at `PhaseStarted` and

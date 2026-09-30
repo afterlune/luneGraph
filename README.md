@@ -155,6 +155,32 @@ go run ./examples/durable resume -db runs.db -run demo -value 3
 
 The [example](examples/durable) uses a caller-defined struct state and a typed integer continuation. `start` persists a waiting invocation and exits. `resume` opens the same SQLite database, finds the waiting invocation, and calls `Recover` with its input. Use a new run ID to start another execution; starting the same run twice returns a conflict. The database's parent directory must already exist.
 
+## Application-owned effect receipts
+
+The [effect example](examples/effects) uses a typed counter state and two
+independent SQLite files: graph checkpoints and application effects.
+
+```sh
+go run ./examples/effects start -checkpoints runs.db -effects effects.db -run first -delta 3
+# status=completed run=first value=3
+go run ./examples/effects start -checkpoints runs.db -effects effects.db -run second -delta 4
+# status=completed run=second value=7
+go run ./examples/effects recover -checkpoints runs.db -effects effects.db -run first
+# status=completed run=first value=3
+```
+
+Use fresh files for these outputs. The application's transaction updates its
+counter and saves a receipt keyed by namespace, RunID and CallID. A replay
+returns the original result, even after other requests advance the counter.
+`recover` loads the latest checkpoint; a completed run returns its saved final
+state without another callback. The example's process-crash test kills a child
+after the effect commits and before its checkpoint commits, then verifies
+recovery replays the callback without another increment.
+
+This is application-side deduplication of a local transactional effect, not a
+transaction spanning the graph Store or an exactly-once guarantee for remote
+effects. See [recovery and external effects](docs/execution-semantics.md#recovery-and-external-effects).
+
 ## Execution observation
 
 Set `Options.Observer` to receive transient events for public runner calls, node and join callbacks, continuation decoding and application, and actual Store calls. The observer receives metadata without application state or resume bytes. With a nil observer, the runtime creates no observation session, operation ID, or timestamps.

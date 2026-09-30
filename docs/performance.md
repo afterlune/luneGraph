@@ -198,3 +198,15 @@ go vet ./...
 ```
 
 The reliability baseline is the semantic test suite, including the SQLite process-crash and reopen tests in `checkpoint/sqlite`, commit-acknowledgement ambiguity tests, cross-process CAS tests, and execution tests for replay identities, cancellation, and failure handling. A change to execution or persistence semantics must preserve or update those checks. No benchmark score substitutes for them.
+
+Application integration checks in `examples/effects` exercise node,
+continuation, and join effects with real SQLite receipts and checkpoints.
+They inject CAS rejection, errors before a checkpoint write, and lost
+acknowledgements after a write; recovery verifies both the persisted graph
+result and application effect count. A subprocess is killed after committing
+an effect but before returning its node transition. Additional checks cover
+cancellation in that interval, shared Runner/Store executions, duplicate
+requests across ledger connections, original-result replay, request mismatch,
+and transaction rollback when the receipt insert fails. These tests run in the
+normal test suite on Windows and Linux; they do not establish a throughput or
+capacity limit for the example application.
