@@ -107,6 +107,19 @@ cost remain workload-dependent; sparse sets may still scan every entry. See
 [the scheduling measurements](capacity.md#scheduling-optimization-sample) for
 the measured tradeoffs and retained round-robin/recovery checks.
 
+Group readiness keeps a temporary confirmed-terminal child prefix per activation.
+Joined, ended, and failed children cannot become runnable again in that activation.
+Checks therefore resume at the first unconfirmed child, reading its current
+checkpoint status. Zero or one group needs no heap-allocated progress cache;
+multiple groups use ordered ID/cursor records and an ID map for topology changes.
+Removed entries are cleared, and contraction to one group releases the arrays
+and map. Metadata can retain capacity up to the call's peak group count.
+Each drive or continuation-input batch starts its own cache; none is persisted
+or shared by concurrent executions. Group selection and merge input order still
+follow the checkpoint slices. Many groups can still require a linear traversal.
+See [the group readiness measurements](capacity.md#group-readiness-optimization-sample)
+for workload geometry, allocation tradeoffs, and semantic checks.
+
 ## Observation cost
 
 `BenchmarkObservation` lives in `internal/observationtest`, keeping observer

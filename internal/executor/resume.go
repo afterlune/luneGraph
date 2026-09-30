@@ -61,6 +61,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S], obs *observation.Session) (Result[S], error) {
 	s := copyCheckpoint(checkpoint)
 	index := newInvocationIndex(s)
+	var progress groupProgress
 	var spare Checkpoint[S]
 	if len(inputs) != 0 && s.Revision == math.MaxUint64 {
 		return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
@@ -114,7 +115,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 				return resultWith(s, StatusFailed), routeErr
 			}
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride, obs); settleErr != nil {
+		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); settleErr != nil {
 			if terminalFailureRecord(candidate) != nil {
 				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
 			}

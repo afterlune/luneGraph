@@ -15,6 +15,7 @@ a deep-copy Clone. No runtime API or persistence boundary changes are required.
 | --- | --- | --- |
 | `BenchmarkCapacityCompile` | 128 / 1,024 / 8,192 sequential nodes | Compile an already constructed definition. A complete execution validates the fixture before timing. |
 | `BenchmarkCapacityFanout` | 32 / 128 / 512 branches; node concurrency 1 / 8 | Start and complete one fan-out/join round without a Store. |
+| `BenchmarkCapacityGroups` | 8 / 32 / 128 nested groups, eight branches each; node concurrency 1 / 8 | Resume an immutable seed with all activations established and finish both levels of joins without a Store. Includes one extra root group. |
 | `BenchmarkCapacityShared` | 16 / 64 / 256 fixed runs; 1 / 8 / 32 caller workers | Advance every run once using one shared Runner, with no Store, Memory, or SQLite. |
 | `BenchmarkCapacityPaused` | Memory: 128 / 1,024 / 8,192; SQLite: 128 / 1,024 paused runs | Recover one run without input (`inspect`) or apply a typed continuation and advance it to the next wait (`advance`). |
 
@@ -61,6 +62,11 @@ Ordinary `go test ./...` and `go test -race ./...` include:
   Checks cover branch isolation, CallIDs, revisions, cumulative steps, wait
   boundaries, active groups, and retained terminal/failure history.
 - Bounded latency sample accounting and invalid soak duration settings.
+- Nine nested activations recovered across seven-step budgets with Memory and
+  SQLite, node concurrency one/eight, ordered merges, and final state validation.
+- Continuation input batches with join-input Clone failure, rejected join CAS,
+  or terminal join failure: prior inputs remain committed; continuation and join
+  replay retain their CallIDs. These run against both Memory and SQLite.
 
 These supplement the crash, replay, uncertain acknowledgement, and cross-process
 CAS tests described in [performance.md](performance.md). They run in existing
@@ -389,3 +395,196 @@ executions sharing a Runner and Store with the new transient indexes.
 The remaining optimization candidates are checkpoint structure copying and
 repeated group-readiness lookup. Their ownership and commit boundaries need
 separate designs; this change leaves both intact.
+
+## Group readiness optimization sample
+
+This comparison uses baseline commit `e29d65c` and the confirmed-terminal
+prefix implementation on 2026-09-30, Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H.
+Baseline binaries were built from an archive of that commit with the identical
+new benchmark fixture copied in. Results are machine-specific measurements,
+not a capacity guarantee or an exactly-once side-effect claim.
+
+The executor now separates transition/routing, join application, and readiness
+progress into distinct files. Each drive or continuation-input batch owns its
+progress. Once a child is joined, ended, or failed, it cannot execute again
+within that activation. A cursor skips that confirmed prefix on subsequent
+checks; a missing or nonterminal child still blocks the group. Recovery rebuilds
+all metadata from the checkpoint. Errors and rejected commits discard the local
+cache along with the unsuccessful candidate.
+
+Zero/one group uses an inline record. Multiple groups use ordered ID/prefix
+records for checks and an ID map to preserve progress when topology changes.
+Identity checks are combined with the readiness traversal; the map is consulted
+only during reconciliation. Removed IDs are cleared; shrinking to one group
+releases both map and records. Space follows the call's peak group count, with
+no state values or invocation pointers retained. Readiness can still traverse
+all groups and repeatedly inspect an unresolved child; it is not universally
+constant time. Group choice and join input order continue to follow checkpoint
+slice order, including nested cascading joins and failure compaction.
+
+An initial multi-group implementation reconciled dictionary entries for every
+result. Measurements exposed its overhead with short eight-child groups.
+The final implementation reads ordered records directly, checks identity during
+the readiness traversal, and compacts records directly when groups are removed
+without reordering survivors. Replacement or reordering uses the ID map.
+
+`BenchmarkCapacityGroups` constructs 8/32/128 nested groups, each with eight
+leaf branches, beneath one root group. Before timing, a serial seed executes
+the root fork and every nested fork (`count+1` steps). It contains `count+1`
+groups and `1+9*count` invocations, with no leaf yet executed. Each timed Resume
+finishes `8*count` leaves and one final node; joins do not consume node steps.
+The final total is `8*count`, with `2+9*count` cumulative steps. The seed is reused
+without a Store, and its structure and mutable maps are checked after timing.
+The nested fixture adds a group tag to the usual 16-entry map. Compilation,
+seeding, and immutable-seed checks are outside timing; merge-order and final
+state assertions are inside.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCapacity(Fanout|Groups)$' -benchmem -benchtime=500ms -count=5 -cpu '1,8' ./internal/capacitytest
+```
+
+Correctness checks compare cached readiness to an independent full-child scan
+under forward, reverse, and fixed-seed mixed completion, all terminal statuses,
+nonterminal states, missing children, unordered groups, topology replacement,
+buffer exchange, nested cascading completion, and cache contraction. Public API
+tests cover nine nested activations across recovery budgets, both node
+concurrency settings, and both Stores. Resume batches test join-input Clone
+failure, CAS rejection after merge, and persisted terminal join failure:
+the first input's commit survives, uncommitted state does not, and replay keeps
+continuation/join CallIDs. Existing nested FailGroup, cancellation/drain,
+SQLite crash/reopen, and uncertain acknowledgement tests remain part of the gate.
+
+### Wide and nested workloads
+
+Five 500ms samples per configuration report median [minimum–maximum] ns/op.
+Positive reduction means lower measured time; negative means higher time.
+
+| Width | Node concurrency | Ps | Before ns/op | After ns/op | Reduction |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 32 | 1 | 1 | 247,323 [237,518–265,280] | 257,380 [250,912–302,527] | -4.1% |
+| 32 | 1 | 8 | 383,611 [354,045–390,092] | 453,778 [449,751–472,082] | -18.3% |
+| 32 | 8 | 1 | 276,966 [259,239–286,850] | 303,953 [299,505–333,642] | -9.7% |
+| 32 | 8 | 8 | 302,075 [296,992–318,963] | 362,916 [361,201–375,758] | -20.1% |
+| 128 | 1 | 1 | 1,354,276 [1,322,772–1,508,973] | 1,413,637 [1,363,805–1,553,441] | -4.4% |
+| 128 | 1 | 8 | 1,861,576 [1,846,588–1,995,164] | 2,113,739 [2,000,146–2,120,984] | -13.5% |
+| 128 | 8 | 1 | 1,345,686 [1,305,170–1,390,825] | 1,457,508 [1,398,792–1,594,083] | -8.3% |
+| 128 | 8 | 8 | 1,496,862 [1,448,255–1,558,060] | 1,646,281 [1,612,532–1,755,146] | -10.0% |
+| 512 | 1 | 1 | 13,090,616 [11,830,115–15,036,697] | 9,462,477 [8,942,050–9,780,808] | 27.7% |
+| 512 | 1 | 8 | 13,397,269 [12,535,931–13,878,940] | 11,999,204 [11,759,182–13,275,052] | 10.4% |
+| 512 | 8 | 1 | 8,995,360 [8,509,072–9,914,103] | 9,722,107 [8,987,623–10,021,620] | -8.1% |
+| 512 | 8 | 8 | 12,418,198 [12,366,189–14,028,321] | 11,017,339 [10,863,436–11,912,572] | 11.3% |
+
+| Nested groups | Node concurrency | Ps | Before ns/op | After ns/op | Reduction |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 1 | 1 | 611,323 [600,216–650,944] | 637,715 [566,306–700,209] | -4.3% |
+| 8 | 1 | 8 | 720,496 [714,662–758,938] | 753,846 [716,043–784,708] | -4.6% |
+| 8 | 8 | 1 | 640,926 [612,055–654,446] | 649,136 [613,913–687,137] | -1.3% |
+| 8 | 8 | 8 | 653,543 [605,664–693,870] | 589,930 [576,429–591,444] | 9.7% |
+| 32 | 1 | 1 | 4,547,049 [4,401,748–5,709,375] | 4,098,084 [3,774,307–4,304,102] | 9.9% |
+| 32 | 1 | 8 | 4,313,169 [3,977,419–5,195,339] | 3,942,938 [3,918,322–4,079,687] | 8.6% |
+| 32 | 8 | 1 | 4,233,933 [4,051,776–4,451,808] | 4,339,841 [4,142,601–4,437,526] | -2.5% |
+| 32 | 8 | 8 | 3,513,623 [3,443,444–3,677,893] | 3,349,436 [3,224,305–3,538,869] | 4.7% |
+| 128 | 1 | 1 | 37,390,967 [35,290,139–42,224,979] | 32,364,000 [31,617,400–33,503,695] | 13.4% |
+| 128 | 1 | 8 | 35,952,574 [33,353,856–41,260,863] | 31,970,730 [29,911,863–32,479,105] | 11.1% |
+| 128 | 8 | 1 | 36,068,358 [34,988,729–36,382,593] | 33,611,130 [32,798,881–34,481,280] | 6.8% |
+| 128 | 8 | 8 | 32,833,056 [31,846,375–34,469,995] | 31,809,533 [30,949,495–34,174,711] | 3.1% |
+
+
+A final alternating fan-out comparison repeated all widths three times,
+500ms per configuration on one/eight Ps. The broad narrower-graph regressions
+against the earlier baseline did not persist: width 128 medians decreased in
+all four configurations, and width 512 decreased by 5.3–31.3%. Width 32 with
+node concurrency eight remains 0.8% slower on one P and 5.9% slower on eight Ps.
+The retained ranges limit any general latency claim; this remains workload-
+and completion-order-dependent.
+
+| Width | Node concurrency | Ps | Before ns/op | After ns/op | Reduction |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 32 | 1 | 1 | 277,602 [233,728–278,442] | 256,298 [250,470–334,255] | 7.7% |
+| 32 | 1 | 8 | 374,215 [350,310–392,446] | 345,942 [321,256–384,580] | 7.6% |
+| 32 | 8 | 1 | 270,066 [249,760–280,801] | 272,276 [268,046–287,062] | -0.8% |
+| 32 | 8 | 8 | 296,966 [282,311–313,416] | 314,468 [278,777–322,746] | -5.9% |
+| 128 | 1 | 1 | 1,453,032 [1,406,619–1,526,327] | 1,337,575 [1,217,443–1,486,345] | 7.9% |
+| 128 | 1 | 8 | 1,872,419 [1,754,135–1,902,455] | 1,618,875 [1,604,256–1,686,238] | 13.5% |
+| 128 | 8 | 1 | 1,351,429 [1,259,718–1,414,903] | 1,261,396 [1,225,184–1,393,166] | 6.7% |
+| 128 | 8 | 8 | 1,514,247 [1,510,568–2,082,961] | 1,301,107 [1,279,313–1,339,696] | 14.1% |
+| 512 | 1 | 1 | 11,799,458 [11,184,907–13,348,918] | 8,589,010 [8,413,648–8,793,271] | 27.2% |
+| 512 | 1 | 8 | 12,973,279 [12,633,467–14,079,391] | 9,624,220 [9,338,420–10,661,984] | 25.8% |
+| 512 | 8 | 1 | 8,899,114 [8,565,467–10,445,884] | 8,428,296 [8,415,667–8,735,775] | 5.3% |
+| 512 | 8 | 8 | 12,977,270 [12,146,693–14,182,771] | 8,911,408 [8,911,051–9,334,674] | 31.3% |
+
+The multiple-group cache adds about 888/3,288/12,758 B/op for nested counts
+8/32/128 in the one-P/serial medians, with five extra allocations per operation.
+Single-group fan-out allocation counts remain unchanged; the cache is a space
+tradeoff for reduced repeated child lookup, not an allocation optimization.
+
+An alternating baseline/new check repeated the 32-nested-group cases three
+times, 500ms per case. It no longer reproduced the earlier 9–10% concurrency-eight
+regression from the intermediate implementation; the one-P case remains about
+2.4% slower in these medians. It does not establish a universal multi-group speedup.
+
+| Node concurrency | Ps | Before ns/op | After ns/op |
+| ---: | ---: | ---: | ---: |
+| 1 | 1 | 3,766,735 [3,737,285–3,841,305] | 3,713,549 [3,659,346–4,272,114] |
+| 1 | 8 | 4,313,454 [4,197,865–4,393,798] | 4,095,355 [4,010,406–4,492,048] |
+| 8 | 1 | 3,975,208 [3,772,971–4,298,145] | 4,068,694 [3,921,677–4,334,373] |
+| 8 | 8 | 3,605,435 [3,534,932–3,686,681] | 3,553,187 [3,371,471–3,863,939] |
+
+### Small and durable checks
+
+Sequential cases used five 500ms samples per configuration on one/eight Ps.
+Allocation counts remain 13/118/902 for 1/16/128 steps; B/op differences are
+zero or one byte in the medians. Latency medians remain mixed, including the
+one-P 16-step increase below, so narrower/empty-group timings are not claimed
+as improvements.
+
+| Steps | Ps | Before ns/op | After ns/op | Before → after B/op | allocs/op |
+| ---: | ---: | ---: | ---: | --- | ---: |
+| 1 | 1 | 2,551 | 2,659 | 1,256 → 1,256 | 13 |
+| 1 | 8 | 4,775 | 4,688 | 1,928 → 1,928 | 13 |
+| 16 | 1 | 35,137 | 38,579 | 5,856 → 5,856 | 118 |
+| 16 | 8 | 66,765 | 61,064 | 6,532 → 6,533 | 118 |
+| 128 | 1 | 261,729 | 259,581 | 40,289 → 40,289 | 902 |
+| 128 | 8 | 493,017 | 481,385 | 40,985 → 40,984 | 902 |
+
+Durable rounds use three 200ms samples, default node concurrency, and one/eight
+Ps. The table shows eight-P medians. SQLite width-32 samples contain only
+two or three measured iterations. One-P Memory width-eight medians increased
+from 171,235 to 199,240 ns/op while eight-P medians decreased; eight-P SQLite
+width-eight medians increased. There is no demonstrated persistence speedup.
+
+| Store / width | Before ns/op | After ns/op | Before → after B/op | Before → after allocs/op |
+| --- | ---: | ---: | --- | --- |
+| Memory / 2 | 65,184 | 69,219 | 26,783 → 26,783 | 174 → 174 |
+| Memory / 8 | 232,221 | 225,487 | 137,584 → 137,580 | 683 → 683 |
+| Memory / 32 | 2,130,108 | 1,954,302 | 1,424,650 → 1,424,645 | 5520 → 5521 |
+| Sqlite / 2 | 9,662,138 | 9,402,637 | 40,468 → 40,418 | 678 → 678 |
+| Sqlite / 8 | 25,798,150 | 29,737,088 | 172,195 → 172,170 | 3505 → 3505 |
+| Sqlite / 32 | 83,322,667 | 82,773,167 | 1,493,938 → 1,500,338 | 38613 → 38616 |
+
+### Profiles and sustained recovery
+
+Fresh profiles used width 512, node concurrency eight, `-benchtime=3s -cpu=8`.
+Baseline `settleGroups` accounted for 22.7% cumulative CPU time; the final
+version accounted for 6.8%. Invocation lookup fell from 17.2% to 2.9%. Remaining
+stacks include `copyInvocations` at 24.8%, and Clone still accounts for 69.3%
+of allocation bytes. Shares overlap and are not absolute elapsed-time savings;
+setup and calibration are included. Checkpoint structural copying and application
+Clone remain separate optimization candidates.
+
+The final runtime passed the 60-second-per-Store soak on eight Ps with the same
+64-run/eight-caller/width-eight workload. This workload exercises the single-group
+path; nested-group correctness and costs are covered by the tests and benchmarks
+above. Results freeze elapsed time after draining and use the last 1,024 successful
+call latencies, excluding post-drain recovery work.
+
+| Store | Successful calls | Calls/s | Rolling p50 / p95, ms | Cancelled calls | Sampled peak heap, B | Drain / recovery GC heap, B | Seed / peak / drain goroutines |
+| --- | ---: | ---: | --- | ---: | ---: | --- | --- |
+| Memory | 412,935 | 6,882.18 | 1.0855 / 1.8635 | 8 | 4,207,000 | 850,488 / 775,240 | 3 / 50 / 3 |
+| SQLite | 2,486 | 41.43 | 184.9800 / 282.6951 | 8 | 3,128,880 | 786,272 / 735,160 | 4 / 14 / 4 |
+
+Reload, partial-round recovery, and resource checks passed; goroutines returned
+to seed levels. These sustained samples verify recovery and resource behavior,
+not a throughput comparison between versions. Full tests, race tests, vet,
+and the separate one-second-per-Store race soak passed. Benchmark binaries,
+raw samples, and profiles remain in the temporary directory, outside the repository.
