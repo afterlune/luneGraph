@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	graph "github.com/afterlune/luneGraph"
 	"github.com/afterlune/luneGraph/checkpoint"
 	"github.com/afterlune/luneGraph/checkpoint/sqlite"
+	"github.com/afterlune/luneGraph/observe"
 )
 
 func main() {
@@ -33,6 +35,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	flags.SetOutput(diagnostics)
 	dbPath := flags.String("db", "runs.db", "checkpoint database path (parent directory must exist)")
 	runID := flags.String("run", "demo", "execution ID")
+	observed := flags.Bool("observe", false, "write execution events to stderr")
 	var value int
 	if command == "resume" {
 		flags.IntVar(&value, "value", 0, "integer input for the waiting invocation")
@@ -53,6 +56,9 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	}
 	defer func() { err = errors.Join(err, store.Close()) }()
 	opts := graph.Options[state]{Store: store}
+	if *observed {
+		opts.Observer = observe.NewSlog(slog.New(slog.NewJSONHandler(diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
 	var result graph.Result[state]
 	if command == "start" {
 		result, err = runner.Start(ctx, *runID, state{}, opts)

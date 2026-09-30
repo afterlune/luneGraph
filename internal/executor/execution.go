@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S]) (bool, error) {
@@ -221,7 +223,7 @@ func (r *Runner[S]) setTarget(s *Checkpoint[S], inv *Invocation[S], target strin
 	return nil
 }
 
-func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, override *FailureScope) error {
+func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, override *FailureScope, obs *observation.Session) error {
 	for {
 		index := -1
 		for i, group := range s.Groups {
@@ -261,7 +263,7 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 				}
 			}
 			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID}
-			merged, mergeErr = r.mergeStates(ctx, call, r.joins[group.JoinNode], values)
+			merged, mergeErr = r.observedMerge(ctx, obs, s.Revision, call, r.joins[group.JoinNode], values)
 		}
 		children := make(map[string]bool, len(group.Children))
 		for _, childID := range group.Children {

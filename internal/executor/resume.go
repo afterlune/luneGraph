@@ -5,15 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	"github.com/afterlune/luneGraph/internal/model"
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 // Resume applies inputs to waiting invocations and advances a saved execution.
-func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S]) (Result[S], error) {
+func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S]) (result Result[S], retErr error) {
 	if ctx == nil {
 		return resultWith(checkpoint, StatusFailed), errors.New("context must not be nil")
 	}
 	if r == nil {
 		return resultWith(checkpoint, StatusFailed), errors.New("runner is nil")
+	}
+	obs := observation.New(opts.Observer, r.id, checkpoint.RunID)
+	if obs != nil {
+		span := obs.Begin(ctx, model.Event{Operation: model.OperationResume, Revision: checkpoint.Revision})
+		defer func() {
+			if result.Status != "" {
+				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+			}
+		}()
+		opts.Store = observation.WrapStore(opts.Store, obs)
 	}
 	var err error
 	if opts, err = normalizeOptions(opts); err != nil {
@@ -41,11 +54,11 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 	if checkpoint.Completed {
 		return resultWith(checkpoint, StatusFailed), invalidCheckpoint("execution is already completed")
 	}
-	return r.resumeValidated(ctx, checkpoint, inputs, opts)
+	return r.resumeValidated(ctx, checkpoint, inputs, opts, obs)
 }
 
 // resumeValidated advances a loaded active checkpoint without reading the Store again.
-func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S]) (Result[S], error) {
+func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S], obs *observation.Session) (Result[S], error) {
 	s := copyCheckpoint(checkpoint)
 	index := newInvocationIndex(s)
 	var spare Checkpoint[S]
@@ -67,7 +80,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		if inv == nil || inv.Status != InvocationWaiting {
 			return resultWith(s, StatusFailed), fmt.Errorf("invocation %q is not waiting", input.InvocationID)
 		}
-		value, decodeErr := r.decodeInput(input.InvocationID, inv.Continuation, input.Payload)
+		value, decodeErr := r.observedDecode(ctx, obs, s.Revision, *inv, input.Payload)
 		if decodeErr != nil {
 			return resultWith(s, StatusWaiting), fmt.Errorf("decode input for %q: %w", input.InvocationID, decodeErr)
 		}
@@ -86,7 +99,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			return resultWith(s, StatusFailed), fmt.Errorf("clone waiting state: %w", cloneErr)
 		}
 		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID}
-		updated, applyErr := r.applyInput(ctx, call, inv.Continuation, state, input.value)
+		updated, applyErr := r.observedApply(ctx, obs, s.Revision, call, *inv, state, input.value)
 		candidate := copyCheckpointInto(&spare, s)
 		if applyErr != nil {
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
@@ -101,7 +114,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 				return resultWith(s, StatusFailed), routeErr
 			}
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride); settleErr != nil {
+		if settleErr := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride, obs); settleErr != nil {
 			if terminalFailureRecord(candidate) != nil {
 				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
 			}
@@ -120,5 +133,5 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 	if s.Completed {
 		return resultWith(s, statusOf(s, false)), nil
 	}
-	return r.drive(ctx, s, opts)
+	return r.drive(ctx, s, opts, obs)
 }

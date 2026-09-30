@@ -2,7 +2,7 @@
 
 `lune-graph` is a typed, resumable and durable graph execution runtime for Go. A graph defines nodes and allowed edges. Each execution owns an evolving state and can loop, branch, wait for input, and resume from a checkpoint. The runtime defines execution semantics; applications define the state and the meaning of each node. The core uses the Go standard library; the optional SQLite store uses `modernc.org/sqlite`.
 
-The public API stays in the `graph` package, imported from `github.com/afterlune/luneGraph`. Its implementation is organized under `internal/model`, `internal/definition`, and `internal/executor`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`.
+The public API stays in the `graph` package, imported from `github.com/afterlune/luneGraph`. Its implementation is organized under `internal/model`, `internal/definition`, `internal/executor`, and `internal/observation`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`. The optional `observe` package provides a standard-library logging adapter.
 
 The [execution contract](docs/execution-semantics.md) specifies commit points, crash recovery, Store errors, and the boundary between graph state and external side effects. LLMs, agents, and data modalities are application concerns built on this runtime.
 
@@ -154,6 +154,39 @@ go run ./examples/durable resume -db runs.db -run demo -value 3
 ```
 
 The [example](examples/durable) uses a caller-defined struct state and a typed integer continuation. `start` persists a waiting invocation and exits. `resume` opens the same SQLite database, finds the waiting invocation, and calls `Recover` with its input. Use a new run ID to start another execution; starting the same run twice returns a conflict. The database's parent directory must already exist.
+
+## Execution observation
+
+Set `Options.Observer` to receive transient events for public runner calls, node and join callbacks, continuation decoding and application, and actual Store calls. The observer receives metadata without application state or resume bytes. With a nil observer, the runtime creates no observation session, operation ID, or timestamps.
+
+```go
+import (
+    "log/slog"
+    "os"
+
+    graph "github.com/afterlune/luneGraph"
+    "github.com/afterlune/luneGraph/observe"
+)
+
+logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+options := graph.Options[int]{Observer: observe.NewSlog(logger)}
+result, err := runner.Start(ctx, "observed-run", 0, options)
+```
+
+`graph.ObserverFunc` also adapts a function taking `(context.Context, graph.Event)`. Delivery is synchronous and may be concurrent, so observers must be concurrency safe and return promptly. A slow observer adds latency and may affect the completion order of parallel callbacks. Each observer panic is isolated; graph failure policies and checkpoint commit points remain unchanged. The logging adapter reports public calls at Info, callbacks and Store calls at Debug, and errors at Error. A nil logger uses `slog.Default()`.
+
+An `OperationID` correlates one `Start`, `Resume`, or `Recover` call within the current process. `RunID` and persisted `CallID` identify logical node, join, and continuation-apply callbacks across replay; decode events have no CallID. Nodes and continuations in subgraphs use qualified names. A finished callback event reports what that callback returned before routing validation or persistence. For write events, `Revision` is the attempted revision and any Store error may mean the commit outcome is uncertain, except `ErrConflict`, which guarantees no write. Use the Store to confirm recovery state. Events are best effort, are not stored, and can be incomplete after a crash. Error messages remain application-provided and may contain user data.
+
+Add `-observe` to either durable example command to write JSON events to stderr. Its result line remains on stdout:
+
+```sh
+go run ./examples/durable start -db runs.db -run observed -observe
+go run ./examples/durable resume -db runs.db -run observed -value 3 -observe
+```
+
+The [execution contract](docs/execution-semantics.md#observation) defines event ordering, revision fields, and timing boundaries.
 
 ## API migration
 

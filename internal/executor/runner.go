@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/afterlune/luneGraph/internal/model"
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 const defaultMaxSteps = 10_000
@@ -103,13 +106,24 @@ func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], sto
 }
 
 // Start creates a new execution and runs until completion, waiting, or budget exhaustion.
-func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Options[S]) (Result[S], error) {
+func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Options[S]) (result Result[S], retErr error) {
 	var empty Checkpoint[S]
 	if r == nil {
 		return resultWith(empty, StatusFailed), errors.New("runner is nil")
 	}
 	if ctx == nil {
 		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
+	}
+	obs := observation.New(opts.Observer, r.id, runID)
+	if obs != nil {
+		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
+		defer func() {
+			// A Store panic is not a returned result and leaves spans incomplete.
+			if result.Status != "" {
+				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+			}
+		}()
+		opts.Store = observation.WrapStore(opts.Store, obs)
 	}
 	if !validName(runID) {
 		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
@@ -131,7 +145,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Opt
 			return resultWith(empty, errorStatus(err)), err
 		}
 	}
-	return r.drive(ctx, s, opts)
+	return r.drive(ctx, s, opts, obs)
 }
 
 func (r *Runner[S]) scope(declared FailureScope, opts Options[S]) FailureScope {

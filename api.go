@@ -10,6 +10,11 @@ import (
 )
 
 type (
+	Event             = model.Event
+	EventOperation    = model.EventOperation
+	EventPhase        = model.EventPhase
+	Observer          = model.Observer
+	ObserverFunc      = model.ObserverFunc
 	Action            = model.Action
 	ActivationGroup   = model.ActivationGroup
 	CallInfo          = model.CallInfo
@@ -38,6 +43,19 @@ type (
 )
 
 const (
+	OperationStart          = model.OperationStart
+	OperationResume         = model.OperationResume
+	OperationRecover        = model.OperationRecover
+	OperationNode           = model.OperationNode
+	OperationJoin           = model.OperationJoin
+	OperationDecode         = model.OperationDecode
+	OperationApply          = model.OperationApply
+	OperationCreate         = model.OperationCreate
+	OperationLoad           = model.OperationLoad
+	OperationCompareAndSwap = model.OperationCompareAndSwap
+	PhaseStarted            = model.PhaseStarted
+	PhaseFinished           = model.PhaseFinished
+
 	ActionContinue     = model.ActionContinue
 	ActionWait         = model.ActionWait
 	ActionEndBranch    = model.ActionEndBranch

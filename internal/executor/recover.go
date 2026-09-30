@@ -3,18 +3,31 @@ package executor
 import (
 	"context"
 	"errors"
+
+	"github.com/afterlune/luneGraph/internal/model"
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 // Recover loads the latest checkpoint for runID from opts.Store and advances it.
 // A terminal run is returned without executing callbacks or writing another
 // revision. A failed terminal returns ErrRunFailed; inputs return ErrRunCompleted.
-func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, opts Options[S]) (Result[S], error) {
+func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, opts Options[S]) (result Result[S], retErr error) {
 	var empty Checkpoint[S]
 	if ctx == nil {
 		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
 	}
 	if r == nil {
 		return resultWith(empty, StatusFailed), errors.New("runner is nil")
+	}
+	obs := observation.New(opts.Observer, r.id, runID)
+	if obs != nil {
+		span := obs.Begin(ctx, model.Event{Operation: model.OperationRecover})
+		defer func() {
+			if result.Status != "" {
+				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+			}
+		}()
+		opts.Store = observation.WrapStore(opts.Store, obs)
 	}
 	if !validName(runID) {
 		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
@@ -51,5 +64,5 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 		}
 		return resultWith(checkpoint, statusOf(checkpoint, false)), nil
 	}
-	return r.resumeValidated(ctx, checkpoint, inputs, opts)
+	return r.resumeValidated(ctx, checkpoint, inputs, opts, obs)
 }

@@ -136,6 +136,86 @@ to retry. Rebuild the same graph with a compatible `MachineID` when resuming in
 a new process. An incompatible graph definition needs a new machine ID or an
 application-managed migration.
 
+## Observation
+
+`Options.Observer` receives a `graph.Event` at `PhaseStarted` and
+`PhaseFinished` for each observed operation. It is optional and applies only to
+the current public call; the compiled Runner does not retain it. With a nil
+observer, the runtime does not create an observation session, allocate an
+operation ID, or read clocks.
+
+| Operation | Observed boundary |
+| --- | --- |
+| `OperationStart`, `OperationResume`, `OperationRecover` | One public call, including validation, cancellation, and draining workers |
+| `OperationNode`, `OperationJoin` | The callback, including panic conversion, before accepting its outcome |
+| `OperationDecode`, `OperationApply` | One continuation decoder or typed apply callback |
+| `OperationCreate`, `OperationLoad`, `OperationCompareAndSwap` | One actual call to the configured Store |
+
+Public calls begin observation after checking that their Runner and context are
+non-nil. Other validation errors still produce a public finished event with the
+returned status and error. Internal recovery does not produce a nested public
+`Resume` event. Recovering a terminal run produces a public pair and a Load
+pair, without callback or write events.
+
+Every event from one public call has the same process-local `OperationID`,
+RunID, and compiled MachineID. OperationID is not persisted and must not be
+used as a cross-process identifier. Node, join, and continuation apply events
+use the callback's persisted CallID; replay uses that ID again in a new public
+operation. InvocationID identifies the path. Decode events have InvocationID
+and Continuation but no CallID. Subgraph node and continuation names are
+qualified as in the checkpoint.
+
+Revision means the following:
+
+- A public start event has revision zero for Start and Recover, or the supplied
+  reference revision for Resume. Its finished event has the returned checkpoint
+  revision, even when the call returns an error.
+- Callback events have the revision of the checkpoint used to schedule or
+  apply the callback, before committing its outcome.
+- Create and CAS events have the attempted write revision. Load starts at zero
+  and finishes with the loaded revision on success, or zero on error.
+
+Status is populated only on public finished events. Action is populated only
+on node finished events and describes the callback's returned decision before
+transition validation. Err is the actual callback or Store error, or the public
+call's returned error. A locally handled callback error can therefore coexist
+with a successful public return. A successful callback event does not mean that
+its outcome passed validation or committed. A Store error does not establish
+whether its write committed, except for the documented no-write guarantee of
+ErrConflict. Confirm execution position through the Store. Errors are shared
+with execution handling; observers must treat them and referenced objects as
+read-only.
+
+Delivery is synchronous on the operation's goroutine. One operation starts
+before it finishes, and a public call finishes after all its running callbacks
+have returned and their events have been delivered. Different workers and
+different public calls can deliver events concurrently and have no total
+ordering. Canceled or superseded callbacks still produce finished events if
+they return, even when their results are discarded. A slow observer may change
+the arrival order of parallel results.
+
+Observers must be concurrency safe, return promptly, and avoid recursively
+driving the same execution. Each observation panic is recovered independently
+and does not become a Failure or alter the callback's returned value. There is
+no observer timeout or asynchronous queue. Events retain the operation's
+context, including cancellation; observers must decide how to report canceled
+operations themselves.
+
+Time is the event creation time. Duration uses the monotonic clock and excludes
+delivery of that operation's started and finished events. Public-call duration
+includes nested event delivery and worker draining. Events contain no state,
+checkpoint objects, or payload bytes; their error messages are still supplied
+by application callbacks or stores. Events are transient and can be incomplete
+after a crash or an unrecovered panic. Store panics remain outside the callback
+panic boundary and do not produce misleading finished events.
+
+The optional `observe.NewSlog` adapter uses Info for public calls, Debug for
+callbacks and Store calls, and Error for any event carrying an error. It checks
+`Logger.Enabled` before constructing attributes. A nil logger selects
+`slog.Default()` at construction. Its handler must support concurrent calls.
+The adapter adds no persistence and makes no delivery guarantee beyond the
+Observer contract.
+
 ## Store contract
 
 `Store[S]` implementations follow these rules:

@@ -26,6 +26,7 @@ The benchmarks report Go's `ns/op`, `B/op`, and `allocs/op` values. Graph compil
 | `BenchmarkJSONCheckpointEncoding` | Compares `json.Marshal` with checkpoint JSON append into a reused destination buffer for a width-32 checkpoint containing 16-entry maps. |
 | `BenchmarkDurableSequentialExecution` | Repeatedly recovers one persisted loop run with step budgets 1 and 16, using memory and SQLite. The state contains a 16-entry map. |
 | `BenchmarkDurableFanoutJoin` | Repeatedly recovers one persisted fan-out/join loop at widths 2, 8, and 32, with serial and default concurrency, using memory and SQLite. The state contains a 16-entry map. |
+| `BenchmarkObservation` | Disabled, no-op, and Debug-level JSON slog observers on 16-step sequential execution, width-32 fan-out/join, and durable 16-step recovery with memory and SQLite. State is a scalar. |
 
 The durable execution benchmarks create their initial run before timing and repeatedly call `Recover` with the same run ID. Every executed node outcome is persisted through the normal checkpoint path. The loop leaves a bounded checkpoint row with ready work after each measured call, so iterations measure recovery and execution without growing the number of stored runs. Each case loads the final checkpoint after timing and checks it against the returned result.
 
@@ -90,6 +91,63 @@ For focused profiles, pass `-cpuprofile` and `-memprofile` to a single benchmark
 The executor reuses an alternate checkpoint-structure buffer while a run advances. This can retain slice capacity up to the run's peak invocation and group counts until the call returns. After each successful commit, the old buffer's state fields are cleared so it does not keep prior application state alive. The copy remains shallow for user state, matching `model.Copy`; it does not deep-copy application state.
 
 Invocation lookup uses a temporary ID index when a checkpoint has more than eight invocations. Shorter lists use a direct scan to avoid map setup cost. The index follows fan-out insertion and group compaction, is rebuilt when a saved execution resumes, and is never written to a checkpoint.
+
+## Observation cost
+
+`BenchmarkObservation` lives in `internal/observationtest`, keeping observer
+integration checks and their benchmark fixtures together. Graph compilation,
+logger construction, Store setup, and the durable seed run are outside timing.
+The durable cases reuse one run and check both state progress and the final
+stored checkpoint. The fan-out case ends its parent branch at the join; the
+existing root fan-out benchmark also runs a final node, so their scores are not
+directly comparable. The slog case enables Debug events and writes JSON to
+`io.Discard`; it measures formatting and delivery, not filesystem or network I/O.
+
+```sh
+go test -run '^$' -bench '^BenchmarkObservation$' -benchmem -benchtime=1s -count=5 -cpu '1,8' ./internal/observationtest
+```
+
+The following short diagnostic sample was collected on 2026-09-30 with Go
+1.26.5, Windows/amd64, and an AMD Ryzen 7 6800H. It uses `-benchtime=100ms
+-count=3 -cpu=1`; numbers are medians. Short SQLite samples have only two or
+three iterations and are not suitable for drawing latency conclusions.
+
+| Workload | Observer | ns/op | B/op | allocs/op |
+| --- | --- | ---: | ---: | ---: |
+| Sequential, 16 steps | Disabled | 33,163 | 5,856 | 118 |
+| Sequential, 16 steps | No-op | 33,519 | 6,176 | 119 |
+| Sequential, 16 steps | JSON slog | 156,264 | 33,364 | 186 |
+| Fan-out/join, width 32 | Disabled | 134,216 | 35,380 | 334 |
+| Fan-out/join, width 32 | No-op | 146,157 | 35,972 | 335 |
+| Fan-out/join, width 32 | JSON slog | 474,890 | 92,785 | 474 |
+| Durable recovery, memory | Disabled | 52,835 | 9,038 | 159 |
+| Durable recovery, memory | No-op | 61,289 | 9,382 | 161 |
+| Durable recovery, memory | JSON slog | 327,076 | 49,895 | 279 |
+| Durable recovery, SQLite | Disabled | 37,241,167 | 27,442 | 573 |
+| Durable recovery, SQLite | No-op | 38,142,600 | 27,786 | 575 |
+| Durable recovery, SQLite | JSON slog | 37,463,267 | 68,400 | 694 |
+
+Observation allocates one session per public call and a Store wrapper when
+persistence is configured. No-op observation therefore adds one allocation
+without a Store and two with a Store in these cases. The enabled node worker
+also captures observation metadata, increasing its closure size. Debug JSON
+logging has its own allocation and formatting cost. Observers are synchronous;
+their latency can affect the completion order of parallel callbacks.
+
+Disabled-observer checks compared the existing benchmarks against commit
+`ed8ac2f` on the same machine and toolchain, using three 100ms runs with one P:
+
+| Existing workload | Before B/op | After B/op | Before / after allocs/op |
+| --- | ---: | ---: | ---: |
+| Sequential, 16 steps | 5,856 | 5,856 | 118 / 118 |
+| Fan-out/join, width 32, serial | 35,617 | 35,617 | 338 / 338 |
+| Durable sequential, memory, 16 steps | 41,511 | 41,511 | 291 / 291 |
+| Durable sequential, SQLite, 16 steps | 63,432 | 63,432 | 1,207 / 1,207 |
+
+The root sequential and fan-out checks also ran with eight Ps; allocation
+counts remained unchanged. These short samples establish allocation behavior,
+not a latency guarantee. Keep the repeatable commands above for longer timing
+comparisons on an otherwise idle machine.
 
 ## Reliability checks
 

@@ -58,6 +58,7 @@ func TestIndependentModuleDurableExample(t *testing.T) {
 	if got := runCommand(t, consumerDir, binary, "resume", "-db", dbPath, "-run", "demo", "-value", "3"); got != "status=completed run=demo value=3\n" {
 		t.Fatalf("resume output = %q", got)
 	}
+	verifyObservedExample(t, consumerDir, binary, dbPath)
 }
 
 func runCommand(t *testing.T, dir, program string, args ...string) string {
