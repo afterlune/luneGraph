@@ -232,20 +232,33 @@ and fixtures are no longer kept alive at this profile boundary, and heap
 profiles are sampled. This is not a live-Store footprint or proof of leak freedom;
 the population GC measurements and existing soaks address different lifetimes.
 
-The first bounded executor optimization candidate is invocation compaction in
-`removeInvocations`, rather than another public interface or persistence mode.
-In the nested profile its 1.38s cumulative samples include 600ms at position-map
-repopulation and 310ms at survivor position lookups. The current code clears
-and rebuilds every position after each group settlement, including unchanged
-prefix positions. Investigate reusing those positions and updating only moved
-survivors, using the existing invocation index and arrays. This is a hypothesis
-for the next change, not a measured gain in this one.
+### Invocation compaction follow-up
 
-A follow-up must preserve invocation order, numeric ready selection, the
-small-index threshold, cleared removed references, group-failure deletion,
-immutable returned checkpoints, and committed-prefix/replay semantics. Compare
-nested 8/32/128 groups and wide 32/128/512 fan-out, plus the sequential/durable
-controls. This stage deliberately does not implement the candidate.
+The bounded `removeInvocations` optimization reuses the existing position map:
+it deletes entries for removed IDs and updates only survivors that move during
+slice compaction. Invocation order, numeric ready selection, the small-index
+threshold, removed-reference clearing, checkpoint ownership, and replay
+semantics remain covered by the executor tests.
+
+The baseline and candidate capacity-test binaries were built from commit
+`f1be45a` and its working-tree change on 2026-09-30, using Go 1.26.5 on
+Windows/amd64 with an AMD Ryzen 7 6800H. Each selected benchmark ran five
+one-second samples at `-cpu=8`; the order was reversed for the second batch.
+
+| Workload | Baseline median, batch 1 | Candidate median, batch 1 | Baseline median, batch 2 | Candidate median, batch 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Nested groups 128, concurrency 8 | 27.942 ms/op | 26.815 ms/op (-4.0%) | 27.889 ms/op | 27.008 ms/op (-3.2%) |
+| Fan-out 512, concurrency 8 | 8.339 ms/op | 7.438 ms/op (-10.8%) | 7.610 ms/op | 7.876 ms/op (+3.5%) |
+
+The nested-group median was lower in both run orders, suggesting a 3–4% gain
+for this workload on this host. Fan-out results varied in direction between
+batches; the ranges overlapped in the second batch, so they do not establish a
+separate gain or a material regression. Bytes and allocations per operation
+were effectively unchanged.
+A sampled candidate profile still attributes about 20% cumulative CPU to
+`removeInvocations`; profile percentages are noisy and map updates for moved
+survivors and numeric-order lookups remain. These measurements are evidence for
+this bounded change, not a machine-independent threshold.
 
 Structural copying is the next executor CPU cost to monitor; avoiding full
 copies would require an ownership argument, not just a profile percentage.

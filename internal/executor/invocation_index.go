@@ -87,16 +87,18 @@ func appendInvocation[S any](index *invocationIndex, checkpoint *Checkpoint[S], 
 
 func removeInvocations[S any](index *invocationIndex, checkpoint *Checkpoint[S], remove map[string]bool) {
 	positions := index.positions
-	clear(positions)
 	invocations := checkpoint.Invocations
 	write := 0
 	for read := range invocations {
 		invocation := invocations[read]
 		if remove[invocation.ID] {
+			if positions != nil {
+				delete(positions, invocation.ID)
+			}
 			continue
 		}
 		invocations[write] = invocation
-		if positions != nil {
+		if positions != nil && write != read {
 			positions[invocation.ID] = write
 		}
 		write++

@@ -44,13 +44,13 @@ separate CPU/memory profiles and a sampled shared-Store lock/block profile
 distinguish executor work, application Clone, serialization, and persistence.
 No runtime code or persistence settings changed in that measurement stage.
 
-The next bounded executor candidate is invocation compaction: nested 128-group
-profiling attributes 18.60% cumulative sampled CPU to `removeInvocations`,
-including repopulation and lookup of survivor positions after each settlement.
-Investigate reusing unchanged positions within the existing invocation index;
-the measurement does not establish an optimization benefit. Preserve ordered
-scheduling, removed-reference cleanup, checkpoint ownership, and replay/CAS
-semantics, and compare both nested workloads and small/durable controls.
+The bounded follow-up reuses unchanged positions in the existing invocation
+index during compaction. Two paired benchmark batches on the same Windows/AMD
+host showed a 3–4% lower median for nested 128-group execution; width-512
+fan-out results varied in direction and had overlapping ranges. Allocation
+counts were effectively unchanged. The [capacity record](capacity.md#invocation-compaction-follow-up)
+contains the sample medians and limits of this comparison. This is local
+evidence, not a portable performance target or CI gate.
 
 Memory durable allocation volume is dominated by application map Clone
 (81.97% in the width-32 profile). SQLite's CAS path accounts for 93.73% of
