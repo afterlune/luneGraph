@@ -39,6 +39,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 	running := make(map[string]context.CancelFunc)
 	s := start
 	index := newInvocationIndex(s)
+	var progress groupProgress
 	var spare Checkpoint[S]
 	used := 0
 	cursor := s.ScheduleCursor
@@ -156,7 +157,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		candidate.ScheduleCursor = cursor
 		if !ended {
-			if err := r.settleGroups(ctx, &candidate, &index, opts.FailureOverride, obs); err != nil {
+			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); err != nil {
 				if terminalFailureRecord(candidate) != nil {
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
 					drain()
