@@ -8,6 +8,9 @@ The project uses three engineering standards:
 
 These standards do not set machine-independent latency targets or a CI performance gate. Benchmark results depend on hardware, operating system, filesystem, Go version, and SQLite settings.
 
+For larger definitions, wide fan-out, paused populations, shared executions,
+and manual sustained execution, see [the capacity baseline](capacity.md).
+
 ## Run the benchmarks
 
 ```sh
