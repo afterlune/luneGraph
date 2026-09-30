@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 type component[S any] struct {

@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestSchedulerCountersDoNotWrap(t *testing.T) {

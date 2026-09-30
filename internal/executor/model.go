@@ -1,6 +1,6 @@
 package executor
 
-import "lune-graph/internal/model"
+import "github.com/afterlune/luneGraph/internal/model"
 
 type (
 	Action              = model.Action

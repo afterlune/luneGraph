@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"lune-graph/internal/executor"
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/executor"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 // Graph is a mutable builder. Compile copies its definition into a Runner.

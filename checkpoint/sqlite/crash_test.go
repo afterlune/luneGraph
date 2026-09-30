@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/sqlite"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/sqlite"
 )
 
 func crashRunner(t *testing.T, marker string, block bool, calls chan<- graph.CallInfo) *graph.Runner[int] {

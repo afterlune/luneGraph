@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"testing"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/memory"
-	"lune-graph/checkpoint/sqlite"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/memory"
+	"github.com/afterlune/luneGraph/checkpoint/sqlite"
 )
 
 type durableBenchmarkState struct {

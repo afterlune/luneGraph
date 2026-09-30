@@ -1,4 +1,4 @@
-module lune-graph
+module github.com/afterlune/luneGraph
 
 go 1.26.5
 

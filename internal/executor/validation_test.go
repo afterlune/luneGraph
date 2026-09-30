@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func executorTestValidationFixtures(t *testing.T) (waitingRunner *Runner[int], waiting Checkpoint[int], fanoutRunner *Runner[int], fanout Checkpoint[int], completed Checkpoint[int], failed Checkpoint[int]) {

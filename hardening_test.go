@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestCallbackPanicPolicies(t *testing.T) {

@@ -1,6 +1,6 @@
 package sqlite
 
-import graph "lune-graph"
+import graph "github.com/afterlune/luneGraph"
 
 const maxPooledPayloadCapacity = 1 << 20
 

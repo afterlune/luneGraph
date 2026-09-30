@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestSubgraphEnterAndReturn(t *testing.T) {

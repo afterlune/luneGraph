@@ -2,13 +2,21 @@
 
 `lune-graph` is a typed, resumable and durable graph execution runtime for Go. A graph defines nodes and allowed edges. Each execution owns an evolving state and can loop, branch, wait for input, and resume from a checkpoint. The runtime defines execution semantics; applications define the state and the meaning of each node. The core uses the Go standard library; the optional SQLite store uses `modernc.org/sqlite`.
 
-The public API stays in the `lune-graph` package. Its implementation is organized under `internal/model`, `internal/definition`, and `internal/executor`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`.
+The public API stays in the `graph` package, imported from `github.com/afterlune/luneGraph`. Its implementation is organized under `internal/model`, `internal/definition`, and `internal/executor`; persistence APIs and stores live in `checkpoint`, `checkpoint/memory`, and `checkpoint/sqlite`.
 
 The [execution contract](docs/execution-semantics.md) specifies commit points, crash recovery, Store errors, and the boundary between graph state and external side effects. LLMs, agents, and data modalities are application concerns built on this runtime.
 
 The project's performance, concurrency, and reliability standards and benchmark commands are documented in [docs/performance.md](docs/performance.md).
 
 This project is licensed under the [Apache License, Version 2.0](LICENSE).
+
+## Install
+
+Requires Go 1.26.5 or newer. Add the module to your Go project:
+
+```sh
+go get github.com/afterlune/luneGraph@latest
+```
 
 ## A small graph
 
@@ -19,7 +27,7 @@ import (
 	"context"
 	"fmt"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func main() {
@@ -134,6 +142,21 @@ When configured, the runner saves the initial checkpoint and each accepted trans
 
 Running nodes remain pending in persisted checkpoints until their result is committed. A crash, cancellation, or save failure can therefore cause a callback to run again after recovery. Each node execution, continuation application, and join merge receives a `CallInfo.CallID` that is committed before the callback can start and reused if that logical callback is replayed. New loop visits, continuation applications, and fan-out joins receive new IDs. Use an application-specific namespace together with `RunID` and `CallID` as a deduplication key. This supports at-least-once handling; it does not make external side effects exactly once. Clone functions and continuation decoders should not perform side effects. Cancellation asks running nodes to stop through `context.Context` and waits for them to return.
 
+## Run the durable example
+
+From a checkout of this repository, run these commands in separate processes:
+
+```sh
+go run ./examples/durable start -db runs.db -run demo
+# status=waiting run=demo
+go run ./examples/durable resume -db runs.db -run demo -value 3
+# status=completed run=demo value=3
+```
+
+The [example](examples/durable) uses a caller-defined struct state and a typed integer continuation. `start` persists a waiting invocation and exits. `resume` opens the same SQLite database, finds the waiting invocation, and calls `Recover` with its input. Use a new run ID to start another execution; starting the same run twice returns a conflict. The database's parent directory must already exist.
+
 ## API migration
 
-`Snapshot[S]`, `Result.Snapshot`, `ErrInvalidSnapshot`, and `SnapshotFormatVersion` are now `Checkpoint[S]`, `Result.Checkpoint`, `ErrInvalidCheckpoint`, and `CheckpointFormatVersion`. Callback signatures now include `graph.CallInfo`; update node, join, and continuation handlers. Checkpoint format 2 rejects version-1 snapshots, which need an application-managed migration or the old runtime. Import the in-memory store from `lune-graph/checkpoint/memory`; missing runs return `checkpoint.ErrNotFound`.
+The module path is now `github.com/afterlune/luneGraph`. Replace imports of `lune-graph` and its subpackages with the GitHub path. The root package remains named `graph`; this import migration does not change checkpoint format or require a new `MachineID`.
+
+`Snapshot[S]`, `Result.Snapshot`, `ErrInvalidSnapshot`, and `SnapshotFormatVersion` are now `Checkpoint[S]`, `Result.Checkpoint`, `ErrInvalidCheckpoint`, and `CheckpointFormatVersion`. Callback signatures now include `graph.CallInfo`; update node, join, and continuation handlers. Checkpoint format 2 rejects version-1 snapshots, which need an application-managed migration or the old runtime. Import the in-memory store from `github.com/afterlune/luneGraph/checkpoint/memory`; missing runs return `checkpoint.ErrNotFound`.

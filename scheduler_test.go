@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestReadyBranchesRotateAcrossStoredResumes(t *testing.T) {

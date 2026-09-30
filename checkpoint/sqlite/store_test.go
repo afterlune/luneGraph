@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/checkpoint/sqlite"
-	"lune-graph/internal/storetest"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/checkpoint/sqlite"
+	"github.com/afterlune/luneGraph/internal/storetest"
 )
 
 type state struct{ Values map[string]int }

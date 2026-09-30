@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 // FuzzCheckpointValidation exercises Resume's boundary with malformed position data.

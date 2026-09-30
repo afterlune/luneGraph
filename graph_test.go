@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint/memory"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint/memory"
 )
 
 func node[S any](t *testing.T, g *graph.Graph[S], name string, run graph.Node[S]) {

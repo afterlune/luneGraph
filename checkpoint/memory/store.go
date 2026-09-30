@@ -8,9 +8,9 @@ import (
 	"math"
 	"sync"
 
-	graph "lune-graph"
-	"lune-graph/checkpoint"
-	"lune-graph/internal/model"
+	graph "github.com/afterlune/luneGraph"
+	"github.com/afterlune/luneGraph/checkpoint"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 // Store owns independent copies of its checkpoints. It is safe for concurrent

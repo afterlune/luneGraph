@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"lune-graph/internal/model"
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
 func TestGraphBuilderValidation(t *testing.T) {

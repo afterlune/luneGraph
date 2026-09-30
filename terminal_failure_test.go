@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	graph "lune-graph"
+	graph "github.com/afterlune/luneGraph"
 )
 
 func TestExecutionFailureIsPersisted(t *testing.T) {
