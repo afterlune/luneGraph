@@ -11,6 +11,7 @@ import (
 )
 
 func TestSharedObserverRunnerAndStore(t *testing.T) {
+	var merges sync.Map
 	g := graph.New[int]("fork")
 	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
 		return graph.To(s, "a", "b"), nil
@@ -21,8 +22,10 @@ func TestSharedObserverRunnerAndStore(t *testing.T) {
 		})
 		edge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
-		return values[0] + values[1], nil
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, values []int) (int, error) {
+		sum := values[0] + values[1]
+		merges.Store(call.RunID, sum)
+		return sum, nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +37,8 @@ func TestSharedObserverRunnerAndStore(t *testing.T) {
 	for i := range 16 {
 		workers.Go(func() {
 			result, err := r.Start(context.Background(), fmt.Sprintf("shared-%d", i), i, graph.Options[int]{Store: store, Observer: log, MaxConcurrency: 2})
-			if err != nil || result.Status != graph.StatusCompleted || len(result.Checkpoint.Terminals) != 1 || result.Checkpoint.Terminals[0].State != 2*(i+1) {
+			merged, ok := merges.Load(result.Checkpoint.RunID)
+			if err != nil || result.Status != graph.StatusCompleted || !ok || merged != 2*(i+1) || result.Checkpoint.Final != nil || len(result.Checkpoint.Invocations) != 0 {
 				t.Errorf("run %d: %+v, %v", i, result, err)
 			}
 		})
@@ -123,7 +127,7 @@ func TestNodeObserverDeliveryIsConcurrent(t *testing.T) {
 	})
 	for _, name := range []string{"a", "b"} {
 		node(t, g, name, func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
-			return graph.EndBranch(s), nil
+			return graph.EndBranch[int](), nil
 		})
 		edge(t, g, "fork", name)
 	}

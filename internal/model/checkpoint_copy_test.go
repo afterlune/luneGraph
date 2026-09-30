@@ -18,8 +18,10 @@ func referenceCheckpointCopy[S any](src Checkpoint[S]) Checkpoint[S] {
 	for i := range out.Groups {
 		out.Groups[i].Children = append([]string(nil), src.Groups[i].Children...)
 	}
-	out.Terminals = append([]Terminal[S](nil), src.Terminals...)
-	out.Failures = append([]Failure(nil), src.Failures...)
+	if src.Failure != nil {
+		failure := *src.Failure
+		out.Failure = &failure
+	}
 	if src.Final != nil {
 		value := *src.Final
 		out.Final = &value
@@ -42,7 +44,7 @@ func checkCopySequence[S any](t *testing.T, state func(int) S) {
 	var dst Checkpoint[S]
 	for step, size := range []int{0, 1, 8, 9, 128, 512, 130, 9, 8, 0, 512, 1, 128, 0} {
 		final := state(step)
-		src := Checkpoint[S]{FormatVersion: 2, RunID: "copy", MachineID: "typed", Revision: uint64(step + 1), Steps: uint64(step), NextID: 1000, ScheduleCursor: 77, Completed: step%2 == 0, Final: &final}
+		src := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: "copy", MachineID: "typed", Revision: uint64(step + 1), Steps: uint64(step), NextID: 1000, ScheduleCursor: 77, Completed: step%2 == 0, Final: &final}
 		for i := range size {
 			inv := Invocation[S]{ID: fmt.Sprintf("i%d", i+1), CallID: fmt.Sprintf("c%d", i+1), Node: "node", State: state(i), Status: InvocationReady, GroupID: "g1", ChildGroupID: "g2", BranchIndex: i, Continuation: "advance"}
 			switch rng.IntN(4) {
@@ -57,8 +59,7 @@ func checkCopySequence[S any](t *testing.T, state func(int) S) {
 		}
 		if size > 0 {
 			src.Groups = []ActivationGroup{{ID: "g1", CallID: "c100", Source: "fork", ParentID: "i1", JoinNode: "join", Children: []string{"i2", "i3"}}}
-			src.Terminals = []Terminal[S]{{InvocationID: "i9", State: state(9)}}
-			src.Failures = []Failure{{InvocationID: "i10", Node: "node", Scope: FailGroup, Message: "failure", PanicStack: "stack"}}
+			src.Failure = &Failure{InvocationID: "i10", Node: "node", Message: "failure", PanicStack: "stack"}
 		}
 		oldInv, oldGroups := dst.Invocations, dst.Groups
 		oldRoutes := make([][]string, len(oldInv))

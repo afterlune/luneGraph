@@ -48,8 +48,8 @@ func TestSubgraphCanBeEntryAndReturnWithoutOutputEndsBranch(t *testing.T) {
 	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final != nil {
 		t.Fatalf("subgraph entry result = %+v, %v", out, err)
 	}
-	if len(out.Checkpoint.Terminals) != 1 || out.Checkpoint.Terminals[0].State != 9 {
-		t.Fatalf("terminals = %+v", out.Checkpoint.Terminals)
+	if len(out.Checkpoint.Invocations) != 0 || out.Checkpoint.Final != nil {
+		t.Fatalf("terminals = %+v", out.Checkpoint.Invocations)
 	}
 }
 
@@ -59,7 +59,7 @@ func TestSubgraphTerminalActionsKeepTheirExecutionSemantics(t *testing.T) {
 			child := graph.New[int]("finish")
 			node(t, child, "finish", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 				if action == "branch" {
-					return graph.EndBranch(state + 1), nil
+					return graph.EndBranch[int](), nil
 				}
 				return graph.EndExecution(state + 1), nil
 			})
@@ -79,7 +79,7 @@ func TestSubgraphTerminalActionsKeepTheirExecutionSemantics(t *testing.T) {
 				t.Fatalf("result = %+v, after calls=%d, err=%v", out, afterCalls, err)
 			}
 			if action == "branch" {
-				if out.Status != graph.StatusCompleted || out.Checkpoint.Final != nil || len(out.Checkpoint.Terminals) != 1 || out.Checkpoint.Terminals[0].State != 5 {
+				if out.Status != graph.StatusCompleted || out.Checkpoint.Final != nil || len(out.Checkpoint.Invocations) != 0 {
 					t.Fatalf("branch result = %+v", out)
 				}
 			} else if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 5 {

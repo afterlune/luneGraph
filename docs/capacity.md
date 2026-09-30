@@ -7,7 +7,7 @@ it does not introduce agent concepts or claim a production capacity limit.
 All fixtures live in `internal/capacitytest`, separated into state, graph,
 Store, worker, benchmark, isolation, lifecycle, and measurement files. They use
 the public API, a strongly typed state containing a mutable 16-entry map, and
-a deep-copy Clone. No runtime API or persistence boundary changes are required.
+a deep-copy Clone. The fixtures require no workload-specific runtime APIs.
 
 ## Repeatable workloads
 
@@ -18,6 +18,7 @@ a deep-copy Clone. No runtime API or persistence boundary changes are required.
 | `BenchmarkCapacityGroups` | 8 / 32 / 128 nested groups, eight branches each; node concurrency 1 / 8 | Resume an immutable seed with all activations established and finish both levels of joins without a Store. Includes one extra root group. |
 | `BenchmarkCapacityShared` | 16 / 64 / 256 fixed runs; 1 / 8 / 32 caller workers | Advance every run once using one shared Runner, with no Store, Memory, or SQLite. |
 | `BenchmarkCapacityPaused` | Memory: 128 / 1,024 / 8,192; SQLite: 128 / 1,024 paused runs | Recover one run without input (`inspect`) or apply a typed continuation and advance it to the next wait (`advance`). |
+| `BenchmarkCapacityHistory` | 32 / 128 / 512 rounds; terminal / failure / mixed history; no Store / Memory / SQLite | Inspect one waiting execution after a fixed number of branch-outcome rounds, using Resume without a Store or Recover with a Store. |
 
 Graph construction, Store creation, initial checkpoints, and caller worker
 construction are outside timing. Assertions inside each measured operation
@@ -60,13 +61,25 @@ Ordinary `go test ./...` and `go test -race ./...` include:
 - Repeated fan-out, join, step budgets, typed continuation input, and recovery:
   Memory uses width 32 for 32 rounds; SQLite uses width eight for eight rounds.
   Checks cover branch isolation, CallIDs, revisions, cumulative steps, wait
-  boundaries, active groups, and retained terminal/failure history.
+  boundaries, active groups, and bounded failure metadata.
 - Bounded latency sample accounting and invalid soak duration settings.
 - Nine nested activations recovered across seven-step budgets with Memory and
   SQLite, node concurrency one/eight, ordered merges, and final state validation.
 - Continuation input batches with join-input Clone failure, rejected join CAS,
   or terminal join failure: prior inputs remain committed; continuation and join
   replay retain their CallIDs. These run against both Memory and SQLite.
+- History-producing loops with three branches: two end or fail locally while
+  one reaches the join and continues. Terminal-only, failure-only, and mixed
+  cases run for 128 rounds without a Store and with Memory, and 32 with SQLite,
+  at node concurrency one/eight. Every round consumes a five-node step budget;
+  every fourth round waits for typed continuation input. Checks cover exact
+  local-failure flags, independent mutable state, fresh CallIDs, revisions,
+  cumulative steps, compacted topology, and unchanged recovery without input.
+- 64 newly created and completed runs sharing a Runner and Store with eight
+  callers, for Memory and SQLite. All checkpoints remain loadable, returned
+  state mutation cannot change stored state, and repeated completed recovery
+  produces neither callbacks nor writes. Before/after GC heap and goroutine
+  counts are logged with the Store alive, without fixed resource thresholds.
 
 These supplement the crash, replay, uncertain acknowledgement, and cross-process
 CAS tests described in [performance.md](performance.md). They run in existing
@@ -75,25 +88,26 @@ CI jobs without a scheduled workflow or a fixed speed/heap threshold.
 ## Manual sustained execution
 
 `TestCapacitySoak` is skipped unless `LUNEGRAPH_SOAK_DURATION` is set. A malformed,
-zero, or negative Go duration fails. The duration applies **to each Store**.
+zero, or negative Go duration fails. The duration applies **to each workload/Store pair**.
 
 ```sh
-LUNEGRAPH_SOAK_DURATION=60s go test -run '^TestCapacitySoak$' -count=1 -v -timeout 5m ./internal/capacitytest
+LUNEGRAPH_SOAK_DURATION=60s go test -run '^TestCapacitySoak$' -count=1 -v -timeout 6m ./internal/capacitytest
 ```
 
 PowerShell:
 
 ```powershell
 $env:LUNEGRAPH_SOAK_DURATION = '60s'
-go test -run '^TestCapacitySoak$' -count=1 -v -timeout 5m ./internal/capacitytest
+go test -run '^TestCapacitySoak$' -count=1 -v -timeout 6m ./internal/capacitytest
 Remove-Item Env:LUNEGRAPH_SOAK_DURATION
 ```
 
-Choose `-timeout` to allow both Store intervals, fixture setup, draining, and
-recovery. The workload has 64 fixed runs, eight caller workers, width-eight
-fan-out, node concurrency eight, and a wait every four rounds. Each successful
-call commits one round: ten node outcomes plus any continuation acceptance.
-Joins have an outgoing edge, so history does not accumulate. The fixtures model
+Choose `-timeout` to allow all four workload/Store intervals, fixture setup, draining, and
+recovery. Both workloads have 64 fixed runs, eight caller workers, node concurrency
+eight, and a wait every four rounds. Fan-out uses eight branches and ten node
+outcomes per round. The mixed-outcome loop uses three branches: one joins, one
+ends, and one fails locally, for five node outcomes per round. Continuation
+acceptance commits separately. Both workloads maintain bounded topology. The fixtures model
 bounded checkpoint shape, not an application that retains every event or artifact.
 
 Resources are sampled every 500 ms and JSON progress is logged every five
@@ -108,7 +122,7 @@ and GC resource snapshots are taken with the Store still alive. Every checkpoint
 is then reloaded: cancellation or an uncertain acknowledgement may have left
 part of a round committed. A fresh context finishes only the current partial
 round (or a round whose continuation was already accepted). The final revision,
-state, wait boundary, group/history shape, and stored counters are verified.
+state, wait boundary, group shape and local-failure flags, and stored counters are verified.
 These post-drain recovery calls are excluded from measured throughput and
 latency. Resource snapshots after recovery retain the live Store explicitly.
 
@@ -116,7 +130,231 @@ Intentional retained checkpoints, harness bookkeeping, caches, and runtime
 initialization must be distinguished from transient leaks. A one-minute test
 does not prove leak freedom or production durability over days.
 
-## Measured sample
+## Retained history and completed executions
+
+`BenchmarkCapacityHistory` complements the fixed-shape soak with one looping
+execution that repeatedly ends or fails branches. Each round starts three independent branches:
+one reaches the join, while two call `EndBranch`, fail under `FailInvocation`,
+or do one of each. The join continues the healthy state; a boundary node waits
+every fourth round. There are five node outcomes per round, one join callback,
+and one continuation application after each previous wait. Active topology
+returns to one invocation and no groups; only the local-failure flag remains persisted.
+
+The benchmark seeds 32, 128, or 512 rounds at node concurrency eight, then
+repeatedly inspects the waiting run without input. No-Store uses `Resume`;
+Memory and SQLite use `Recover`. Setup, state validation, JSON-size measurement,
+and final full-checkpoint comparison are outside timing. Timed assertions
+check status, revision, and local-failure flags. This measures inspection recovery,
+including Load/decode or copying and validation, rather than continuation
+application, checkpoint commits, or cold-disk startup.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCapacityHistory$' -benchmem -benchtime=100ms -count=3 -cpu=8 ./internal/capacitytest
+go test -run '^(TestHistoryAcrossBudgetWaitAndRecovery|TestCompletedPopulationRetentionAndRecovery)$' -count=1 -v ./internal/capacitytest
+```
+
+The additional metrics are JSON `checkpoint-B`,
+`idle-goroutines`, and `seed-heap-B`. Unlike the older paused benchmark,
+`seed-heap-B` reports the **signed** process-wide GC heap difference. Negative
+values expose sampling/cache variation rather than being clipped. Persisted
+fixtures discard the returned checkpoint before the after-seed GC snapshot;
+the Store remains live. The reference checkpoint loaded afterward for result
+comparison is excluded from this snapshot. No-Store retains its one checkpoint.
+SQLite caches and buffer pools can contribute to Go heap; database files,
+native allocations, filesystem caches, and resident memory are excluded.
+
+The semantic tests verify bounded topology and the local-failure flag
+after every round. They verify independent maps, fresh callback IDs, exact
+revisions and steps, wait boundaries, and saved checkpoint equality. A no-input recovery
+preserves the waiting checkpoint and invokes no callback.
+
+Both built-in Stores retain completed runs as well as active ones.
+`TestCompletedPopulationRetentionAndRecovery` creates 64 distinct two-node
+executions through eight callers, mutates each returned final state to verify
+Store ownership, then reloads every run and recovers it twice. Observation
+checks that terminal recovery performs no callbacks or writes; all revisions
+remain three. This is a bounded creation/retention check, not a cleanup policy
+or a continuous-arrival capacity claim.
+
+In format 2, terminal history retained application state, including each mutable
+map; failure history retained IDs, messages, and any panic stacks. Keeping the whole
+history made checkpoint size grow with historical events even when active
+topology was bounded. Structural copying and Store cloning/encoding also processed
+that history as execution advanced. Completed runs add one retained checkpoint
+per distinct run ID. These were costs of the format-2 retention contract; format 3
+removes those histories.
+Executor indices and group progress are invocation-local and do not form a
+persistent history cache. Resource comparisons must account for these live
+records, Store/runtime caches, and harness data before attributing growth to
+transient leaks. The measurements do not establish leak freedom or a production
+capacity limit.
+
+### Format-3 comparison
+
+Measured on the same machine and Go version with the history benchmark command
+above: 81 samples, three repetitions, eight Ps. Median JSON sizes are identical
+across Stores. The remaining growth is from counter and ID digit lengths, not
+retained branch outcomes.
+
+| Outcomes | Checkpoint bytes, 32 rounds | 128 rounds | 512 rounds |
+| --- | ---: | ---: | ---: |
+| Terminal | 591 | 597 | 600 |
+| Failure | 590 | 596 | 599 |
+| Mixed | 590 | 596 | 599 |
+
+| Store / outcomes | Inspect us/op, 32 rounds | 128 rounds | 512 rounds | B/op at 512 | allocs/op at 512 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| None / terminal | 1.886 | 2.580 | 2.607 | 1,680 | 12 |
+| None / failure | 2.802 | 3.056 | 2.949 | 1,680 | 12 |
+| None / mixed | 3.122 | 2.902 | 2.689 | 1,680 | 12 |
+| Memory / terminal | 4.993 | 5.675 | 5.539 | 2,873 | 18 |
+| Memory / failure | 4.217 | 5.454 | 6.451 | 2,873 | 18 |
+| Memory / mixed | 6.103 | 4.680 | 3.925 | 2,873 | 18 |
+| SQLite / terminal | 79.935 | 63.702 | 59.788 | 6,675 | 106 |
+| SQLite / failure | 64.605 | 76.963 | 64.710 | 6,675 | 106 |
+| SQLite / mixed | 54.429 | 54.776 | 60.187 | 6,675 | 106 |
+
+At 512 rounds, Memory terminal inspection falls from 1,726.674 to 5.539 us/op,
+and SQLite from 10,784.167 to 59.788 us/op. The mixed checkpoint falls from
+171,634 to 599 bytes. These are short diagnostic samples; they show the removal
+of history copying/decoding costs, not production latency guarantees. SQLite
+terminal/512 spans 55.434–65.629 us/op; mixed/512 spans 52.272–69.683 us/op.
+
+Median signed seed-heap deltas across 32/128/512 rounds are 2,312–4,552 bytes
+without a Store, 1,624–2,600 bytes for Memory, and 9,504–19,368 bytes for SQLite.
+The fixture, pools, and GC sampling contribute to these process-wide values;
+SQLite file growth is excluded. Idle goroutines remain three without a Store
+or with Memory and four with SQLite. Completed run retention still adds one
+checkpoint per run ID; removing histories does not implement Store cleanup.
+
+### Control workloads
+
+The following command ran before and after the runtime change, with three
+repetitions at one and eight Ps (150 samples per version). Both runs passed.
+These workloads do not accumulate branch outcomes. Selected eight-P results
+are medians [observed range]; timing remains sensitive to scheduling and disk
+variation in the short intervals.
+
+```sh
+go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin|BenchmarkDurableSequentialExecution|BenchmarkDurableFanoutJoin)$' -benchmem -benchtime=100ms -count=3 -cpu '1,8' .
+```
+
+| Workload | Format 2 us/op [range] | Format 3 us/op [range] | Format 2 / 3 B/op | Format 2 / 3 allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| Sequential, 128 steps | 722.341 [715.651–766.280] | 548.286 [462.827–565.230] | 40,987 / 40,986 | 902 / 902 |
+| Fan-out, width 32, default | 181.382 [174.841–183.563] | 129.155 [120.996–142.704] | 38,107 / 38,105 | 339 / 339 |
+| Memory sequential, 16 steps | 137.404 [128.349–170.325] | 145.053 [123.011–155.538] | 42,210 / 42,207 | 291 / 291 |
+| SQLite sequential, 16 steps | 37,055.633 [36,494.167–38,612.067] | 43,819.367 [40,378.000–44,497.933] | 65,898 / 64,773 | 1,215 / 1,212 |
+| Memory fan-out, width 8, serial | 236.327 [227.812–247.342] | 314.802 [288.410–325.954] | 136,897 / 136,894 | 683 / 683 |
+| Memory fan-out, width 8, default | 321.265 [204.082–327.796] | 273.091 [254.487–280.458] | 137,589 / 137,583 | 683 / 683 |
+| SQLite fan-out, width 32, default | 92,849.650 [90,918.700–101,146.300] | 96,562.900 [84,255.650–98,474.650] | 1,500,940 / 1,490,180 | 38,613 / 38,604 |
+
+Eight-P median changes across all control cases range from -33.7% to +33.2%.
+Memory allocations remain effectively unchanged, while SQLite allocation counts
+vary by small amounts from buffer/iteration effects. These controls do not
+establish a uniform speedup or rule out small regressions; the decisive result
+is bounded checkpoint size and history-independent copying in the outcome loop.
+Raw samples were kept in temporary files outside the repository.
+
+### Format-3 sustained validation
+
+On 2026-09-30, both workloads ran for 60 seconds per Store, with 64 fixed runs,
+eight callers, node concurrency eight, Go 1.26.5, and GOMAXPROCS 16. All four
+passed cancellation drain, partial-round recovery, stored revision/counter
+checks, and bounded topology/local-failure checks. Successful calls exclude
+partial work committed by cancelled calls. Latencies are the last 1,024 calls;
+heap is process-wide with the Store kept alive.
+
+| Workload / Store | Successful calls | Calls/s | Rolling p50 / p95 ms | GC heap after seed / recovery bytes | Sampled peak heap bytes | Goroutines after recovery / sampled peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fanout/memory | 483,488 | 8,058.12 | 1.0905 / 1.9451 | 680,024 / 1,031,544 | 5,052,488 | 3 / 43 |
+| fanout/sqlite | 2,426 | 40.43 | 194.3225 / 293.9796 | 996,288 / 994,216 | 3,177,032 | 4 / 16 |
+| history/memory | 1,440,190 | 24,003.11 | 0.0000 / 0.6851 | 1,057,904 / 1,050,168 | 4,295,928 | 3 / 26 |
+| history/sqlite | 4,768 | 79.46 | 95.4144 / 163.4444 | 987,096 / 978,688 | 3,372,584 | 4 / 15 |
+
+The mixed Memory loop completed over a million rounds across its fixed runs
+without retaining branch history. Sampled heap fluctuated with allocation and
+GC; recovered heap and goroutine counts remained bounded in this one-minute
+sample. A reported zero-millisecond rolling p50 is an observed timer result,
+not a latency guarantee. SQLite still pays a transaction per committed outcome.
+These measurements do not establish leak freedom over days, a production
+capacity limit, or a cleanup policy for distinct completed run IDs.
+
+After the migration, `go test ./...`, `go test -race ./...`, `go vet ./...`,
+`gofmt`, and `git diff --check` passed. This includes crash/replay, CAS,
+uncertain acknowledgement, cancellation, local failures, and completed-run
+recovery checks.
+
+### Format-2 retention baseline (historical)
+
+Collected before the format-3 migration on 2026-09-30 with Go 1.26.5,
+Windows/amd64, and an AMD Ryzen 7 6800H, using the commands above. The benchmark completed 81 samples: 27 cases,
+three repetitions, eight Ps. Tables report medians. These short diagnostics
+establish exercised history sizes and costs, not performance targets.
+
+Each history mode retains two records per round. JSON sizes are identical
+across the three Store choices for the same history and round count.
+
+| History | Checkpoint bytes, 32 rounds | 128 rounds | 512 rounds |
+| --- | ---: | ---: | ---: |
+| Terminal | 15,752 | 61,804 | 247,887 |
+| Failure | 6,364 | 23,960 | 95,387 |
+| Mixed | 11,055 | 42,879 | 171,634 |
+
+| Store / history | Inspect us/op, 32 rounds | 128 rounds | 512 rounds |
+| --- | ---: | ---: | ---: |
+| None / terminal | 4.278 | 15.506 | 62.143 |
+| None / failure | 5.212 | 12.428 | 46.775 |
+| None / mixed | 5.241 | 12.422 | 45.868 |
+| Memory / terminal | 101.253 | 433.879 | 1,726.674 |
+| Memory / failure | 8.724 | 21.997 | 79.559 |
+| Memory / mixed | 51.991 | 202.531 | 1,001.094 |
+| SQLite / terminal | 934.664 | 3,078.867 | 10,784.167 |
+| SQLite / failure | 195.898 | 606.977 | 2,157.676 |
+| SQLite / mixed | 575.303 | 2,133.062 | 7,513.407 |
+
+The SQLite terminal/512 case has only 12 timed iterations per sample and an
+observed range of 9,873.858–15,606.767 us/op. No-Store terminal/32 ranges from
+2.979 to 7.916 us/op. Timing variation is reported rather than treated as a
+change in execution semantics. These inspection calls perform no commits.
+
+| Store / history | GC seed-heap delta bytes, 32 rounds | 128 rounds | 512 rounds |
+| --- | ---: | ---: | ---: |
+| None / terminal | 72,280 | 274,504 | 1,083,800 |
+| None / failure | 9,224 | 29,688 | 109,160 |
+| None / mixed | 39,720 | 151,720 | 604,760 |
+| Memory / terminal | 69,880 | 275,112 | 1,081,160 |
+| Memory / failure | 8,984 | 29,416 | 109,288 |
+| Memory / mixed | 39,544 | 151,864 | 606,336 |
+| SQLite / terminal | 73,600 | 126,112 | -7,752 |
+| SQLite / failure | 54,200 | 68,128 | 232,416 |
+| SQLite / mixed | 59,032 | 183,504 | 5,896 |
+
+The SQLite terminal/512 heap differences range from -13,336 to 3,784 bytes;
+failure/512 ranges from 225,264 to 366,064 bytes. SQLite's pool and runtime
+variation makes these values unsuitable for inferring bytes per persisted
+record. No-Store and Memory retain the history maps in Go heap; SQLite retains
+checkpoint bytes on disk. Idle goroutine counts are three for None/Memory and
+four for SQLite in every sample, independent of history size.
+
+At 512 rounds, Memory terminal inspection allocates a median 1,125,655 B/op
+and 4,117 allocs/op, versus failure inspection's 150,415 B/op and 20 allocs/op.
+SQLite terminal inspection allocates 2,734,357 B/op and 43,129 allocs/op,
+versus failure inspection's 478,401 B/op and 3,190 allocs/op. Terminal state
+deep copies and JSON decoding include the fixture's 16-entry maps.
+
+The separate 64-completed-run test logged GC heap increases of 75,584 bytes
+for Memory and 4,424 bytes for SQLite. Goroutines returned to the pre-worker
+counts of three and four respectively. All 64 rows/checkpoints remained
+loadable, and both repeated recoveries preserved each revision without
+callbacks or writes. These are single-run, process-wide heap samples; they
+exclude SQLite file growth and do not establish a per-run storage budget.
+Raw benchmark samples were kept in a temporary file outside the repository.
+At the format-2 fixture stage, full tests, race tests, vet, and formatting
+checks passed. The opt-in soak was not rerun at that stage. The format-3
+workload/Store soak results are recorded above.
+
+## Measured sample (format-2 baseline)
 
 Collected on 2026-09-30 with Go 1.26.5, Windows/amd64, and an AMD Ryzen 7 6800H.
 The benchmark command above completed 168 samples: 28 workloads, two
@@ -266,7 +504,7 @@ The samples establish exercised sizes, recovery costs, and optimization inputs.
 They do not establish a maximum number of executions, a distributed scheduler,
 a run lease, or an Agent OS production readiness claim.
 
-## Scheduling optimization sample
+## Scheduling optimization sample (format 2)
 
 The follow-up uses the same Go 1.26.5, Windows/amd64, Ryzen 7 6800H host.
 Baseline source is commit `fcf5732`. Both versions were measured serially;
@@ -396,7 +634,7 @@ The remaining optimization candidates are checkpoint structure copying and
 repeated group-readiness lookup. Their ownership and commit boundaries need
 separate designs; this change leaves both intact.
 
-## Group readiness optimization sample
+## Group readiness optimization sample (format 2)
 
 This comparison uses baseline commit `e29d65c` and the confirmed-terminal
 prefix implementation on 2026-09-30, Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H.
@@ -558,9 +796,9 @@ width-eight medians increased. There is no demonstrated persistence speedup.
 | Memory / 2 | 65,184 | 69,219 | 26,783 → 26,783 | 174 → 174 |
 | Memory / 8 | 232,221 | 225,487 | 137,584 → 137,580 | 683 → 683 |
 | Memory / 32 | 2,130,108 | 1,954,302 | 1,424,650 → 1,424,645 | 5520 → 5521 |
-| Sqlite / 2 | 9,662,138 | 9,402,637 | 40,468 → 40,418 | 678 → 678 |
-| Sqlite / 8 | 25,798,150 | 29,737,088 | 172,195 → 172,170 | 3505 → 3505 |
-| Sqlite / 32 | 83,322,667 | 82,773,167 | 1,493,938 → 1,500,338 | 38613 → 38616 |
+| SQLite / 2 | 9,662,138 | 9,402,637 | 40,468 → 40,418 | 678 → 678 |
+| SQLite / 8 | 25,798,150 | 29,737,088 | 172,195 → 172,170 | 3505 → 3505 |
+| SQLite / 32 | 83,322,667 | 82,773,167 | 1,493,938 → 1,500,338 | 38613 → 38616 |
 
 ### Profiles and sustained recovery
 
@@ -589,7 +827,7 @@ not a throughput comparison between versions. Full tests, race tests, vet,
 and the separate one-second-per-Store race soak passed. Benchmark binaries,
 raw samples, and profiles remain in the temporary directory, outside the repository.
 
-## Checkpoint structural copy optimization sample
+## Checkpoint structural copy optimization sample (format 2)
 
 The baseline is commit `53849a5`, compared on 2026-09-30 with Go 1.26.5,
 Windows/amd64, AMD Ryzen 7 6800H. Baseline test binaries were built from an
@@ -761,9 +999,9 @@ This does not establish a Store-wide persistence speedup.
 | Memory / 2 | 65,104 | 73,630 | 26,783 → 26,786 | 174 → 174 |
 | Memory / 8 | 242,042 | 242,772 | 137,591 → 137,585 | 683 → 683 |
 | Memory / 32 | 2,415,681 | 2,125,254 | 1,424,642 → 1,424,636 | 5520 → 5520 |
-| Sqlite / 2 | 9,395,017 | 9,190,348 | 40,462 → 40,512 | 678 → 678 |
-| Sqlite / 8 | 24,869,911 | 23,059,844 | 171,802 → 171,528 | 3504 → 3504 |
-| Sqlite / 32 | 89,083,233 | 80,756,033 | 1,489,482 → 1,500,418 | 38613 → 38618 |
+| SQLite / 2 | 9,395,017 | 9,190,348 | 40,462 → 40,512 | 678 → 678 |
+| SQLite / 8 | 24,869,911 | 23,059,844 | 171,802 → 171,528 | 3504 → 3504 |
+| SQLite / 32 | 89,083,233 | 80,756,033 | 1,489,482 → 1,500,418 | 38613 → 38618 |
 
 ### Profile and reliability
 

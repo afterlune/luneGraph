@@ -83,8 +83,9 @@ commits between `Recover`'s load and CAS, the losing write returns
 
 `FailExecution`, including a root `FailGroup` escalation, commits a terminal
 checkpoint with `Completed=true`, no active invocations or groups, and one
-terminal `Failure` with effective scope `FailExecution`. Earlier local failures
-remain recorded. Node failures advance `Steps`; continuation failures only
+`Failure` pointer. Earlier local failures remain represented by
+`HadLocalFailures`; their messages and states are not retained. Node failures
+advance `Steps`; continuation failures only
 advance the revision. The originating call returns
 its original error after a successful commit. Cancellation, invalid transitions,
 and state-copy failures do not create a failed terminal. A Store error is not
@@ -125,7 +126,8 @@ commit. The external system must provide idempotency or atomic deduplication.
 State clone functions and continuation decoders are expected to be pure and do
 not receive a `CallInfo`.
 
-Checkpoint format 2 persists callback IDs. Version-1 checkpoints are rejected
+Checkpoint format 3 persists callback IDs without accumulating branch outcomes
+or local-failure records. Version-1 and version-2 checkpoints are rejected
 by this runner with `ErrInvalidCheckpoint`; applications must finish those runs
 with the older runtime or migrate them before recovery.
 
@@ -265,3 +267,19 @@ machine IDs without surrounding whitespace, and a positive revision. CAS at
 the maximum revision returns `graph.ErrExecutionLimit`. A conflict never
 changes the stored checkpoint. Other storage errors may have committed and
 require a fresh `Load` to establish the latest revision.
+
+## Bounded execution position
+
+`EndBranch[S]()` ends a path without a result. Ended and locally failed
+invocations exist only while their activation is unsettled; settlement removes
+them and releases their states. A local failure sets `HadLocalFailures` for
+the remainder of the execution, including across recovery. It does not append
+an error record. Detailed errors remain available in transient observer events
+or application-owned receipts.
+
+Completed checkpoints contain no invocations or activation groups.
+`EndExecution(state)` sets `Final`; natural completion leaves `Final` nil.
+`FailExecution` instead sets `Failure`, with its invocation ID, node, message,
+and optional panic stack. A completed checkpoint with neither `Final` nor
+`Failure` is valid. These changes do not add or remove commit boundaries,
+alter callback IDs, or change at-least-once recovery and Store guarantees.

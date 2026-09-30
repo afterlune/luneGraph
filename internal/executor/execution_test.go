@@ -72,8 +72,8 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end branch", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch(9))
-		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" || len(checkpoint.Terminals) != 1 || checkpoint.Terminals[0].State != 9 {
+		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int]())
+		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" {
 			t.Fatalf("EndBranch = %+v, %v", checkpoint, err)
 		}
 	})
@@ -97,7 +97,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("return without destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
 		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
-		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || len(checkpoint.Terminals) != 1 || checkpoint.Terminals[0].State != 12 {
+		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded {
 			t.Fatalf("terminal Return = %+v, %v", checkpoint, err)
 		}
 	})
@@ -206,14 +206,14 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 				return model.To(value, "a", "b"), nil
 			}, FailInvocation),
 			executorTestNode("a", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
-				return model.EndBranch(value + 1), nil
+				return model.EndBranch[int](), nil
 			}, FailInvocation),
 			executorTestNode("b", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
-				return model.EndBranch(value + 2), nil
+				return model.EndBranch[int](), nil
 			}, FailInvocation),
 		}, nil, map[string][]string{"fork": {"a", "b"}}, nil, nil)
 		result, err := runner.Start(context.Background(), "no-join", 0, Options[int]{MaxConcurrency: 1})
-		if err != nil || result.Status != StatusCompleted || len(result.Checkpoint.Terminals) != 2 {
+		if err != nil || result.Status != StatusCompleted || len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
 			t.Fatalf("no-join run = %+v, %v", result, err)
 		}
 	})
@@ -227,7 +227,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 				if !errors.Is(err, boom) || result.Status != StatusFailed || !result.Checkpoint.Completed {
 					t.Fatalf("terminal failure = %+v, %v", result, err)
 				}
-			} else if err != nil || result.Status != StatusCompletedWithFailures || len(result.Checkpoint.Failures) != 1 {
+			} else if err != nil || result.Status != StatusCompletedWithFailures || (!result.Checkpoint.HadLocalFailures || result.Checkpoint.Failure != nil) {
 				t.Fatalf("local failure = %+v, %v", result, err)
 			}
 		})
@@ -245,7 +245,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 		}, FailInvocation),
 	}, []JoinSpec[int]{{Name: "joined", From: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, []int) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
 	result, err := mergeFailure.Start(context.Background(), "merge-failure", 0, Options[int]{MaxConcurrency: 1})
-	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Checkpoint.Failures[len(result.Checkpoint.Failures)-1].Scope != FailExecution {
+	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Checkpoint.Failure == nil {
 		t.Fatalf("join failure = %+v, %v", result, err)
 	}
 }
@@ -291,7 +291,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 		t.Fatalf("local recordFailure = %+v, %v", checkpoint, err)
 	}
 	rootGroupFailure := executorTestReadyCheckpoint("source", 1)
-	if err := runner.recordFailure(&rootGroupFailure, executionTestIndex(rootGroupFailure), "i1", "source", FailGroup, copyErr); !errors.Is(err, copyErr) || !rootGroupFailure.Completed || rootGroupFailure.Failures[0].Scope != FailExecution {
+	if err := runner.recordFailure(&rootGroupFailure, executionTestIndex(rootGroupFailure), "i1", "source", FailGroup, copyErr); !errors.Is(err, copyErr) || !rootGroupFailure.Completed || rootGroupFailure.Failure == nil {
 		t.Fatalf("root FailGroup = %+v, %v", rootGroupFailure, err)
 	}
 	if !errors.Is(recoveredFailure(rootGroupFailure), ErrRunFailed) || recoveredFailure(Checkpoint[int]{}) != nil {

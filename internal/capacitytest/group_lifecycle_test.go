@@ -25,7 +25,7 @@ func TestNestedPopulationAcrossRecoveryBudgets(t *testing.T) {
 					}
 					previous = out.Checkpoint.Steps
 				}
-				if out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 64 || out.Checkpoint.Steps != 74 || len(out.Checkpoint.Groups) != 0 || len(out.Checkpoint.Failures) != 0 {
+				if out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 64 || out.Checkpoint.Steps != 74 || len(out.Checkpoint.Groups) != 0 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
 					t.Fatalf("final: %+v", out)
 				}
 			})

@@ -137,7 +137,7 @@ func TestResumeInputApplyFailureAndRevisionLimit(t *testing.T) {
 	input := []ResumeInput{{InvocationID: checkpoint.Invocations[0].ID, Payload: []byte("3")}}
 
 	local, err := runner.Resume(context.Background(), checkpoint, input, Options[int]{})
-	if err != nil || local.Status != StatusCompletedWithFailures || len(local.Checkpoint.Failures) != 1 || local.Checkpoint.Failures[0].Scope != FailInvocation {
+	if err != nil || local.Status != StatusCompletedWithFailures || (!local.Checkpoint.HadLocalFailures || local.Checkpoint.Failure != nil) {
 		t.Fatalf("local continuation failure = %+v, %v", local, err)
 	}
 	override := FailExecution
@@ -240,7 +240,7 @@ func TestRecoverValidationAndTerminalCheckpoints(t *testing.T) {
 		t.Fatalf("failed Start = %+v, %v", failed, err)
 	}
 	recovered, err := failedRunner.Recover(context.Background(), "failed-run", nil, Options[int]{Store: store})
-	if !errors.Is(err, ErrRunFailed) || recovered.Status != StatusFailed || len(recovered.Checkpoint.Failures) != 1 {
+	if !errors.Is(err, ErrRunFailed) || recovered.Status != StatusFailed || recovered.Checkpoint.Failure == nil {
 		t.Fatalf("failed recovery = %+v, %v", recovered, err)
 	}
 

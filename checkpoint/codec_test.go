@@ -32,21 +32,21 @@ type unsupportedState struct {
 func TestJSONCheckpointRoundTripPreservesRecoveryFields(t *testing.T) {
 	final := codecState{Value: "done"}
 	want := graph.Checkpoint[codecState]{
-		FormatVersion:  graph.CheckpointFormatVersion,
-		RunID:          "run-1",
-		MachineID:      "machine-v1",
-		Revision:       7,
-		Steps:          12,
-		NextID:         9,
-		ScheduleCursor: 3,
-		Completed:      true,
-		Final:          &final,
+		FormatVersion:    graph.CheckpointFormatVersion,
+		RunID:            "run-1",
+		MachineID:        "machine-v1",
+		Revision:         7,
+		Steps:            12,
+		NextID:           9,
+		ScheduleCursor:   3,
+		Completed:        true,
+		HadLocalFailures: true,
+		Final:            &final,
 		Invocations: []graph.Invocation[codecState]{
 			{ID: "i1", CallID: "node-call-17", Node: "work", State: codecState{Value: "<active> 雪", Values: map[string]int{"z": 1, "a": 2}}, Status: graph.InvocationWaiting, Continuation: "approval", Next: []string{"next"}},
 		},
-		Groups:    []graph.ActivationGroup{{ID: "g1", CallID: "join-call-4", Source: "split", JoinNode: "join", Children: []string{"i1"}}},
-		Terminals: []graph.Terminal[codecState]{{InvocationID: "i2", State: codecState{Value: "branch result"}}},
-		Failures:  []graph.Failure{{InvocationID: "i1", Node: "work", Scope: graph.FailGroup, Message: "failed", PanicStack: "stack"}},
+		Groups:  []graph.ActivationGroup{{ID: "g1", CallID: "join-call-4", Source: "split", JoinNode: "join", Children: []string{"i1"}}},
+		Failure: &graph.Failure{InvocationID: "i1", Node: "work", Message: "failed", PanicStack: "stack"},
 	}
 
 	codec := checkpoint.JSON[codecState]{}

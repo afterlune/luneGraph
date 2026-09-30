@@ -210,3 +210,9 @@ requests across ledger connections, original-result replay, request mismatch,
 and transaction rollback when the receipt insert fails. These tests run in the
 normal test suite on Windows and Linux; they do not establish a throughput or
 capacity limit for the example application.
+
+The capacity suite also checks bounded checkpoints after repeated branch
+endings and local failures across budgeted loops and typed pauses, and newly
+completed runs sharing a Runner
+and Store. [History and completed-run measurements](capacity.md#retained-history-and-completed-executions)
+separate deliberately persisted data from transient executor resources.

@@ -37,7 +37,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		initial.Invocations[0].State.Values["n"] = 99
 		initial.Invocations[0].Next[0] = "changed"
 		initial.Groups[0].Children[0] = "changed"
-		initial.Terminals[0].State.Values["n"] = 99
+		initial.Failure.Message = "changed"
 		initial.Final.Values["n"] = 99
 		loaded, err := store.Load(ctx, "run")
 		if err != nil {
@@ -47,7 +47,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		loaded.Invocations[0].State.Values["n"] = 88
 		loaded.Invocations[0].Next[0] = "changed"
 		loaded.Groups[0].Children[0] = "changed"
-		loaded.Terminals[0].State.Values["n"] = 88
+		loaded.Failure.Message = "changed"
 		loaded.Final.Values["n"] = 88
 		again, err := store.Load(ctx, "run")
 		if err != nil {
@@ -145,20 +145,21 @@ func fixture() graph.Checkpoint[State] {
 	// Store copy tests populate every reference-bearing field; this is not a
 	// resumable runner checkpoint.
 	return graph.Checkpoint[State]{
-		FormatVersion: graph.CheckpointFormatVersion,
-		RunID:         "run",
-		MachineID:     "machine-v1",
-		Revision:      1,
-		Final:         &State{Values: map[string]int{"n": 1}},
-		Invocations:   []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
-		Groups:        []graph.ActivationGroup{{ID: "g1", CallID: "c3", Children: []string{"i1"}}},
-		Terminals:     []graph.Terminal[State]{{InvocationID: "i1", State: State{Values: map[string]int{"n": 1}}}},
+		FormatVersion:    graph.CheckpointFormatVersion,
+		RunID:            "run",
+		MachineID:        "machine-v1",
+		Revision:         1,
+		Final:            &State{Values: map[string]int{"n": 1}},
+		Invocations:      []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
+		Groups:           []graph.ActivationGroup{{ID: "g1", CallID: "c3", Children: []string{"i1"}}},
+		HadLocalFailures: true,
+		Failure:          &graph.Failure{InvocationID: "i1", Node: "work", Message: "failure"},
 	}
 }
 
 func assertFixture(t *testing.T, value graph.Checkpoint[State], revision uint64) {
 	t.Helper()
-	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || value.Terminals[0].State.Values["n"] != 1 || value.Final.Values["n"] != 1 {
+	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || value.Failure == nil || value.Failure.Message != "failure" || !value.HadLocalFailures || value.Final.Values["n"] != 1 {
 		t.Fatalf("stored checkpoint was mutated: %+v", value)
 	}
 }

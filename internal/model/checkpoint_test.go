@@ -13,17 +13,15 @@ func TestCheckpointCopySeparatesStructure(t *testing.T) {
 		Final:       &final,
 		Invocations: []Invocation[int]{{ID: "i1", Next: []string{"a", "b"}}},
 		Groups:      []ActivationGroup{{ID: "g1", Children: []string{"i2", "i3"}}},
-		Terminals:   []Terminal[int]{{InvocationID: "i4", State: 4}},
-		Failures:    []Failure{{InvocationID: "i5", Message: "failure"}},
+		Failure:     &Failure{InvocationID: "i5", Message: "failure"},
 	}
 
 	copied := Copy(original)
 	copied.Invocations[0].Next[0] = "changed"
 	copied.Groups[0].Children[0] = "changed"
-	copied.Terminals[0].State = 40
-	copied.Failures[0].Message = "changed"
+	copied.Failure.Message = "changed"
 	*copied.Final = 90
-	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i2" || original.Terminals[0].State != 4 || original.Failures[0].Message != "failure" || final != 9 {
+	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i2" || original.Failure.Message != "failure" || final != 9 {
 		t.Fatalf("Copy shared checkpoint structure: original=%+v final=%d", original, final)
 	}
 	if !reflect.DeepEqual(copied.Invocations[0].Next, []string{"changed", "b"}) {
@@ -40,17 +38,14 @@ func TestCheckpointCopyIntoReusesStructure(t *testing.T) {
 			{ID: "i1", State: []int{1}, Next: []string{"a", "b"}},
 			{ID: "i2", State: []int{2}, Next: []string{"c"}},
 		},
-		Groups:    []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
-		Terminals: []Terminal[[]int]{{InvocationID: "i3", State: []int{3}}},
-		Failures:  []Failure{{InvocationID: "i4", Message: "failed"}},
+		Groups:  []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Failure: &Failure{InvocationID: "i4", Message: "failed"},
 	}
 	destination := Copy(original)
 	invocationStorage := &destination.Invocations[0]
 	nextStorage := &destination.Invocations[0].Next[0]
 	groupStorage := &destination.Groups[0]
 	childrenStorage := &destination.Groups[0].Children[0]
-	terminalStorage := &destination.Terminals[0]
-	failureStorage := &destination.Failures[0]
 
 	next := Copy(original)
 	next.RunID = "next-run"
@@ -58,23 +53,20 @@ func TestCheckpointCopyIntoReusesStructure(t *testing.T) {
 	next.Invocations[0].State = []int{11}
 	next.Invocations[0].Next = []string{"x", "y"}
 	next.Groups[0].Children = []string{"i7", "i8"}
-	next.Terminals[0].State = []int{33}
-	next.Failures[0].Message = "next failure"
+	next.Failure.Message = "next failure"
 	CopyInto(&destination, next)
 
 	if !reflect.DeepEqual(destination, Copy(next)) {
 		t.Fatalf("CopyInto result = %+v, want %+v", destination, Copy(next))
 	}
 	if &destination.Invocations[0] != invocationStorage || &destination.Invocations[0].Next[0] != nextStorage ||
-		&destination.Groups[0] != groupStorage || &destination.Groups[0].Children[0] != childrenStorage ||
-		&destination.Terminals[0] != terminalStorage || &destination.Failures[0] != failureStorage {
+		&destination.Groups[0] != groupStorage || &destination.Groups[0].Children[0] != childrenStorage {
 		t.Fatal("CopyInto did not reuse destination storage")
 	}
 	destination.Invocations[0].Next[0] = "changed"
 	destination.Groups[0].Children[0] = "changed"
-	destination.Terminals[0].State[0] = 99
-	destination.Failures[0].Message = "changed"
-	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i1" || original.Terminals[0].State[0] != 3 || original.Failures[0].Message != "failed" {
+	destination.Failure.Message = "changed"
+	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i1" || original.Failure.Message != "failed" {
 		t.Fatalf("CopyInto shared structure with source: %+v", original)
 	}
 	if &destination.Invocations[0].State[0] != &next.Invocations[0].State[0] {
@@ -88,9 +80,8 @@ func TestCheckpointCopyIntoClearsUnusedEntries(t *testing.T) {
 			{ID: "i1", Next: []string{"a", "b"}},
 			{ID: "i2", Next: []string{"c"}},
 		},
-		Groups:    []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
-		Terminals: []Terminal[int]{{InvocationID: "i3", State: 3}, {InvocationID: "i4", State: 4}},
-		Failures:  []Failure{{InvocationID: "i5", Message: "stale"}, {InvocationID: "i6", Message: "stale"}},
+		Groups:  []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Failure: &Failure{InvocationID: "i5", Message: "stale"},
 	}
 	destination := Copy(large)
 	small := Checkpoint[int]{Invocations: []Invocation[int]{{ID: "i1", Next: []string{"only"}}}}
@@ -109,7 +100,6 @@ func TestCheckpointCopyIntoClearsUnusedEntries(t *testing.T) {
 func TestCheckpointCloneCopiesEveryStateAndReportsFailures(t *testing.T) {
 	input := Checkpoint[[]int]{
 		Invocations: []Invocation[[]int]{{ID: "i1", State: []int{1}}},
-		Terminals:   []Terminal[[]int]{{InvocationID: "i2", State: []int{2}}},
 		Final:       ptr([]int{3}),
 	}
 	clone := func(state []int) ([]int, error) { return append([]int(nil), state...), nil }
@@ -118,9 +108,8 @@ func TestCheckpointCloneCopiesEveryStateAndReportsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	cloned.Invocations[0].State[0] = 10
-	cloned.Terminals[0].State[0] = 20
 	(*cloned.Final)[0] = 30
-	if input.Invocations[0].State[0] != 1 || input.Terminals[0].State[0] != 2 || (*input.Final)[0] != 3 {
+	if input.Invocations[0].State[0] != 1 || (*input.Final)[0] != 3 {
 		t.Fatalf("Clone shared state: %+v", input)
 	}
 
@@ -135,10 +124,6 @@ func TestCheckpointCloneCopiesEveryStateAndReportsFailures(t *testing.T) {
 		t.Fatalf("Clone panic = %v", err)
 	}
 
-	terminalOnly := Checkpoint[int]{Terminals: []Terminal[int]{{InvocationID: "i7", State: 7}}}
-	if _, err := terminalOnly.Clone(func(int) (int, error) { return 0, wantErr }); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), `terminal "i7"`) {
-		t.Fatalf("terminal clone error = %v", err)
-	}
 	finalOnly := Checkpoint[int]{Final: ptr(8)}
 	if _, err := finalOnly.Clone(func(int) (int, error) { return 0, wantErr }); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "final state") {
 		t.Fatalf("final clone error = %v", err)
@@ -210,7 +195,7 @@ func TestTransitionsCopyTargetsAndPreserveActions(t *testing.T) {
 	if wait.Action != ActionWait || wait.Continuation != "resume" || !reflect.DeepEqual(wait.Targets, []string{"done"}) {
 		t.Fatalf("Wait transition = %+v", wait)
 	}
-	if EndBranch(3).Action != ActionEndBranch || EndExecution(4).Action != ActionEndExecution || Return(5).Action != ActionReturn {
+	if EndBranch[int]().Action != ActionEndBranch || EndExecution(4).Action != ActionEndExecution || Return(5).Action != ActionReturn {
 		t.Fatal("terminal transition helper returned the wrong action")
 	}
 }

@@ -15,8 +15,8 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 	if scope == FailGroup && inv.GroupID == "" {
 		scope = FailExecution
 	}
-	s.Failures = append(s.Failures, Failure{InvocationID: id, Node: node, Scope: scope, Message: cause.Error(), PanicStack: panicStack(cause)})
 	if scope == FailExecution {
+		s.Failure = &Failure{InvocationID: id, Node: node, Message: cause.Error(), PanicStack: panicStack(cause)}
 		s.Completed = true
 		s.Final = nil
 		s.Invocations = nil
@@ -24,6 +24,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 		clearInvocationIndex(index)
 		return fmt.Errorf("%s: %w", node, cause)
 	}
+	s.HadLocalFailures = true
 	if scope == FailGroup && inv.GroupID != "" {
 		return r.failGroup(s, index, inv.GroupID)
 	}
@@ -65,6 +66,7 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id strin
 			groups = append(groups, group)
 		}
 	}
+	clear(s.Groups[len(groups):])
 	s.Groups = groups
 	_, parent := indexedInvocation(index, s, parentID)
 	if parent == nil {
@@ -73,15 +75,6 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id strin
 	parent.ChildGroupID = ""
 	parent.Status = InvocationFailed
 	parent.CallID = ""
-	return nil
-}
-
-func terminalFailureRecord[S any](s Checkpoint[S]) *Failure {
-	for i := range s.Failures {
-		if s.Failures[i].Scope == FailExecution {
-			return &s.Failures[i]
-		}
-	}
 	return nil
 }
 
@@ -94,7 +87,7 @@ func (r *Runner[S]) commitTerminalFailure(ctx context.Context, before, candidate
 }
 
 func recoveredFailure[S any](s Checkpoint[S]) error {
-	failure := terminalFailureRecord(s)
+	failure := s.Failure
 	if failure == nil {
 		return nil
 	}

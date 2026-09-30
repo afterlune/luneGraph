@@ -44,7 +44,14 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 					if i == 1 && s.Round == 1 {
 						return graph.Wait(s, "advance", target), nil
 					}
-					return graph.EndBranch(s), nil
+					want := 1
+					if i < 2 {
+						want = 2
+					}
+					if s.Owner != "rotation" || s.Round != want || (i == 1 && s.Values["inputs"] != 1) {
+						return graph.Transition[state]{}, fmt.Errorf("mixed branch state: %+v", s)
+					}
+					return graph.EndBranch[state](), nil
 				})
 				addEdge(t, g, "fork", target)
 				if i < 2 {
@@ -78,18 +85,8 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 				t.Fatalf("expected one waiting branch: %+v", out)
 			}
 			out, err = r.Recover(context.Background(), "rotation", []graph.ResumeInput{{InvocationID: waitingID, Payload: []byte("1")}}, opts)
-			if err != nil || out.Status != graph.StatusCompleted || len(visits) != 18 || visits[17].branch != 1 || len(out.Checkpoint.Terminals) != 16 || len(out.Checkpoint.Groups) != 0 {
+			if err != nil || out.Status != graph.StatusCompleted || len(visits) != 18 || visits[17].branch != 1 || len(out.Checkpoint.Invocations) != 0 || len(out.Checkpoint.Groups) != 0 {
 				t.Fatalf("continued branch: %+v visits=%v, %v", out, visits, err)
-			}
-			for _, terminal := range out.Checkpoint.Terminals {
-				s := terminal.State
-				want := 1
-				if s.Values["branch"] < 2 {
-					want = 2
-				}
-				if s.Owner != "rotation" || s.Round != want || (s.Values["branch"] == 1 && s.Values["inputs"] != 1) {
-					t.Fatalf("mixed branch state: %+v", terminal)
-				}
 			}
 		})
 	}

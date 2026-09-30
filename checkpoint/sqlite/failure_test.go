@@ -44,7 +44,7 @@ func TestExecutionFailureSurvivesReopen(t *testing.T) {
 	}
 	defer store.Close()
 	recovered, err := runner.Recover(ctx, "failed", nil, graph.Options[int]{Store: store})
-	if !errors.Is(err, graph.ErrRunFailed) || recovered.Status != graph.StatusFailed || recovered.Checkpoint.Revision != 2 || recovered.Checkpoint.Failures[0].Message != boom.Error() || calls != 1 {
+	if !errors.Is(err, graph.ErrRunFailed) || recovered.Status != graph.StatusFailed || recovered.Checkpoint.Revision != 2 || recovered.Checkpoint.Failure.Message != boom.Error() || calls != 1 {
 		t.Fatalf("reopened failure = %+v, %v; calls=%d", recovered, err, calls)
 	}
 }

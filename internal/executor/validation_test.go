@@ -70,9 +70,9 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 		{"final state while active", func(s *Checkpoint[int]) { value := 9; s.Final = &value }},
 		{"next ID too small", func(s *Checkpoint[int]) { s.NextID = 2 }},
 		{"cursor out of range", func(s *Checkpoint[int]) { s.ScheduleCursor = s.NextID }},
-		{"invalid failure scope", func(s *Checkpoint[int]) { s.Failures = append(s.Failures, Failure{Scope: FailureScope(99)}) }},
-		{"terminal failure while active", func(s *Checkpoint[int]) { s.Failures = append(s.Failures, Failure{Scope: FailExecution}) }},
-		{"multiple terminal failures", func(s *Checkpoint[int]) { s.Failures = []Failure{{Scope: FailExecution}, {Scope: FailExecution}} }},
+		{"terminal failure while active", func(s *Checkpoint[int]) { s.Failure = &Failure{InvocationID: "i1", Node: "pause"} }},
+		{"version 1", func(s *Checkpoint[int]) { s.FormatVersion = 1 }},
+		{"version 2", func(s *Checkpoint[int]) { s.FormatVersion = 2 }},
 		{"invalid invocation prefix", func(s *Checkpoint[int]) { s.Invocations[0].ID = "x1" }},
 		{"noncanonical invocation ID", func(s *Checkpoint[int]) { s.Invocations[0].ID = "i01" }},
 		{"invocation ID already used", func(s *Checkpoint[int]) { s.Invocations[0].ID = "i" + fmt.Sprint(s.NextID) }},
@@ -236,7 +236,6 @@ func TestValidateCheckpointCompletedExecutionShapes(t *testing.T) {
 		{"completed with active invocation", completed, func(s *Checkpoint[int]) {
 			s.Invocations = []Invocation[int]{{ID: "i1", Node: "done", Status: InvocationReady, CallID: "c2"}}
 		}},
-		{"completed without final state or invocation", completed, func(s *Checkpoint[int]) { s.Final = nil }},
 		{"completed with both final and terminal invocation", completed, func(s *Checkpoint[int]) {
 			s.Invocations = []Invocation[int]{{ID: "i1", Node: "done", Status: InvocationEnded}}
 		}},
@@ -252,6 +251,14 @@ func TestValidateCheckpointCompletedExecutionShapes(t *testing.T) {
 				t.Fatalf("validateCheckpoint error = %v", err)
 			}
 		})
+	}
+	for _, local := range []bool{false, true} {
+		natural := copyCheckpoint(completed)
+		natural.Final = nil
+		natural.HadLocalFailures = local
+		if err := runner.validateCheckpoint(natural); err != nil {
+			t.Fatalf("natural completion rejected: %v", err)
+		}
 	}
 }
 

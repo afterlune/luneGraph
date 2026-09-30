@@ -224,11 +224,11 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		return intRunner(t, g)
 	}
 	local, err := build(graph.FailInvocation).Start(context.Background(), "local", 0, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || local.Status != graph.StatusCompletedWithFailures || local.Checkpoint.Final == nil || *local.Checkpoint.Final != 5 || len(local.Checkpoint.Failures) != 1 {
+	if err != nil || local.Status != graph.StatusCompletedWithFailures || local.Checkpoint.Final == nil || *local.Checkpoint.Final != 5 || (!local.Checkpoint.HadLocalFailures || local.Checkpoint.Failure != nil) {
 		t.Fatalf("local = %+v, %v", local, err)
 	}
 	group, err := build(graph.FailGroup).Start(context.Background(), "group", 0, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || group.Status != graph.StatusCompletedWithFailures || group.Checkpoint.Final != nil || len(group.Checkpoint.Failures) != 1 {
+	if err != nil || group.Status != graph.StatusCompletedWithFailures || group.Checkpoint.Final != nil || (!group.Checkpoint.HadLocalFailures || group.Checkpoint.Failure != nil) {
 		t.Fatalf("group = %+v, %v", group, err)
 	}
 	execution, err := build(graph.FailExecution).Start(context.Background(), "execution", 0, graph.Options[int]{MaxConcurrency: 1})
@@ -254,7 +254,7 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 	}
 	initial := state{Values: map[string]int{"n": 1}}
 	rolled, err := r.Start(context.Background(), "mutable", initial, graph.Options[state]{})
-	if err != nil || rolled.Checkpoint.Invocations[0].State.Values["n"] != 1 || initial.Values["n"] != 1 {
+	if err != nil || !rolled.Checkpoint.Completed || !rolled.Checkpoint.HadLocalFailures || rolled.Checkpoint.Failure != nil || len(rolled.Checkpoint.Invocations) != 0 || initial.Values["n"] != 1 {
 		t.Fatalf("rollback = %+v, %v", rolled, err)
 	}
 }

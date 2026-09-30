@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -48,10 +47,10 @@ func errorStatus(err error) Status {
 
 func statusOf[S any](s Checkpoint[S], exhausted bool) Status {
 	if s.Completed {
-		if terminalFailureRecord(s) != nil {
+		if s.Failure != nil {
 			return StatusFailed
 		}
-		if len(s.Failures) != 0 {
+		if s.HadLocalFailures {
 			return StatusCompletedWithFailures
 		}
 		return StatusCompleted
@@ -76,6 +75,8 @@ func markCompleted[S any](s *Checkpoint[S]) {
 		}
 	}
 	s.Completed = true
+	s.Invocations = nil
+	s.Groups = nil
 }
 
 func invocationNumber(id string) uint64 {
@@ -91,12 +92,6 @@ func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], sto
 		return before, fmt.Errorf("commit revision: %w", ErrExecutionLimit)
 	}
 	after.Revision = before.Revision + 1
-	sort.SliceStable(after.Terminals, func(i, j int) bool {
-		return invocationNumber(after.Terminals[i].InvocationID) < invocationNumber(after.Terminals[j].InvocationID)
-	})
-	sort.SliceStable(after.Failures, func(i, j int) bool {
-		return invocationNumber(after.Failures[i].InvocationID) < invocationNumber(after.Failures[j].InvocationID)
-	})
 	if store != nil {
 		if err := store.CompareAndSwap(ctx, before.Revision, after); err != nil {
 			return before, err

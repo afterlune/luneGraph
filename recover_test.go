@@ -103,7 +103,7 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 		status graph.Status
 	}{
 		{"branch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
-			return graph.EndBranch(state), nil
+			return graph.EndBranch[int](), nil
 		}, graph.StatusCompleted},
 		{"failed", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) {
 			return graph.Transition[int]{}, errors.New("node failed")
@@ -154,6 +154,8 @@ func TestRecoverRejectsInvalidStoredRun(t *testing.T) {
 		name  string
 		alter func(*graph.Checkpoint[int])
 	}{
+		{"version 1", func(value *graph.Checkpoint[int]) { value.FormatVersion = 1 }},
+		{"version 2", func(value *graph.Checkpoint[int]) { value.FormatVersion = 2 }},
 		{"run ID", func(value *graph.Checkpoint[int]) { value.RunID = "wrong" }},
 		{"ready terminal", func(value *graph.Checkpoint[int]) {
 			value.Invocations = []graph.Invocation[int]{{ID: "i1", Node: "only", Status: graph.InvocationReady}}

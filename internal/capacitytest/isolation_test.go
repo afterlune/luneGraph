@@ -97,11 +97,11 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 					default:
 						return errors.New("cancelled callback outlived its public call")
 					}
-					if !errors.Is(err, context.Canceled) || saved.Completed || len(saved.Failures) != 0 || saved.Steps != 0 {
+					if !errors.Is(err, context.Canceled) || saved.Completed || (saved.Failure != nil || saved.HadLocalFailures) || saved.Steps != 0 {
 						return fmt.Errorf("cancellation affected checkpoint: %+v, %v", saved, err)
 					}
 				case "fail":
-					if !errors.Is(err, boom) || !saved.Completed || len(saved.Failures) != 1 || saved.Failures[0].Scope != graph.FailExecution {
+					if !errors.Is(err, boom) || !saved.Completed || saved.Failure == nil {
 						return fmt.Errorf("failure terminal: %+v, %v", saved, err)
 					}
 				case "conflict":

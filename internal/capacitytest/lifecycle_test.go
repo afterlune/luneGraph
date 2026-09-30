@@ -81,7 +81,7 @@ func TestRepeatedBudgetWaitAndRecovery(t *testing.T) {
 				if round%4 == 0 {
 					wantStatus = graph.StatusWaiting
 				}
-				if err != nil || stateErr != nil || out.Status != wantStatus || s.Round != round || s.Total != round*profile.width || s.Values["sum"] != round*profile.width*(profile.width+1)/2 || s.Values["inputs"] != inputs || out.Checkpoint.Steps != uint64(round*(profile.width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+1+uint64(inputs) || out.Checkpoint.Revision <= previousRevision || out.Checkpoint.NextID <= previousID || len(out.Checkpoint.Invocations) != 1 || len(out.Checkpoint.Groups) != 0 || len(out.Checkpoint.Terminals) != 0 || len(out.Checkpoint.Failures) != 0 {
+				if err != nil || stateErr != nil || out.Status != wantStatus || s.Round != round || s.Total != round*profile.width || s.Values["sum"] != round*profile.width*(profile.width+1)/2 || s.Values["inputs"] != inputs || out.Checkpoint.Steps != uint64(round*(profile.width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+1+uint64(inputs) || out.Checkpoint.Revision <= previousRevision || out.Checkpoint.NextID <= previousID || len(out.Checkpoint.Invocations) != 1 || len(out.Checkpoint.Groups) != 0 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
 					t.Fatalf("round %d = %+v, %v, %v", round, out, err, stateErr)
 				}
 				previousRevision, previousID = out.Checkpoint.Revision, out.Checkpoint.NextID

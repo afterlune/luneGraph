@@ -22,7 +22,7 @@ func TestReadyBranchesRotateAcrossStoredResumes(t *testing.T) {
 	})
 	node(t, g, "once", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		onceCalls++
-		return graph.EndBranch(v), nil
+		return graph.EndBranch[int](), nil
 	})
 	for _, pair := range [][2]string{{"fork", "loop"}, {"fork", "once"}, {"loop", "loop"}} {
 		edge(t, g, pair[0], pair[1])
@@ -214,7 +214,7 @@ func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	}
 	inputs := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("4")}}
 	partial, err := r.Resume(context.Background(), first.Checkpoint, inputs, opts)
-	if !errors.Is(err, boom) || partial.Checkpoint.Revision != first.Checkpoint.Revision+2 || !partial.Checkpoint.Completed || len(partial.Checkpoint.Failures) != 1 || partial.Checkpoint.Failures[0].Scope != graph.FailExecution || applyCalls != 2 {
+	if !errors.Is(err, boom) || partial.Checkpoint.Revision != first.Checkpoint.Revision+2 || !partial.Checkpoint.Completed || partial.Checkpoint.Failure == nil || applyCalls != 2 {
 		t.Fatalf("partial resume = %+v, %v", partial, err)
 	}
 	stored, err := store.Load(context.Background(), "batch")
