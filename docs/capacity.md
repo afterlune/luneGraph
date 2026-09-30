@@ -588,3 +588,206 @@ to seed levels. These sustained samples verify recovery and resource behavior,
 not a throughput comparison between versions. Full tests, race tests, vet,
 and the separate one-second-per-Store race soak passed. Benchmark binaries,
 raw samples, and profiles remain in the temporary directory, outside the repository.
+
+## Checkpoint structural copy optimization sample
+
+The baseline is commit `53849a5`, compared on 2026-09-30 with Go 1.26.5,
+Windows/amd64, AMD Ryzen 7 6800H. Baseline test binaries were built from an
+archive of that commit with the identical new microbenchmark copied in.
+The microbenchmark lives in `internal/model`; existing public API capacity
+fixtures and Store benchmarks measure the broader execution path.
+
+Structural-copy functions now live separately from checkpoint types and Clone.
+Lists of at most eight invocations retain the direct loop. Larger lists copy
+consecutive entries whose `Next` is nil in batches through built-in `copy`.
+Non-nil route lists retain independent copy and buffer reuse, including
+normalizing a non-nil empty list to nil. Obsolete destination route buffers
+are cleared before replacement. Group children, terminals, failures, and Final
+retain their existing copy behavior. Application state stays shallow here;
+Store Clone and callback Clone remain the application-state ownership boundary.
+There is no API, checkpoint format, scheduler, or commit-point change.
+
+`BenchmarkCheckpointCopyInto` warms a separate destination before timing,
+then repeatedly copies the same source. Reference state contains a mutable map;
+invocation counts are 1/128/512 and routing is none, all waiting, or alternating
+waiting/ready. Additional width-512 controls use an integer and a 512-byte array.
+Graph execution, validation, Clone, persistence, and clearing spare state are
+excluded. Final structure/source assertions are outside timing. These scores
+measure the primitive, not durable call latency.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCheckpointCopyInto$' -benchmem -benchtime=500ms -count=5 -cpu '1,8' ./internal/model
+go test -run '^$' -bench '^BenchmarkCapacity(Fanout|Groups)$' -benchmem -benchtime=500ms -count=5 -cpu '1,8' ./internal/capacitytest
+```
+
+An independent allocation-based oracle checks every checkpoint field for
+scalar, reference-containing, and 512-byte value states through repeated
+0/1/8/9/128/512-entry growth, shrinkage, and buffer reuse. Checks cover route
+independence, nil/empty normalization, obsolete route clearing, invocation/group
+tail clearing, independent Final pointers, and the intentionally shallow S.
+Existing runtime tests cover partial input commits, Clone errors, nested group
+failure, join compaction/CAS replay, cancellation, SQLite crash/reopen, and
+uncertain commit acknowledgements.
+
+### Copy primitive
+
+Five 500ms samples per configuration report median [minimum–maximum] ns/op.
+All warmed primitive cases report **0 B/op and 0 allocs/op** before and after.
+Positive reduction means less measured time; negative means more. The one-entry
+mixed case has the same route geometry as the waiting case.
+
+| State | Invocations | Routes | Ps | Before ns/op | After ns/op | Reduction |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| reference | 1 | none | 1 | 36.03 [34.94–41.42] | 37.28 [35.75–38.92] | -3.5% |
+| reference | 1 | none | 8 | 37.55 [36.74–38.13] | 36.93 [34.72–37.36] | 1.7% |
+| reference | 1 | waiting | 1 | 40.53 [39.72–41.34] | 40.89 [39.13–43.15] | -0.9% |
+| reference | 1 | waiting | 8 | 42.39 [40.13–44.91] | 44.60 [41.32–47.75] | -5.2% |
+| reference | 1 | mixed | 1 | 39.89 [38.89–40.71] | 42.47 [41.88–47.28] | -6.5% |
+| reference | 1 | mixed | 8 | 41.27 [39.63–43.68] | 43.89 [42.32–48.03] | -6.3% |
+| reference | 128 | none | 1 | 1,297 [1,293–1,347] | 578 [576–598] | 55.4% |
+| reference | 128 | none | 8 | 1,350 [1,276–1,422] | 576 [531–596] | 57.3% |
+| reference | 128 | waiting | 1 | 2,333 [2,303–2,639] | 2,163 [2,106–2,400] | 7.3% |
+| reference | 128 | waiting | 8 | 2,206 [2,131–2,334] | 2,143 [2,132–2,232] | 2.9% |
+| reference | 128 | mixed | 1 | 1,797 [1,774–1,880] | 1,867 [1,818–1,938] | -3.9% |
+| reference | 128 | mixed | 8 | 1,840 [1,804–1,856] | 1,975 [1,830–2,009] | -7.3% |
+| reference | 512 | none | 1 | 6,310 [5,921–7,312] | 2,705 [2,587–2,806] | 57.1% |
+| reference | 512 | none | 8 | 6,001 [5,848–6,538] | 2,703 [2,662–2,820] | 55.0% |
+| reference | 512 | waiting | 1 | 8,566 [8,406–8,788] | 8,537 [8,093–9,656] | 0.3% |
+| reference | 512 | waiting | 8 | 8,439 [7,964–8,872] | 8,948 [8,417–9,331] | -6.0% |
+| reference | 512 | mixed | 1 | 7,275 [6,918–7,454] | 7,184 [6,413–7,557] | 1.3% |
+| reference | 512 | mixed | 8 | 6,823 [6,719–7,032] | 7,331 [7,067–7,569] | -7.4% |
+| scalar | 512 | none | 1 | 6,455 [6,189–6,638] | 2,707 [2,677–2,801] | 58.1% |
+| scalar | 512 | none | 8 | 6,190 [6,012–6,431] | 2,599 [2,534–2,707] | 58.0% |
+| value512 | 512 | none | 1 | 16,130 [15,651–17,449] | 9,376 [9,157–9,727] | 41.9% |
+| value512 | 512 | none | 8 | 15,950 [15,733–16,891] | 9,121 [8,917–9,446] | 42.8% |
+
+Reference-state nil-route lists of 128/512 entries have 55–57% lower medians;
+scalar width-512 controls have about 58% lower medians, and 512-byte value
+controls about 42%. Waiting and mixed lists do not show uniform improvements,
+including slower eight-P waiting/mixed cases. Short-list timing differences
+must be checked with alternating runs rather than treated as a speedup.
+
+The first implementation issued an empty-range `copy` for each waiting entry.
+The final version skips those calls and separates the large-list loop from the
+short-list loop. It keeps the original small-list behavior and does not add
+per-entry auxiliary metadata.
+
+A three-round alternating baseline/new check used 500ms per configuration.
+The nil-route width-512 advantage repeats at 51–54%. Fully waiting width-512
+copies remain about 8% slower: skipping empty copies removes avoidable work,
+but the extra route classification still has a cost. One-entry medians differ
+by about 0–2 ns, including a 5.5% increase for eight-P waiting. This is a measured
+tradeoff; the runtime sequential controls below show no sustained regression.
+
+| Invocations / routes | Ps | Before ns/op | After ns/op |
+| --- | ---: | ---: | ---: |
+| 1 / none | 1 | 35.67 [35.15–40.68] | 36.87 [36.21–37.94] |
+| 1 / none | 8 | 36.22 [36.04–36.70] | 36.41 [35.12–36.78] |
+| 1 / waiting | 1 | 40.93 [38.63–41.71] | 40.92 [40.05–43.72] |
+| 1 / waiting | 8 | 39.99 [38.50–40.97] | 42.18 [40.97–43.10] |
+| 512 / none | 1 | 5,342 [5,255–5,828] | 2,460 [2,376–2,673] |
+| 512 / none | 8 | 5,246 [5,101–5,414] | 2,559 [2,434–2,582] |
+| 512 / waiting | 1 | 7,495 [7,395–7,845] | 8,057 [7,988–8,110] |
+| 512 / waiting | 8 | 7,428 [6,975–7,635] | 8,055 [7,664–8,355] |
+
+### Execution and persistence
+
+Wide and nested workloads use five 500ms samples per configuration on one/eight
+Ps. Eight-P medians [ranges] are shown below; one-P nested-group reductions
+are 3–30%, and one-P serial width-512 fan-out is 16.7% lower. Several fan-out
+eight-P medians against the earlier baseline are slower, so a separate alternating
+comparison follows rather than attributing those differences to the copy primitive.
+
+| Workload / size | Node concurrency | Before ns/op | After ns/op | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Fanout / 32 | 1 | 356,375 [333,604–367,126] | 427,116 [416,628–486,703] | -19.9% |
+| Fanout / 32 | 8 | 316,447 [292,984–321,815] | 366,704 [352,185–372,012] | -15.9% |
+| Fanout / 128 | 1 | 1,600,948 [1,518,150–1,679,568] | 1,961,238 [1,876,482–1,997,534] | -22.5% |
+| Fanout / 128 | 8 | 1,287,683 [1,256,605–1,380,558] | 1,497,044 [1,443,766–1,582,139] | -16.3% |
+| Fanout / 512 | 1 | 10,037,522 [9,148,055–10,316,439] | 11,032,342 [10,681,064–11,146,280] | -9.9% |
+| Fanout / 512 | 8 | 8,624,139 [8,257,112–9,320,978] | 8,259,941 [7,156,922–9,586,203] | 4.2% |
+| Groups / 8 | 1 | 720,606 [707,589–747,486] | 691,131 [677,166–722,357] | 4.1% |
+| Groups / 8 | 8 | 591,330 [564,641–636,614] | 558,572 [520,250–591,651] | 5.5% |
+| Groups / 32 | 1 | 3,928,291 [3,749,280–4,226,505] | 3,597,994 [3,423,518–3,739,474] | 8.4% |
+| Groups / 32 | 8 | 3,667,851 [3,541,980–3,927,479] | 3,122,377 [2,952,490–3,184,636] | 14.9% |
+| Groups / 128 | 1 | 38,786,964 [37,713,127–41,800,700] | 28,921,467 [26,953,827–31,699,543] | 25.4% |
+| Groups / 128 | 8 | 37,050,869 [36,869,273–40,310,867] | 25,788,400 [25,563,041–28,207,629] | 30.4% |
+
+An alternating fan-out comparison ran all widths three times, 500ms per case,
+on one/eight Ps. It did not reproduce the earlier fan-out regressions:
+width 32 medians decreased 2–10%, width 128 9–16%, and width 512 16–19%.
+The disagreement between phases still limits any universal timing conclusion.
+
+| Width | Node concurrency | Ps | Before ns/op | After ns/op |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 1 | 1 | 260,576 [225,772–279,933] | 240,883 [226,510–256,777] |
+| 32 | 1 | 8 | 359,259 [347,318–369,114] | 332,218 [317,586–333,390] |
+| 32 | 8 | 1 | 263,232 [262,269–294,439] | 257,408 [251,844–266,657] |
+| 32 | 8 | 8 | 310,410 [302,885–326,995] | 280,246 [275,191–300,564] |
+| 128 | 1 | 1 | 1,244,821 [1,228,274–1,262,382] | 1,128,548 [1,085,139–1,197,963] |
+| 128 | 1 | 8 | 1,713,173 [1,584,873–1,719,491] | 1,464,014 [1,427,994–1,537,288] |
+| 128 | 8 | 1 | 1,418,835 [1,342,272–1,441,819] | 1,188,277 [1,187,057–1,300,280] |
+| 128 | 8 | 8 | 1,346,471 [1,335,262–1,362,062] | 1,151,316 [1,151,012–1,195,509] |
+| 512 | 1 | 1 | 8,835,982 [8,809,232–8,878,559] | 7,151,630 [6,913,256–7,375,549] |
+| 512 | 1 | 8 | 10,504,981 [10,025,878–10,949,264] | 8,783,381 [8,672,616–8,815,530] |
+| 512 | 8 | 1 | 9,095,655 [8,597,313–9,191,263] | 7,474,294 [7,168,591–7,992,688] |
+| 512 | 8 | 8 | 9,158,978 [8,585,852–9,272,153] | 7,545,825 [6,986,495–7,598,415] |
+
+No auxiliary allocations are introduced. One-P fan-out allocation counts
+remain 754/2,780/11,618 for widths 32/128/512 in these samples; one-P nested
+group counts remain 1,325/5,514/22,613. Small byte/count variation on eight Ps
+reflects worker and map allocation behavior; it is recorded in the raw samples.
+
+Sequential cases use five 500ms samples. Counts remain 13/118/902 for 1/16/128
+steps. These graphs stay on the short-list path; their changing times do not
+demonstrate benefits from bulk copying.
+
+| Steps | Ps | Before ns/op | After ns/op | Before → after B/op | allocs/op |
+| ---: | ---: | ---: | ---: | --- | ---: |
+| 1 | 1 | 2,712 | 2,555 | 1,256 → 1,256 | 13 |
+| 1 | 8 | 5,309 | 4,634 | 1,928 → 1,928 | 13 |
+| 16 | 1 | 39,424 | 34,282 | 5,856 → 5,856 | 118 |
+| 16 | 8 | 95,262 | 61,861 | 6,532 → 6,532 | 118 |
+| 128 | 1 | 291,170 | 263,440 | 40,289 → 40,289 | 902 |
+| 128 | 8 | 734,490 | 707,355 | 40,983 → 40,985 | 902 |
+
+Durable cases use three 200ms samples and default node concurrency; the table
+shows eight-P medians. SQLite width-32 has only two or three measured iterations.
+Memory width-two medians are slower, while several wider cases are faster.
+This does not establish a Store-wide persistence speedup.
+
+| Store / width | Before ns/op | After ns/op | Before → after B/op | Before → after allocs/op |
+| --- | ---: | ---: | --- | --- |
+| Memory / 2 | 65,104 | 73,630 | 26,783 → 26,786 | 174 → 174 |
+| Memory / 8 | 242,042 | 242,772 | 137,591 → 137,585 | 683 → 683 |
+| Memory / 32 | 2,415,681 | 2,125,254 | 1,424,642 → 1,424,636 | 5520 → 5520 |
+| Sqlite / 2 | 9,395,017 | 9,190,348 | 40,462 → 40,512 | 678 → 678 |
+| Sqlite / 8 | 24,869,911 | 23,059,844 | 171,802 → 171,528 | 3504 → 3504 |
+| Sqlite / 32 | 89,083,233 | 80,756,033 | 1,489,482 → 1,500,418 | 38613 → 38618 |
+
+### Profile and reliability
+
+Fresh CPU/memory profiles used width 512, node concurrency eight, `-cpu=8`,
+`-benchtime=3s`. Baseline `copyInvocations` accounted for 25.2% cumulative CPU;
+the final version accounts for 16.3%, including the new run-copy helper at 16.0%.
+Those shares overlap and must not be added. Whole `CopyInto` drops from 26.2%
+to 19.2%. These are separately sampled executions including setup/calibration,
+not absolute elapsed-time savings. Application map Clone remains 69.1% of
+allocation bytes and is still a major cost; its ownership contract is unchanged.
+
+Full tests, race tests, vet, and format checks passed. The final runtime also
+passed the same 60-second-per-Store workload with 64 runs, eight callers,
+width eight, node concurrency eight, and eight Ps. Width eight has nine
+invocations during its activation, exercising the bulk-copy path. Elapsed time
+is frozen after drain; rolling latency uses the latest 1,024 successful calls.
+
+| Store | Successful calls | Calls/s | Rolling p50 / p95, ms | Cancelled calls | Sampled peak heap, B | Drain / recovery GC heap, B | Seed / peak / drain goroutines |
+| --- | ---: | ---: | --- | ---: | ---: | --- | --- |
+| Memory | 455,497 | 7,591.60 | 1.0566 / 1.6725 | 8 | 3,741,976 | 844,048 / 773,048 | 3 / 49 / 3 |
+| SQLite | 2,525 | 42.08 | 182.5193 / 280.2083 | 8 | 3,101,784 | 784,656 / 732,984 | 4 / 15 / 4 |
+
+Reload, partial-round recovery, and resource checks passed; goroutines returned
+to seed levels. A separate one-second-per-Store race soak passed. These soaks
+validate resource and recovery behavior, not a version-to-version throughput
+claim. Raw benchmark samples, compiler diagnostics, profiles, and binaries
+remain in the temporary directory outside the repository.
