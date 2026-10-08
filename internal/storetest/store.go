@@ -139,6 +139,26 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 			t.Fatalf("invalid CAS changed checkpoint = %+v, %v", stored, err)
 		}
 	})
+	t.Run("delete", func(t *testing.T) {
+		store := open(t)
+		ctx := context.Background()
+		if err := store.Delete(ctx, "nonexistent"); !errors.Is(err, checkpoint.ErrNotFound) {
+			t.Fatalf("delete nonexistent error = %v, want %v", err, checkpoint.ErrNotFound)
+		}
+		initial := fixture()
+		if err := store.Create(ctx, initial); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Delete(ctx, "run"); err != nil {
+			t.Fatalf("delete run error: %v", err)
+		}
+		if _, err := store.Load(ctx, "run"); !errors.Is(err, checkpoint.ErrNotFound) {
+			t.Fatalf("load after delete = %v, want %v", err, checkpoint.ErrNotFound)
+		}
+		if err := store.Delete(ctx, "run"); !errors.Is(err, checkpoint.ErrNotFound) {
+			t.Fatalf("delete already deleted = %v, want %v", err, checkpoint.ErrNotFound)
+		}
+	})
 }
 
 func fixture() graph.Checkpoint[State] {

@@ -19,6 +19,7 @@ const (
 	OperationCreate         EventOperation = "create"
 	OperationLoad           EventOperation = "load"
 	OperationCompareAndSwap EventOperation = "compare_and_swap"
+	OperationDelete         EventOperation = "delete"
 )
 
 // EventPhase identifies the beginning or end of an operation.

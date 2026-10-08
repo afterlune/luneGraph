@@ -64,6 +64,12 @@ type CallInfo struct {
 	InvocationID string
 	// CallID is unique within the run and stable across replay of this callback.
 	CallID string
+	// Node is the name of the vertex executing this callback.
+	Node string
+	// Step is the cumulative count of completed node starts before this callback.
+	Step uint64
+	// BranchIndex is the branch index within an activation group (0 for root/linear paths).
+	BranchIndex int
 }
 
 // Clone makes an independent copy of state before a user callback runs.

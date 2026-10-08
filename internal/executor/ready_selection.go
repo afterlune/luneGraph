@@ -14,15 +14,24 @@ func selectReady[S any](s Checkpoint[S], index *invocationIndex, running map[str
 		return scanReady(s, running, cursor)
 	}
 	start := sort.Search(len(index.order), func(i int) bool { return index.order[i].number > cursor })
-	for _, entries := range [][]invocationOrder{index.order[start:], index.order[:start]} {
-		for _, entry := range entries {
-			inv := &s.Invocations[entry.position]
-			if inv.Status != InvocationReady {
-				continue
-			}
-			if _, active := running[inv.ID]; !active {
-				return inv, entry.number
-			}
+	for i := start; i < len(index.order); i++ {
+		entry := index.order[i]
+		inv := &s.Invocations[entry.position]
+		if inv.Status != InvocationReady {
+			continue
+		}
+		if _, active := running[inv.ID]; !active {
+			return inv, entry.number
+		}
+	}
+	for i := 0; i < start; i++ {
+		entry := index.order[i]
+		inv := &s.Invocations[entry.position]
+		if inv.Status != InvocationReady {
+			continue
+		}
+		if _, active := running[inv.ID]; !active {
+			return inv, entry.number
 		}
 	}
 	return nil, 0

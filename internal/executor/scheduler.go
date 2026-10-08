@@ -72,7 +72,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 				return resultWith(s, StatusFailed), fmt.Errorf("clone node state: %w", err)
 			}
 			id := next.ID
-			call := CallInfo{RunID: s.RunID, InvocationID: id, CallID: next.CallID}
+			call := CallInfo{RunID: s.RunID, InvocationID: id, CallID: next.CallID, Node: next.Node, Step: s.Steps, BranchIndex: next.BranchIndex}
 			spec := r.nodes[next.Node]
 			nodeCtx, cancel := context.WithCancel(runCtx)
 			running[id] = cancel

@@ -107,6 +107,28 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 	return nil
 }
 
+func (s *Store[S]) Delete(ctx context.Context, runID string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if s == nil {
+		return errors.New("store is nil")
+	}
+	if !model.ValidName(runID) {
+		return errors.New("run ID must be non-empty and have no surrounding whitespace")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := s.values[runID]; !exists {
+		return checkpoint.ErrNotFound
+	}
+	delete(s.values, runID)
+	return nil
+}
+
 func checkContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context must not be nil")

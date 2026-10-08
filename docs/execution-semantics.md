@@ -81,6 +81,13 @@ consumed. `Resume` continues to reject terminal checkpoints. If another executor
 commits between `Recover`'s load and CAS, the losing write returns
 `graph.ErrConflict`; `Recover` does not retry automatically.
 
+`Fork(ctx, newRunID, checkpoint, opts)` creates an independent execution starting
+from an existing checkpoint's execution position and state. The target checkpoint
+must not be terminal (`ErrRunCompleted`). If a Store is configured, `Fork` initializes
+the new run at revision 1 using `Store.Create` (returning `ErrConflict` if `newRunID`
+already exists). The original execution remains unchanged. `Fork` allows exploration,
+speculative execution, or trial branches without mutating the parent run's history.
+
 `FailExecution`, including a root `FailGroup` escalation, commits a terminal
 checkpoint with `Completed=true`, no active invocations or groups, and one
 `Failure` pointer. Earlier local failures remain represented by
@@ -115,7 +122,11 @@ Therefore a callback may execute more than once across recovery. The runtime
 does not make callback side effects exactly once.
 
 Node, join merge, and continuation apply callbacks receive a `CallInfo` with
-`RunID`, `InvocationID`, and `CallID`. The runtime persists a callback's ID
+`RunID`, `InvocationID`, `CallID`, `Node`, `Step`, and `BranchIndex`.
+`Node` identifies the current executing node or join name. `Step` provides the
+execution step count at invocation start. `BranchIndex` gives the branch index
+within the activation group for fan-out branches (0 for sequential paths).
+The runtime persists a callback's ID
 before that callback can start. Recovery reuses the same ID when replaying that
 logical callback. A new node visit in a loop, a new continuation application,
 or a new fan-out join gets a new ID. Use an application-specific namespace with
@@ -185,7 +196,7 @@ operation ID, or read clocks.
 | `OperationStart`, `OperationResume`, `OperationRecover` | One public call, including validation, cancellation, and draining workers |
 | `OperationNode`, `OperationJoin` | The callback, including panic conversion, before accepting its outcome |
 | `OperationDecode`, `OperationApply` | One continuation decoder or typed apply callback |
-| `OperationCreate`, `OperationLoad`, `OperationCompareAndSwap` | One actual call to the configured Store |
+| `OperationCreate`, `OperationLoad`, `OperationCompareAndSwap`, `OperationDelete` | One actual call to the configured Store |
 
 Public calls begin observation after checking that their Runner and context are
 non-nil. Other validation errors still produce a public finished event with the
@@ -261,6 +272,7 @@ Observer contract.
 | `Create` | Save revision 1 for a new run | Existing run: `graph.ErrConflict`; malformed header: `graph.ErrInvalidCheckpoint` |
 | `Load` | Return an independent copy of the latest revision | Missing run: `checkpoint.ErrNotFound` |
 | `CompareAndSwap` | Save `expected + 1` for the same run and machine | Stale revision, wrong machine, or skipped revision: `graph.ErrConflict`; malformed header: `graph.ErrInvalidCheckpoint` |
+| `Delete` | Remove all saved checkpoints for a run | Missing run: `checkpoint.ErrNotFound` |
 
 A valid write header has the current `CheckpointFormatVersion`, nonempty run and
 machine IDs without surrounding whitespace, and a positive revision. CAS at

@@ -123,3 +123,17 @@ func (s *executorTestStore) CompareAndSwap(ctx context.Context, expected uint64,
 	s.values[next.RunID] = copyCheckpoint(next)
 	return nil
 }
+
+func (s *executorTestStore) Delete(ctx context.Context, runID string) error {
+	if ctx == nil {
+		return errors.New("nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := s.values[runID]; !exists {
+		return fmt.Errorf("missing run %q", runID)
+	}
+	delete(s.values, runID)
+	return nil
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
@@ -104,6 +105,7 @@ type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)
 	CompareAndSwap(context.Context, uint64, Checkpoint[S]) error
+	Delete(context.Context, string) error
 }
 
 // Options controls one call's budget, concurrency, storage, and failure scope.
@@ -169,7 +171,9 @@ func FindGroup[S any](s *Checkpoint[S], id string) (int, *ActivationGroup) {
 }
 
 func NewID[S any](s *Checkpoint[S], prefix string) string {
-	id := fmt.Sprintf("%s%d", prefix, s.NextID)
+	var buf [32]byte
+	n := copy(buf[:], prefix)
+	b := strconv.AppendUint(buf[:n], s.NextID, 10)
 	s.NextID++
-	return id
+	return string(b)
 }

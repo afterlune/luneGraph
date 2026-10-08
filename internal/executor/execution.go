@@ -163,7 +163,13 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 	}
 	reserveInvocationIndex(index, s, len(targets))
 	groupID := newID(s, "g")
-	group := ActivationGroup{ID: groupID, Source: source, ParentID: id, JoinNode: r.joinBySource[source]}
+	group := ActivationGroup{
+		ID:       groupID,
+		Source:   source,
+		ParentID: id,
+		JoinNode: r.joinBySource[source],
+		Children: make([]string, len(targets)),
+	}
 	if group.JoinNode != "" {
 		group.CallID = newID(s, "c")
 	}
@@ -173,19 +179,19 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 	inv.ChildGroupID = groupID
 	inv.Continuation = ""
 	inv.Next = nil
-	s.Groups = append(s.Groups, group)
 	for branchIndex, target := range targets {
 		childState, err := r.cloneState(state, id)
 		if err != nil {
 			return &stateCopyError{cause: fmt.Errorf("clone fan-out state: %w", err)}
 		}
 		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
-		s.Groups[len(s.Groups)-1].Children = append(s.Groups[len(s.Groups)-1].Children, child.ID)
+		group.Children[branchIndex] = child.ID
 		appended := appendInvocation(index, s, child)
 		if err := r.setTarget(s, appended, target); err != nil {
 			return err
 		}
 	}
+	s.Groups = append(s.Groups, group)
 	return nil
 }
 
