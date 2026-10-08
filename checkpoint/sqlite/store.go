@@ -32,8 +32,7 @@ func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error 
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
 	defer s.releasePayloadBuffer(payload)
-	result, err := s.db.ExecContext(ctx,
-		"INSERT INTO checkpoints (run_id, machine_id, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING",
+	result, err := s.stmtCreate.ExecContext(ctx,
 		value.RunID, value.MachineID, strconv.FormatUint(value.Revision, 10), payload.data)
 	if err != nil {
 		return fmt.Errorf("create checkpoint: %w", err)
@@ -59,9 +58,7 @@ func (s *Store[S]) Load(ctx context.Context, runID string) (graph.Checkpoint[S],
 	}
 	var machineID, revisionText string
 	var payload []byte
-	err := s.db.QueryRowContext(ctx,
-		"SELECT machine_id, revision, payload FROM checkpoints WHERE run_id = ?", runID,
-	).Scan(&machineID, &revisionText, &payload)
+	err := s.stmtLoad.QueryRowContext(ctx, runID).Scan(&machineID, &revisionText, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, fmt.Errorf("run %q: %w", runID, checkpoint.ErrNotFound)
 	}
@@ -104,8 +101,7 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
 	defer s.releasePayloadBuffer(payload)
-	result, err := s.db.ExecContext(ctx,
-		"UPDATE checkpoints SET revision = ?, payload = ? WHERE run_id = ? AND machine_id = ? AND revision = ?",
+	result, err := s.stmtCAS.ExecContext(ctx,
 		strconv.FormatUint(next.Revision, 10), payload.data, next.RunID, next.MachineID, strconv.FormatUint(expected, 10))
 	if err != nil {
 		return fmt.Errorf("compare and swap checkpoint: %w", err)
@@ -125,12 +121,12 @@ func (s *Store[S]) Delete(ctx context.Context, runID string) error {
 		return err
 	}
 	if s == nil || s.db == nil {
-		return errors.New("store is closed")
+		return errors.New("store is nil")
 	}
 	if !model.ValidName(runID) {
 		return errors.New("run ID must be non-empty and have no surrounding whitespace")
 	}
-	result, err := s.db.ExecContext(ctx, "DELETE FROM checkpoints WHERE run_id = ?", runID)
+	result, err := s.stmtDelete.ExecContext(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}

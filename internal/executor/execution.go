@@ -99,6 +99,9 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 }
 
 func (r *Runner[S]) checkJoinTargets(s *Checkpoint[S], inv *Invocation[S], targets []string) error {
+	if len(r.joins) == 0 {
+		return nil
+	}
 	for _, target := range targets {
 		if _, isJoin := r.joins[target]; !isJoin {
 			continue

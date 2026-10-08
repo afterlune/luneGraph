@@ -457,6 +457,91 @@ func TestRunnerFork(t *testing.T) {
 	}
 }
 
+func TestRunnerForkEdgeCases(t *testing.T) {
+	g := graph.New[int]("start")
+	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
+	r := intRunner(t, g)
+	store := newMemoryStore(t)
+
+	var nilRunner *graph.Runner[int]
+	ctx := context.Background()
+	cp := graph.Checkpoint[int]{
+		FormatVersion: graph.CheckpointFormatVersion,
+		MachineID:     "numbers-v1",
+		RunID:         "run-cp",
+		Revision:      1,
+		NextID:        3,
+		Invocations: []graph.Invocation[int]{
+			{ID: "i1", CallID: "c2", Node: "start", Status: graph.InvocationReady},
+		},
+	}
+
+	// 1. nil runner
+	if _, err := nilRunner.Fork(ctx, "run-1", cp, graph.Options[int]{}); err == nil {
+		t.Fatal("expected error on nil runner")
+	}
+
+	// 2. nil ctx
+	if _, err := r.Fork(nil, "run-1", cp, graph.Options[int]{}); err == nil {
+		t.Fatal("expected error on nil ctx")
+	}
+
+	// 3. invalid runID
+	if _, err := r.Fork(ctx, "", cp, graph.Options[int]{}); err == nil {
+		t.Fatal("expected error on empty runID")
+	}
+	if _, err := r.Fork(ctx, "  spaces  ", cp, graph.Options[int]{}); err == nil {
+		t.Fatal("expected error on runID with spaces")
+	}
+
+	// 4. invalid checkpoint (mismatched machine ID)
+	invalidCp := cp
+	invalidCp.MachineID = "wrong-machine"
+	if _, err := r.Fork(ctx, "run-1", invalidCp, graph.Options[int]{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+		t.Fatalf("expected ErrInvalidCheckpoint, got: %v", err)
+	}
+
+	// 5. Store conflict (runID already exists)
+	if err := store.Create(ctx, cp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Fork(ctx, "run-cp", cp, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
+		t.Fatalf("expected ErrConflict, got: %v", err)
+	}
+
+	// 6. Canceled context
+	cancCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if res, err := r.Fork(cancCtx, "run-canc", cp, graph.Options[int]{}); res.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected StatusCancelled and context.Canceled, got: %+v, %v", res, err)
+	}
+
+	// 7. Observer on Fork
+	var observedEvents []graph.Event
+	obs := graph.ObserverFunc(func(_ context.Context, e graph.Event) {
+		observedEvents = append(observedEvents, e)
+	})
+	res, err := r.Fork(ctx, "run-obs", cp, graph.Options[int]{Observer: obs})
+	if err != nil || res.Status != graph.StatusCompleted {
+		t.Fatalf("fork with observer failed: %+v, %v", res, err)
+	}
+	if len(observedEvents) == 0 {
+		t.Fatal("expected observed events from fork")
+	}
+}
+
+func TestJSONCloneError(t *testing.T) {
+	type unmarshalable struct {
+		Ch chan int
+	}
+	val := unmarshalable{Ch: make(chan int)}
+	if _, err := graph.JSONClone(val); err == nil {
+		t.Fatal("expected error cloning unmarshalable type")
+	}
+}
+
 func TestExportMermaid(t *testing.T) {
 	child := graph.New[int]("sub_entry")
 	node(t, child, "sub_entry", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {

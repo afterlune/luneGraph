@@ -297,3 +297,52 @@ func corruptRow(t *testing.T, path, statement string, args ...any) {
 		t.Fatal(err)
 	}
 }
+
+func TestStoreDeleteEdgeCases(t *testing.T) {
+	var nilStore *sqlite.Store[state]
+	ctx := context.Background()
+	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "nil-run", MachineID: "m-1", Revision: 1}
+
+	if err := nilStore.Create(ctx, cp); err == nil {
+		t.Fatal("expected error on Create with nil store")
+	}
+	if _, err := nilStore.Load(ctx, "nil-run"); err == nil {
+		t.Fatal("expected error on Load with nil store")
+	}
+	if err := nilStore.CompareAndSwap(ctx, 1, cp); err == nil {
+		t.Fatal("expected error on CAS with nil store")
+	}
+	if err := nilStore.Delete(ctx, "nil-run"); err == nil {
+		t.Fatal("expected error on Delete with nil store")
+	}
+
+	path := databasePath(t)
+	store := openStore(t, path)
+
+	// nil ctx
+	if err := store.Delete(nil, "run-1"); err == nil {
+		t.Fatal("expected error on Delete with nil ctx")
+	}
+	// invalid runID
+	if err := store.Delete(ctx, ""); err == nil {
+		t.Fatal("expected error on Delete with empty runID")
+	}
+	if err := store.Delete(ctx, "  spaces  "); err == nil {
+		t.Fatal("expected error on Delete with space-padded runID")
+	}
+
+	// canceled ctx
+	cancCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.Delete(cancCtx, "run-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+
+	// closed store
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(ctx, "run-1"); err == nil {
+		t.Fatal("expected error on Delete after store is closed")
+	}
+}

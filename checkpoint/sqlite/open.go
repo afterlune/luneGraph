@@ -31,6 +31,10 @@ type Store[S any] struct {
 	db             *sql.DB
 	codec          checkpoint.Codec[S]
 	payloadBuffers sync.Pool
+	stmtCreate     *sql.Stmt
+	stmtLoad       *sql.Stmt
+	stmtCAS        *sql.Stmt
+	stmtDelete     *sql.Stmt
 }
 
 // Open opens or creates a local SQLite database. Its parent directory must
@@ -78,7 +82,40 @@ func Open[S any](ctx context.Context, dbPath string, codec checkpoint.Codec[S]) 
 		db.Close()
 		return nil, err
 	}
-	return &Store[S]{db: db, codec: codec}, nil
+	stmtCreate, err := db.PrepareContext(ctx, "INSERT INTO checkpoints (run_id, machine_id, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING")
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("prepare create statement: %w", err)
+	}
+	stmtLoad, err := db.PrepareContext(ctx, "SELECT machine_id, revision, payload FROM checkpoints WHERE run_id = ?")
+	if err != nil {
+		stmtCreate.Close()
+		db.Close()
+		return nil, fmt.Errorf("prepare load statement: %w", err)
+	}
+	stmtCAS, err := db.PrepareContext(ctx, "UPDATE checkpoints SET revision = ?, payload = ? WHERE run_id = ? AND machine_id = ? AND revision = ?")
+	if err != nil {
+		stmtCreate.Close()
+		stmtLoad.Close()
+		db.Close()
+		return nil, fmt.Errorf("prepare cas statement: %w", err)
+	}
+	stmtDelete, err := db.PrepareContext(ctx, "DELETE FROM checkpoints WHERE run_id = ?")
+	if err != nil {
+		stmtCreate.Close()
+		stmtLoad.Close()
+		stmtCAS.Close()
+		db.Close()
+		return nil, fmt.Errorf("prepare delete statement: %w", err)
+	}
+	return &Store[S]{
+		db:         db,
+		codec:      codec,
+		stmtCreate: stmtCreate,
+		stmtLoad:   stmtLoad,
+		stmtCAS:    stmtCAS,
+		stmtDelete: stmtDelete,
+	}, nil
 }
 
 // SQLite's busy timeout does not cover every lock encountered while two
@@ -187,7 +224,26 @@ func (s *Store[S]) Close() error {
 	if s == nil || s.db == nil {
 		return errors.New("store is nil")
 	}
-	return s.db.Close()
+	var err error
+	if s.stmtCreate != nil {
+		err = errors.Join(err, s.stmtCreate.Close())
+		s.stmtCreate = nil
+	}
+	if s.stmtLoad != nil {
+		err = errors.Join(err, s.stmtLoad.Close())
+		s.stmtLoad = nil
+	}
+	if s.stmtCAS != nil {
+		err = errors.Join(err, s.stmtCAS.Close())
+		s.stmtCAS = nil
+	}
+	if s.stmtDelete != nil {
+		err = errors.Join(err, s.stmtDelete.Close())
+		s.stmtDelete = nil
+	}
+	db := s.db
+	s.db = nil
+	return errors.Join(err, db.Close())
 }
 
 var _ graph.Store[int] = (*Store[int])(nil)
