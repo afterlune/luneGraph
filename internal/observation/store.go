@@ -43,3 +43,10 @@ func (s *observedStore[S]) CompareAndSwap(ctx context.Context, expected uint64, 
 	span.End(ctx, model.Event{Revision: checkpoint.Revision, Err: err})
 	return err
 }
+
+func (s *observedStore[S]) Delete(ctx context.Context, runID string) error {
+	span := s.session.Begin(ctx, model.Event{Operation: model.OperationDelete})
+	err := s.store.Delete(ctx, runID)
+	span.End(ctx, model.Event{Err: err})
+	return err
+}

@@ -3,6 +3,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/afterlune/luneGraph/internal/definition"
 	"github.com/afterlune/luneGraph/internal/executor"
@@ -52,6 +53,7 @@ const (
 	OperationCreate         = model.OperationCreate
 	OperationLoad           = model.OperationLoad
 	OperationCompareAndSwap = model.OperationCompareAndSwap
+	OperationDelete         = model.OperationDelete
 	PhaseStarted            = model.PhaseStarted
 	PhaseFinished           = model.PhaseFinished
 
@@ -98,6 +100,31 @@ func New[S any](entry string) *Graph[S] { return definition.New[S](entry) }
 // the application.
 func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, CallInfo, S, P) (S, error)) error {
 	return definition.RegisterContinuation(g, key, decode, apply)
+}
+
+// RegisterJSONContinuation registers a typed continuation that unmarshals its payload as JSON into P.
+func RegisterJSONContinuation[S, P any](g *Graph[S], key string, apply func(context.Context, CallInfo, S, P) (S, error)) error {
+	return definition.RegisterJSONContinuation(g, key, apply)
+}
+
+// ValueClone returns a Clone function that performs a direct Go value copy.
+// Suitable for scalar types, immutable types, or structs containing no reference fields (pointers, slices, maps).
+func ValueClone[S any](state S) (S, error) {
+	return state, nil
+}
+
+// JSONClone returns a Clone function that deep-copies state via JSON encoding and decoding.
+// Provides an immediate deep-copy implementation for complex structs without writing manual copy logic.
+func JSONClone[S any](state S) (S, error) {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return state, err
+	}
+	var cloned S
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return state, err
+	}
+	return cloned, nil
 }
 
 func To[S any](state S, targets ...string) Transition[S] {

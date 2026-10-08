@@ -161,3 +161,86 @@ func TestJoinCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		t.Fatalf("replayed callback identity changed: merges=%+v right=%+v", mergeCalls, rightCalls)
 	}
 }
+
+func TestCallInfoMetadata(t *testing.T) {
+	var nodeCalls []graph.CallInfo
+	var joinCalls []graph.CallInfo
+	var contCalls []graph.CallInfo
+
+	g := graph.New[int]("start")
+	node(t, g, "start", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		nodeCalls = append(nodeCalls, call)
+		return graph.To(state, "b0", "b1"), nil
+	})
+	node(t, g, "b0", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		nodeCalls = append(nodeCalls, call)
+		return graph.To(state+1, "join"), nil
+	})
+	node(t, g, "b1", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		nodeCalls = append(nodeCalls, call)
+		return graph.To(state+2, "join"), nil
+	})
+	if err := g.AddJoin(graph.JoinSpec[int]{
+		Name: "join",
+		From: "start",
+		Merge: func(_ context.Context, call graph.CallInfo, values []int) (int, error) {
+			joinCalls = append(joinCalls, call)
+			return values[0] + values[1], nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	node(t, g, "pause", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		nodeCalls = append(nodeCalls, call)
+		return graph.Wait(state, "add_input", "finish"), nil
+	})
+	node(t, g, "finish", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		nodeCalls = append(nodeCalls, call)
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "start", "b0")
+	edge(t, g, "start", "b1")
+	edge(t, g, "b0", "join")
+	edge(t, g, "b1", "join")
+	edge(t, g, "join", "pause")
+	edge(t, g, "pause", "finish")
+
+	if err := graph.RegisterJSONContinuation(g, "add_input", func(_ context.Context, call graph.CallInfo, state int, delta int) (int, error) {
+		contCalls = append(contCalls, call)
+		return state + delta, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := intRunner(t, g)
+	res, err := runner.Start(context.Background(), "meta-run", 10, graph.Options[int]{MaxConcurrency: 1})
+	if err != nil || res.Status != graph.StatusWaiting {
+		t.Fatalf("start failed: %+v, %v", res, err)
+	}
+	res, err = runner.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
+		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`5`)},
+	}, graph.Options[int]{MaxConcurrency: 1})
+	if err != nil || res.Status != graph.StatusCompleted || res.Checkpoint.Final == nil || *res.Checkpoint.Final != 10+1+10+2+5 {
+		t.Fatalf("resume failed: %+v, %v", res, err)
+	}
+
+	// Verify Node calls
+	if nodeCalls[0].Node != "start" || nodeCalls[0].Step != 0 || nodeCalls[0].BranchIndex != 0 {
+		t.Fatalf("start callinfo = %+v", nodeCalls[0])
+	}
+	branchMap := map[string]int{"b0": 0, "b1": 1}
+	for i, call := range nodeCalls[1:3] {
+		wantIdx, ok := branchMap[call.Node]
+		if !ok || call.BranchIndex != wantIdx || call.Step != uint64(i+1) {
+			t.Fatalf("branch callinfo = %+v (want index %d, step %d)", call, wantIdx, i+1)
+		}
+	}
+	// Verify Join call
+	if len(joinCalls) != 1 || joinCalls[0].Node != "join" || joinCalls[0].Step != 3 || joinCalls[0].BranchIndex != 0 {
+		t.Fatalf("join callinfo = %+v", joinCalls)
+	}
+	// Verify Continuation call
+	if len(contCalls) != 1 || contCalls[0].Node != "pause" || contCalls[0].Step != 4 || contCalls[0].BranchIndex != 0 {
+		t.Fatalf("cont callinfo = %+v", contCalls)
+	}
+}

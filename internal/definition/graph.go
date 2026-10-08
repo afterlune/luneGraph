@@ -3,8 +3,10 @@ package definition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/afterlune/luneGraph/internal/executor"
 	"github.com/afterlune/luneGraph/internal/model"
@@ -153,6 +155,15 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 	return nil
 }
 
+// RegisterJSONContinuation registers a continuation whose payload is JSON-decoded into type P.
+func RegisterJSONContinuation[S, P any](g *Graph[S], key string, apply func(context.Context, model.CallInfo, S, P) (S, error)) error {
+	return RegisterContinuation(g, key, func(payload []byte) (P, error) {
+		var value P
+		err := json.Unmarshal(payload, &value)
+		return value, err
+	}, apply)
+}
+
 // Compile validates and copies the builder into a concurrent-safe Runner.
 func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) {
 	if g == nil {
@@ -171,4 +182,45 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	definition.ID = config.MachineID
 	definition.Clone = config.Clone
 	return executor.New(definition)
+}
+
+// ExportMermaid generates a Mermaid flowchart representation of the graph definition.
+func (g *Graph[S]) ExportMermaid() string {
+	if g == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("flowchart TD\n")
+	renderGraphMermaid(&sb, g, "    ")
+	return sb.String()
+}
+
+func mermaidID(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, "/", "_"), "-", "_")
+}
+
+func renderGraphMermaid[S any](sb *strings.Builder, g *Graph[S], indent string) {
+	if g.entry != "" {
+		fmt.Fprintf(sb, "%s%s([\"%s (entry)\"])\n", indent, mermaidID(g.entry), g.entry)
+	}
+	for _, name := range sortedKeys(g.nodes) {
+		if name == g.entry {
+			continue
+		}
+		fmt.Fprintf(sb, "%s%s[\"%s\"]\n", indent, mermaidID(name), name)
+	}
+	for _, name := range sortedKeys(g.joins) {
+		fmt.Fprintf(sb, "%s%s{{\"%s (join)\"}}\n", indent, mermaidID(name), name)
+	}
+	for _, name := range sortedKeys(g.subgraphs) {
+		sub := g.subgraphs[name]
+		fmt.Fprintf(sb, "%ssubgraph %s [\"%s\"]\n", indent, mermaidID(name), name)
+		renderGraphMermaid(sb, sub, indent+"    ")
+		fmt.Fprintf(sb, "%send\n", indent)
+	}
+	for _, from := range sortedKeys(g.edges) {
+		for _, to := range sortedKeys(g.edges[from]) {
+			fmt.Fprintf(sb, "%s%s --> %s\n", indent, mermaidID(from), mermaidID(to))
+		}
+	}
 }

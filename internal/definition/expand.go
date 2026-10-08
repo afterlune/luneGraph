@@ -99,6 +99,7 @@ func flatten[S any](c *component[S], returnTarget string, mounted bool, machine 
 		continuationTargets[key] = qualify(c.prefix, key)
 	}
 
+	needsRewrite := c.prefix != "" || len(c.children) != 0
 	for _, name := range sortedKeys(c.graph.nodes) {
 		qualified := qualify(c.prefix, name)
 		if previous, exists := vertices[qualified]; exists {
@@ -107,7 +108,9 @@ func flatten[S any](c *component[S], returnTarget string, mounted bool, machine 
 		vertices[qualified] = fmt.Sprintf("node %q", name)
 		spec := c.graph.nodes[name]
 		spec.Name = qualified
-		spec.Run = rewriteNode(spec.Run, targets, continuationTargets)
+		if needsRewrite {
+			spec.Run = rewriteNode(spec.Run, targets, continuationTargets)
+		}
 		machine.Nodes[qualified] = spec
 		if mounted {
 			machine.ReturnTargets[qualified] = returnTarget

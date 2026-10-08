@@ -120,6 +120,30 @@ func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next gra
 	return nil
 }
 
+func (s *Store[S]) Delete(ctx context.Context, runID string) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.db == nil {
+		return errors.New("store is closed")
+	}
+	if !model.ValidName(runID) {
+		return errors.New("run ID must be non-empty and have no surrounding whitespace")
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM checkpoints WHERE run_id = ?", runID)
+	if err != nil {
+		return fmt.Errorf("delete checkpoint: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete result: %w", err)
+	}
+	if changed == 0 {
+		return checkpoint.ErrNotFound
+	}
+	return nil
+}
+
 func checkContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context must not be nil")

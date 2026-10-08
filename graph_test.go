@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -301,6 +302,10 @@ func (m *failingStore) CompareAndSwap(ctx context.Context, expected uint64, next
 	return m.inner.CompareAndSwap(ctx, expected, next)
 }
 
+func (m *failingStore) Delete(ctx context.Context, id string) error {
+	return m.inner.Delete(ctx, id)
+}
+
 func TestStoreFailureReturnsLastCommittedCheckpoint(t *testing.T) {
 	g := graph.New[int]("first")
 	called := 0
@@ -324,5 +329,166 @@ func TestStoreFailureReturnsLastCommittedCheckpoint(t *testing.T) {
 	}
 	if _, err := r.Resume(context.Background(), failed.Checkpoint, nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("stale checkpoint error = %v", err)
+	}
+}
+
+func TestValueClone(t *testing.T) {
+	cloned, err := graph.ValueClone(42)
+	if err != nil || cloned != 42 {
+		t.Fatalf("ValueClone failed: %v, %v", cloned, err)
+	}
+}
+
+func TestJSONClone(t *testing.T) {
+	type ComplexState struct {
+		Name   string         `json:"name"`
+		Scores map[string]int `json:"scores"`
+		Items  []string       `json:"items"`
+	}
+	orig := ComplexState{
+		Name:   "test",
+		Scores: map[string]int{"a": 1},
+		Items:  []string{"x", "y"},
+	}
+	cloned, err := graph.JSONClone(orig)
+	if err != nil {
+		t.Fatalf("JSONClone error: %v", err)
+	}
+	cloned.Scores["a"] = 99
+	cloned.Items[0] = "mutated"
+	if orig.Scores["a"] != 1 || orig.Items[0] != "x" {
+		t.Fatalf("JSONClone did not deep copy: orig=%+v, cloned=%+v", orig, cloned)
+	}
+}
+
+func TestRegisterJSONContinuation(t *testing.T) {
+	type ResumePayload struct {
+		Delta int `json:"delta"`
+	}
+	g := graph.New[int]("start")
+	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.Wait(v, "increment", "end"), nil
+	})
+	node(t, g, "end", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
+	edge(t, g, "start", "end")
+	if err := graph.RegisterJSONContinuation(g, "increment", func(_ context.Context, _ graph.CallInfo, s int, p ResumePayload) (int, error) {
+		return s + p.Delta, nil
+	}); err != nil {
+		t.Fatalf("RegisterJSONContinuation error: %v", err)
+	}
+	runner, err := g.Compile(graph.Config[int]{MachineID: "json-resume-v1", Clone: graph.ValueClone[int]})
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+	res, err := runner.Start(context.Background(), "json-run", 10, graph.Options[int]{})
+	if err != nil || res.Status != graph.StatusWaiting {
+		t.Fatalf("start = %+v, %v", res, err)
+	}
+	res, err = runner.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
+		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`{"delta": 5}`)},
+	}, graph.Options[int]{})
+	if err != nil || res.Status != graph.StatusCompleted || res.Checkpoint.Final == nil || *res.Checkpoint.Final != 15 {
+		t.Fatalf("resume = %+v, %v", res, err)
+	}
+}
+
+func TestRunnerFork(t *testing.T) {
+	g := graph.New[int]("start")
+	node(t, g, "start", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state+1, "step1"), nil
+	})
+	node(t, g, "step1", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.Wait(state, "input", "finish"), nil
+	})
+	node(t, g, "finish", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "start", "step1")
+	edge(t, g, "step1", "finish")
+	if err := graph.RegisterJSONContinuation(g, "input", func(_ context.Context, call graph.CallInfo, state, delta int) (int, error) {
+		return state + delta, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := newMemoryStore(t)
+	r := intRunner(t, g)
+	res, err := r.Start(context.Background(), "run-original", 10, graph.Options[int]{Store: store})
+	if err != nil || res.Status != graph.StatusWaiting {
+		t.Fatalf("start = %+v, %v", res, err)
+	}
+
+	// Fork off into run-forked
+	forkedRes, err := r.Fork(context.Background(), "run-forked", res.Checkpoint, graph.Options[int]{Store: store})
+	if err != nil || forkedRes.Status != graph.StatusWaiting || forkedRes.Checkpoint.RunID != "run-forked" || forkedRes.Checkpoint.Revision != 1 {
+		t.Fatalf("fork = %+v, %v", forkedRes, err)
+	}
+
+	// Advance original with +100
+	origFinal, err := r.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
+		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`100`)},
+	}, graph.Options[int]{Store: store})
+	if err != nil || origFinal.Status != graph.StatusCompleted || *origFinal.Checkpoint.Final != 111 {
+		t.Fatalf("orig final = %+v, %v", origFinal, err)
+	}
+
+	// Advance forked with +500
+	forkFinal, err := r.Resume(context.Background(), forkedRes.Checkpoint, []graph.ResumeInput{
+		{InvocationID: forkedRes.Checkpoint.Invocations[0].ID, Payload: []byte(`500`)},
+	}, graph.Options[int]{Store: store})
+	if err != nil || forkFinal.Status != graph.StatusCompleted || *forkFinal.Checkpoint.Final != 511 {
+		t.Fatalf("fork final = %+v, %v", forkFinal, err)
+	}
+
+	// Verify both exist independently in store
+	origLoaded, err := store.Load(context.Background(), "run-original")
+	if err != nil || *origLoaded.Final != 111 {
+		t.Fatalf("load orig = %+v, %v", origLoaded, err)
+	}
+	forkLoaded, err := store.Load(context.Background(), "run-forked")
+	if err != nil || *forkLoaded.Final != 511 {
+		t.Fatalf("load fork = %+v, %v", forkLoaded, err)
+	}
+
+	// Forking completed run fails with ErrRunCompleted
+	if _, err := r.Fork(context.Background(), "run-fork-completed", origLoaded, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunCompleted) {
+		t.Fatalf("fork completed = %v, want ErrRunCompleted", err)
+	}
+}
+
+func TestExportMermaid(t *testing.T) {
+	child := graph.New[int]("sub_entry")
+	node(t, child, "sub_entry", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.Return(v), nil
+	})
+
+	g := graph.New[int]("start")
+	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.To(v, "worker"), nil
+	})
+	if err := g.AddSubgraph("worker", child); err != nil {
+		t.Fatal(err)
+	}
+	node(t, g, "finish", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+		return graph.EndExecution(v), nil
+	})
+	edge(t, g, "start", "worker")
+	edge(t, g, "worker", "finish")
+
+	builderDiagram := g.ExportMermaid()
+	if !strings.Contains(builderDiagram, `start(["start (entry)"])`) ||
+		!strings.Contains(builderDiagram, `subgraph worker ["worker"]`) ||
+		!strings.Contains(builderDiagram, `start --> worker`) {
+		t.Fatalf("unexpected builder mermaid:\n%s", builderDiagram)
+	}
+
+	runner := intRunner(t, g)
+	runnerDiagram := runner.ExportMermaid()
+	if !strings.Contains(runnerDiagram, `start(["start (entry)"])`) ||
+		!strings.Contains(runnerDiagram, `worker_sub_entry["worker/sub_entry"]`) ||
+		!strings.Contains(runnerDiagram, `start --> worker_sub_entry`) ||
+		!strings.Contains(runnerDiagram, `worker_sub_entry -.->|return| finish`) {
+		t.Fatalf("unexpected runner mermaid:\n%s", runnerDiagram)
 	}
 }

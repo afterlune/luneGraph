@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"strconv"
-	"strings"
 
 	"github.com/afterlune/luneGraph/internal/model"
 	"github.com/afterlune/luneGraph/internal/observation"
@@ -80,8 +78,18 @@ func markCompleted[S any](s *Checkpoint[S]) {
 }
 
 func invocationNumber(id string) uint64 {
-	number, _ := strconv.ParseUint(strings.TrimPrefix(id, "i"), 10, 64)
-	return number
+	if len(id) <= 1 || id[0] != 'i' {
+		return 0
+	}
+	var n uint64
+	for i := 1; i < len(id); i++ {
+		c := id[i]
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + uint64(c-'0')
+	}
+	return n
 }
 
 func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], store Store[S]) (Checkpoint[S], error) {
@@ -141,6 +149,59 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Opt
 		}
 	}
 	return r.drive(ctx, s, opts, obs)
+}
+
+// Fork creates an independent execution starting from source's execution position,
+// assigning it newRunID and resetting its Revision to 1. State values are cloned
+// using the runner's Clone function to ensure physical memory isolation.
+// If opts.Store is provided, the initial forked checkpoint is created in the store.
+// Fork then drives the execution forward according to opts, just like Start.
+func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint[S], opts Options[S]) (result Result[S], retErr error) {
+	var empty Checkpoint[S]
+	if r == nil {
+		return resultWith(empty, StatusFailed), errors.New("runner is nil")
+	}
+	if ctx == nil {
+		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
+	}
+	if !validName(newRunID) {
+		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
+	}
+	if err := r.validateCheckpoint(source); err != nil {
+		return resultWith(empty, StatusFailed), err
+	}
+	if source.Completed {
+		return resultWith(empty, StatusFailed), ErrRunCompleted
+	}
+	obs := observation.New(opts.Observer, r.id, newRunID)
+	if obs != nil {
+		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
+		defer func() {
+			if result.Status != "" {
+				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+			}
+		}()
+		opts.Store = observation.WrapStore(opts.Store, obs)
+	}
+	var err error
+	if opts, err = normalizeOptions(opts); err != nil {
+		return resultWith(empty, StatusFailed), err
+	}
+	if err = ctx.Err(); err != nil {
+		return resultWith(empty, StatusCancelled), err
+	}
+	forked, err := source.Clone(r.clone)
+	if err != nil {
+		return resultWith(empty, StatusFailed), fmt.Errorf("clone forked checkpoint: %w", err)
+	}
+	forked.RunID = newRunID
+	forked.Revision = 1
+	if opts.Store != nil {
+		if err := opts.Store.Create(ctx, forked); err != nil {
+			return resultWith(empty, errorStatus(err)), err
+		}
+	}
+	return r.drive(ctx, forked, opts, obs)
 }
 
 func (r *Runner[S]) scope(declared FailureScope, opts Options[S]) FailureScope {

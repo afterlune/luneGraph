@@ -32,7 +32,7 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 					values = append(values, value)
 				}
 			}
-			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID}
+			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID, Node: group.JoinNode, Step: s.Steps, BranchIndex: parent.BranchIndex}
 			merged, mergeErr = r.observedMerge(ctx, obs, s.Revision, call, r.joins[group.JoinNode], values)
 		}
 		children := make(map[string]bool, len(group.Children))
