@@ -4,12 +4,51 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	graph "github.com/afterlune/luneGraph"
 )
+
+func TestMainEntryPoint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "main.db")
+	output := callDurableMain(t, []string{"start", "-db", dbPath, "-run", "main-run"})
+	if !strings.Contains(output, "status=waiting run=main-run") {
+		t.Fatalf("main start output = %q", output)
+	}
+	output = callDurableMain(t, []string{"resume", "-db", dbPath, "-run", "main-run", "-value", "8"})
+	if !strings.Contains(output, "status=completed run=main-run value=8") {
+		t.Fatalf("main resume output = %q", output)
+	}
+}
+
+func callDurableMain(t *testing.T, args []string) string {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldArgs, oldStdout := os.Args, os.Stdout
+	os.Args = append([]string{"durable"}, args...)
+	os.Stdout = write
+	defer func() {
+		os.Args, os.Stdout = oldArgs, oldStdout
+		_ = read.Close()
+		_ = write.Close()
+	}()
+	main()
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
+}
 
 func TestDurableWorkflow(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test_runs.db")
@@ -80,5 +119,22 @@ func TestWaitingInvocation(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "has no waiting value invocation") {
 		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+type failingOutput struct{ err error }
+
+func (w failingOutput) Write([]byte) (int, error) { return 0, w.err }
+
+func TestRunReportsDatabaseAndOutputFailures(t *testing.T) {
+	missingDB := filepath.Join(t.TempDir(), "missing", "runs.db")
+	if err := run(context.Background(), []string{"start", "-db", missingDB}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("start accepted a database path with a missing parent")
+	}
+
+	writeErr := errors.New("output unavailable")
+	err := run(context.Background(), []string{"start", "-db", filepath.Join(t.TempDir(), "runs.db")}, failingOutput{writeErr}, &bytes.Buffer{})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("run output error = %v", err)
 	}
 }

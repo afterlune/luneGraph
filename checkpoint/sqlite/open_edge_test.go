@@ -122,3 +122,13 @@ func TestOpenRejectsIncompatibleSchemaShape(t *testing.T) {
 		t.Fatalf("incompatible schema shape = %v", err)
 	}
 }
+
+func TestOpenRejectsCorruptDatabase(t *testing.T) {
+	path := databasePath(t)
+	if err := os.WriteFile(path, []byte("not a SQLite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.Open(context.Background(), path, checkpoint.JSON[state]{}); err == nil {
+		t.Fatal("Open accepted a corrupt database file")
+	}
+}

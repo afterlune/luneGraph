@@ -54,6 +54,38 @@ func TestReplayAndIsolation(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsInvalidPathsAndInitializationFailures(t *testing.T) {
+	ctx := context.Background()
+	for _, path := range []string{"", "  ", ":memory:", "file:effects.db"} {
+		if _, err := Open(ctx, path); err == nil {
+			t.Errorf("Open accepted path %q", path)
+		}
+	}
+	missingParent := filepath.Join(t.TempDir(), "missing", "effects.db")
+	if _, err := Open(ctx, missingParent); err == nil {
+		t.Fatal("Open accepted a path with a missing parent directory")
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := Open(canceled, filepath.Join(t.TempDir(), "canceled.db")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open with canceled context = %v", err)
+	}
+}
+
+func TestAddRejectsIncompleteReceiptKeys(t *testing.T) {
+	l := openTest(t, filepath.Join(t.TempDir(), "effects.db"))
+	for _, key := range []Key{
+		{},
+		{RunID: "run", CallID: "call"},
+		{Namespace: "v1", CallID: "call"},
+		{Namespace: "v1", RunID: "run"},
+	} {
+		if _, err := l.Add(context.Background(), key, 1); err == nil {
+			t.Errorf("Add accepted incomplete key %+v", key)
+		}
+	}
+}
+
 func TestConcurrentDuplicateAcrossConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "effects.db")
 	ledgers := []*Ledger{openTest(t, path), openTest(t, path)}
@@ -107,6 +139,33 @@ func TestReceiptFailureRollsBackCounter(t *testing.T) {
 	}
 	if got, err := l.Add(ctx, key, 5); err != nil || got != 7 {
 		t.Fatalf("retry = %d, %v", got, err)
+	}
+}
+
+func TestCounterUpdateFailureRollsBackNewNamespace(t *testing.T) {
+	l := openTest(t, filepath.Join(t.TempDir(), "effects.db"))
+	if _, err := l.db.Exec(`CREATE TRIGGER reject_counter_update BEFORE UPDATE ON counters BEGIN SELECT RAISE(ABORT,'counter failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	key := Key{"v1", "run", "call"}
+	if _, err := l.Add(context.Background(), key, 5); err == nil {
+		t.Fatal("counter update failure was ignored")
+	}
+	var counters, receipts int
+	if err := l.db.QueryRow("SELECT count(*) FROM counters").Scan(&counters); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.db.QueryRow("SELECT count(*) FROM receipts").Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if counters != 0 || receipts != 0 {
+		t.Fatalf("failed transaction left counters=%d receipts=%d", counters, receipts)
+	}
+	if _, err := l.db.Exec("DROP TRIGGER reject_counter_update"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.Add(context.Background(), key, 5); err != nil || got != 5 {
+		t.Fatalf("retry after update failure = %d, %v", got, err)
 	}
 }
 
