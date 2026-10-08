@@ -2,3 +2,5 @@
 .codex/
 *.exe
 *.test
+coverage
+*.out
