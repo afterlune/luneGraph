@@ -168,6 +168,52 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	}
 }
 
+func TestStoreReportsSQLiteStatementFailures(t *testing.T) {
+	ctx := context.Background()
+	path := databasePath(t)
+	store := openStore(t, path)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	setup := func(statement string) {
+		t.Helper()
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-errors", MachineID: "machine-v1", Revision: 1}
+
+	setup(`CREATE TRIGGER reject_create BEFORE INSERT ON checkpoints BEGIN SELECT RAISE(ABORT,'create failure'); END`)
+	if err := store.Create(ctx, value); err == nil {
+		t.Fatal("Create ignored a SQLite statement failure")
+	}
+	setup("DROP TRIGGER reject_create")
+	if err := store.Create(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+
+	setup(`CREATE TRIGGER reject_update BEFORE UPDATE ON checkpoints BEGIN SELECT RAISE(ABORT,'update failure'); END`)
+	next := value
+	next.Revision = 2
+	if err := store.CompareAndSwap(ctx, 1, next); err == nil {
+		t.Fatal("CompareAndSwap ignored a SQLite statement failure")
+	}
+	setup("DROP TRIGGER reject_update")
+
+	setup(`CREATE TRIGGER reject_delete BEFORE DELETE ON checkpoints BEGIN SELECT RAISE(ABORT,'delete failure'); END`)
+	if err := store.Delete(ctx, value.RunID); err == nil {
+		t.Fatal("Delete ignored a SQLite statement failure")
+	}
+	setup("DROP TRIGGER reject_delete")
+
+	setup("DROP TABLE checkpoints")
+	if _, err := store.Load(ctx, value.RunID); err == nil {
+		t.Fatal("Load ignored a missing-table error")
+	}
+}
+
 func TestUnknownSchemaVersion(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
