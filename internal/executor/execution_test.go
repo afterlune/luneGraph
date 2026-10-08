@@ -325,3 +325,14 @@ func TestCallbackPanicWrappers(t *testing.T) {
 		t.Fatal("panic stack extraction incorrect")
 	}
 }
+
+func TestStateCopyErrorMethods(t *testing.T) {
+	inner := errors.New("underlying clone failure")
+	err := &stateCopyError{cause: inner}
+	if err.Error() != "underlying clone failure" {
+		t.Fatalf("unexpected Error(): %s", err.Error())
+	}
+	if !errors.Is(err, inner) {
+		t.Fatalf("expected Unwrap to match inner error")
+	}
+}

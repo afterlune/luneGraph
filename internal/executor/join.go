@@ -8,6 +8,9 @@ import (
 )
 
 func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, obs *observation.Session) error {
+	if len(s.Groups) == 0 {
+		return nil
+	}
 	for {
 		index := readyGroup(s, invIndex, progress)
 		if index < 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/afterlune/luneGraph/internal/observation"
 )
@@ -12,6 +13,16 @@ type workResult[S any] struct {
 	id         string
 	transition Transition[S]
 	err        error
+}
+
+type workerTask[S any] struct {
+	ctx      context.Context
+	id       string
+	call     CallInfo
+	spec     NodeSpec[S]
+	state    S
+	obs      *observation.Session
+	revision uint64
 }
 
 func hasReady[S any](s Checkpoint[S]) bool {
@@ -36,7 +47,29 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	results := make(chan workResult[S], opts.MaxConcurrency)
-	running := make(map[string]context.CancelFunc)
+	running := make(map[string]context.CancelFunc, opts.MaxConcurrency)
+	tasks := make(chan workerTask[S], opts.MaxConcurrency)
+	var workers sync.WaitGroup
+	for i := 0; i < opts.MaxConcurrency; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for t := range tasks {
+				var transition Transition[S]
+				var err error
+				if t.obs == nil {
+					transition, err = r.runNode(t.ctx, t.call, t.spec, t.state)
+				} else {
+					transition, err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.spec, t.state)
+				}
+				results <- workResult[S]{id: t.id, transition: transition, err: err}
+			}
+		}()
+	}
+	defer func() {
+		close(tasks)
+		workers.Wait()
+	}()
 	s := start
 	index := newInvocationIndex(s)
 	var progress groupProgress
@@ -78,17 +111,14 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			running[id] = cancel
 			used++
 			cursor = number
-			if obs == nil {
-				go func() {
-					transition, err := r.runNode(nodeCtx, call, spec, state)
-					results <- workResult[S]{id: id, transition: transition, err: err}
-				}()
-			} else {
-				revision := s.Revision
-				go func() {
-					transition, err := r.observedNode(nodeCtx, obs, revision, call, spec, state)
-					results <- workResult[S]{id: id, transition: transition, err: err}
-				}()
+			tasks <- workerTask[S]{
+				ctx:      nodeCtx,
+				id:       id,
+				call:     call,
+				spec:     spec,
+				state:    state,
+				obs:      obs,
+				revision: s.Revision,
 			}
 		}
 		if len(running) == 0 {

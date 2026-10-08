@@ -38,6 +38,15 @@ func selectReady[S any](s Checkpoint[S], index *invocationIndex, running map[str
 }
 
 func scanReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) (*Invocation[S], uint64) {
+	if len(s.Invocations) == 1 {
+		inv := &s.Invocations[0]
+		if inv.Status == InvocationReady {
+			if _, active := running[inv.ID]; !active {
+				return inv, invocationNumber(inv.ID)
+			}
+		}
+		return nil, 0
+	}
 	var after, wrapped *Invocation[S]
 	var afterNumber, wrappedNumber uint64
 	for i := range s.Invocations {

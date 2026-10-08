@@ -112,3 +112,50 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		t.Fatalf("CAS outcomes: %d success, %d conflict", succeeded, conflicted)
 	}
 }
+
+func TestStoreEdgeCases(t *testing.T) {
+	if _, err := memory.New[int](nil); err == nil {
+		t.Fatal("expected error with nil clone")
+	}
+
+	var nilStore *memory.Store[int]
+	ctx := context.Background()
+	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-nil", MachineID: "m-1", Revision: 1}
+
+	if err := nilStore.Create(ctx, cp); err == nil {
+		t.Fatal("expected error on Create with nil store")
+	}
+	if _, err := nilStore.Load(ctx, "run-nil"); err == nil {
+		t.Fatal("expected error on Load with nil store")
+	}
+	if err := nilStore.CompareAndSwap(ctx, 1, cp); err == nil {
+		t.Fatal("expected error on CAS with nil store")
+	}
+	if err := nilStore.Delete(ctx, "run-nil"); err == nil {
+		t.Fatal("expected error on Delete with nil store")
+	}
+
+	store, err := memory.New[int](func(v int) (int, error) { return v, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// nil ctx
+	if err := store.Delete(nil, "run-1"); err == nil {
+		t.Fatal("expected error with nil ctx")
+	}
+	// invalid runID
+	if err := store.Delete(ctx, ""); err == nil {
+		t.Fatal("expected error with empty runID")
+	}
+	if err := store.Delete(ctx, "  spaces  "); err == nil {
+		t.Fatal("expected error with spaces in runID")
+	}
+
+	// canceled ctx
+	cancCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.Delete(cancCtx, "run-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+}
