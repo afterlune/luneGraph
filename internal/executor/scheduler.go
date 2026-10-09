@@ -44,6 +44,15 @@ func availableCommits[S any](s Checkpoint[S]) uint64 {
 	return revisions
 }
 
+func cancelPrunedInvocations[S any](checkpoint *Checkpoint[S], index *invocationIndex, running map[string]context.CancelFunc) {
+	for id, cancel := range running {
+		_, current := indexedInvocation(index, checkpoint, id)
+		if current == nil || current.Status != InvocationReady {
+			cancel()
+		}
+	}
+}
+
 func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S], obs *observation.Session) (Result[S], error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -84,6 +93,11 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 	}()
 	s := start
 	index := newInvocationIndex(s)
+	// Read topology only. A value parameter keeps commit candidates from
+	// escaping through the cancellation callback passed to settleGroups.
+	cancelPruned := func(candidate Checkpoint[S]) {
+		cancelPrunedInvocations(&candidate, &index, running)
+	}
 	var progress groupProgress
 	var spare Checkpoint[S]
 	used := 0
@@ -230,10 +244,16 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 				drain()
 				return resultWith(s, StatusFailed), failureErr
 			}
+			// Removed callbacks must release their permits before an enclosing
+			// join can wait for admission. Cancellation is invocation-local;
+			// a rejected candidate can still replay from the last checkpoint.
+			if scope == FailGroup {
+				cancelPruned(candidate)
+			}
 		}
 		candidate.ScheduleCursor = cursor
 		if !ended {
-			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs); err != nil {
+			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs, cancelPruned); err != nil {
 				if isJoinInterruption(err) {
 					drain()
 					return interruptedResult(ctx, s, err)
@@ -257,12 +277,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		s = committed
 		spare = previous
 		clearCheckpointStateValues(&spare)
-		for id, cancel := range running {
-			_, current := indexedInvocation(&index, &s, id)
-			if current == nil || current.Status != InvocationReady {
-				cancel()
-			}
-		}
+		cancelPrunedInvocations(&s, &index, running)
 		if ended {
 			drain()
 			return resultWith(s, statusOf(s, false)), nil

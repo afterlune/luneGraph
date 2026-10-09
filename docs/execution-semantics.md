@@ -158,8 +158,14 @@ can still cause the callback to run again.
 
 `FailGroup` from an invocation in an activation group removes that group's child
 invocations and all nested groups beneath them, then marks the group's parent
-invocation failed. Running callbacks in the removed subtree are canceled and
-drained. Enclosing groups remain active and settle under their own join rules;
+invocation failed. Running callbacks in the removed subtree are canceled before
+settling enclosing groups, so their callback permits can be released before an
+enclosing join waits for admission. All callbacks are drained before the public
+call returns. This cancellation belongs to the current call and does not confirm
+that its failure candidate was committed. If the candidate is rejected or its
+submission is uncertain, reload the Store; recovery can replay callbacks canceled
+from the uncommitted candidate using their persisted CallIDs.
+Enclosing groups remain active and settle under their own join rules;
 only children that reach an enclosing join contribute states. `FailGroup` at the
 root escalates to `FailExecution`.
 
