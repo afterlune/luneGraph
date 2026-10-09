@@ -34,6 +34,26 @@ The benchmarks report Go's `ns/op`, `B/op`, and `allocs/op` values. Graph compil
 
 The durable execution benchmarks create their initial run before timing and repeatedly call `Recover` with the same run ID. Every executed node outcome is persisted through the normal checkpoint path. The loop leaves a bounded checkpoint row with ready work after each measured call, so iterations measure recovery and execution without growing the number of stored runs. Each case loads the final checkpoint after timing and checks it against the returned result.
 
+## Shared callback budget and result resolution
+
+The [shared-budget capacity record](capacity.md#shared-callback-budget-and-result-resolution)
+covers 64 executions, eight callers, eight branches and global callback capacity
+one/eight with Memory and SQLite. It includes clone/state isolation, three
+callback kinds, typed resume input, pending CallID retention, permit release,
+CAS ambiguity, nested join candidate resolution and escaping Store-panic drain.
+`BenchmarkCapacitySharedLimiter` records per-call latency, batch throughput and
+sampled resources. Its observer and validation costs are included; SQLite
+samples complete one timed batch and are finite validation, not sustained limits.
+
+The same-host baseline is `d2baa6e`. Longer paired sequential/fan-out samples
+have overlapping timing ranges; the large slowdown in the initial short scan
+was not reproduced. Lazy workers reduce default sequential and paused-inspect
+allocation counts. Enabled result observation and Debug JSON logging add real
+costs because each execution callback now resolves its outcome. Nil observation
+still allocates no session or ledger and reads no observation clocks. The
+capacity record preserves sample ranges, observer costs, workload details,
+commands and limitations; there is no machine-independent performance gate.
+
 ## Current format-3 diagnosis
 
 The [format-3 scale and cost diagnosis](capacity.md#format-3-scale-and-cost-diagnosis)

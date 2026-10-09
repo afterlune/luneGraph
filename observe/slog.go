@@ -57,6 +57,9 @@ func (o *slogObserver) Observe(ctx context.Context, event graph.Event) {
 	if event.Phase == graph.PhaseFinished {
 		attrs = append(attrs, slog.Duration("duration", event.Duration))
 	}
+	if event.Outcome != "" {
+		attrs = append(attrs, slog.String("outcome", string(event.Outcome)))
+	}
 	if event.Status != "" {
 		attrs = append(attrs, slog.String("status", string(event.Status)))
 	}

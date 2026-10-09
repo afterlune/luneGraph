@@ -82,6 +82,7 @@ func finished(events []graph.Event, op graph.EventOperation) []graph.Event {
 func checkPairs(t *testing.T, events []graph.Event) {
 	t.Helper()
 	open := make(map[string]graph.Event)
+	unresolved := make(map[string]graph.Event)
 	for _, e := range events {
 		if e.OperationID == 0 || e.Time.IsZero() || e.RunID == "" || e.MachineID != "observation-v1" {
 			t.Fatalf("missing identity/time: %+v", e)
@@ -101,9 +102,24 @@ func checkPairs(t *testing.T, events []graph.Event) {
 				t.Fatalf("unpaired finish: %+v", e)
 			}
 			delete(open, key)
+			if e.Operation == graph.OperationNode || e.Operation == graph.OperationJoin || e.Operation == graph.OperationApply {
+				unresolved[key] = e
+			}
+		} else if e.Phase == graph.PhaseResolved {
+			end, exists := unresolved[key]
+			if !exists || e.Time.Before(end.Time) || e.Duration != 0 {
+				t.Fatalf("unpaired resolution: %+v", e)
+			}
+			if e.Outcome != graph.OutcomeCommitted && e.Outcome != graph.OutcomeDiscarded && e.Outcome != graph.OutcomeUnknown {
+				t.Fatalf("invalid outcome: %+v", e)
+			}
+			delete(unresolved, key)
 		} else {
 			t.Fatalf("invalid phase: %+v", e)
 		}
+	}
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved callbacks: %+v", unresolved)
 	}
 	if len(open) != 0 {
 		t.Fatalf("unfinished spans: %+v", open)

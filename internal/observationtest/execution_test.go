@@ -64,7 +64,7 @@ func TestObserverPanicsDoNotChangeExecution(t *testing.T) {
 		t.Fatalf("changed outcome: %+v, %v", actual, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationStart, actual, err)
-	if len(log.snapshot()) != 8 {
+	if len(log.snapshot()) != 9 {
 		t.Fatalf("deliveries stopped after panic: %+v", log.snapshot())
 	}
 }

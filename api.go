@@ -7,13 +7,16 @@ import (
 
 	"github.com/afterlune/luneGraph/internal/definition"
 	"github.com/afterlune/luneGraph/internal/executor"
+	"github.com/afterlune/luneGraph/internal/limit"
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
 type (
+	Limiter           = limit.Limiter
 	Event             = model.Event
 	EventOperation    = model.EventOperation
 	EventPhase        = model.EventPhase
+	CallbackOutcome   = model.CallbackOutcome
 	Observer          = model.Observer
 	ObserverFunc      = model.ObserverFunc
 	Action            = model.Action
@@ -56,6 +59,10 @@ const (
 	OperationDelete         = model.OperationDelete
 	PhaseStarted            = model.PhaseStarted
 	PhaseFinished           = model.PhaseFinished
+	PhaseResolved           = model.PhaseResolved
+	OutcomeCommitted        = model.OutcomeCommitted
+	OutcomeDiscarded        = model.OutcomeDiscarded
+	OutcomeUnknown          = model.OutcomeUnknown
 
 	ActionContinue     = model.ActionContinue
 	ActionWait         = model.ActionWait
@@ -96,6 +103,11 @@ var (
 
 // New creates a graph builder with the given entry vertex name.
 func New[S any](entry string) *Graph[S] { return definition.New[S](entry) }
+
+// NewLimiter creates a fixed, process-local budget shared by node, join and
+// continuation Apply callbacks. Share its pointer across Options and runners.
+// Capacity must be positive. Waiting responds to context cancellation.
+func NewLimiter(capacity int) (*Limiter, error) { return limit.New(capacity) }
 
 // RegisterContinuation adapts a typed continuation handler to persisted bytes.
 // Apply receives a stable CallInfo that remains the same if recovery replays

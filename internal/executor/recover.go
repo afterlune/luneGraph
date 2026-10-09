@@ -24,6 +24,7 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationRecover})
 		defer func() {
 			if result.Status != "" {
+				obs.DiscardPending(ctx, retErr)
 				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
 			}
 		}()

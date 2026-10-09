@@ -28,6 +28,18 @@ type EventPhase string
 const (
 	PhaseStarted  EventPhase = "started"
 	PhaseFinished EventPhase = "finished"
+	// PhaseResolved reports acceptance or rejection of an execution callback.
+	PhaseResolved EventPhase = "resolved"
+)
+
+// CallbackOutcome describes what happened to one callback's result, not its
+// external side effects. With no Store, committed means accepted in memory.
+type CallbackOutcome string
+
+const (
+	OutcomeCommitted CallbackOutcome = "committed"
+	OutcomeDiscarded CallbackOutcome = "discarded"
+	OutcomeUnknown   CallbackOutcome = "unknown"
 )
 
 // Event contains execution metadata, never application state or resume bytes.
@@ -37,6 +49,8 @@ const (
 type Event struct {
 	Operation EventOperation
 	Phase     EventPhase
+	// Outcome is populated only on resolved node, join and Apply events.
+	Outcome CallbackOutcome
 	// OperationID correlates one public Runner call within this process. It is
 	// not durable; use RunID and CallID to correlate logical callback replays.
 	OperationID  uint64
@@ -47,7 +61,9 @@ type Event struct {
 	Node         string
 	Continuation string
 	// Revision is the callback's base revision, the attempted write revision,
-	// or the returned revision for a successful Load or public call.
+	// or the returned revision for a successful Load or public call. On a
+	// resolved callback it is the target revision if commit was entered,
+	// otherwise the callback's base revision.
 	Revision uint64
 	Time     time.Time
 	// Duration is set on finished events and excludes their own delivery and

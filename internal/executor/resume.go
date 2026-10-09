@@ -23,6 +23,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationResume, Revision: checkpoint.Revision})
 		defer func() {
 			if result.Status != "" {
+				obs.DiscardPending(ctx, retErr)
 				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
@@ -100,7 +101,10 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			return resultWith(s, StatusFailed), fmt.Errorf("clone waiting state: %w", cloneErr)
 		}
 		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Step: s.Steps, BranchIndex: inv.BranchIndex}
-		updated, applyErr := r.observedApply(ctx, obs, s.Revision, call, *inv, state, input.value)
+		updated, applyErr := r.limitedApply(ctx, opts.Limiter, obs, s.Revision, call, *inv, state, input.value)
+		if err := ctx.Err(); err != nil {
+			return resultWith(s, StatusCancelled), err
+		}
 		if isCallbackInterruption(applyErr) {
 			return interruptedResult(ctx, s, applyErr)
 		}
@@ -109,7 +113,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
 			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, applyErr); failureErr != nil {
 				if candidate.Failure != nil {
-					return r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
+					return r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store, obs)
 				}
 				return resultWith(s, StatusFailed), failureErr
 			}
@@ -118,18 +122,18 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 				return resultWith(s, StatusFailed), routeErr
 			}
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); settleErr != nil {
+		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs); settleErr != nil {
 			if isJoinInterruption(settleErr) {
 				return interruptedResult(ctx, s, settleErr)
 			}
 			if candidate.Failure != nil {
-				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
+				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store, obs)
 			}
-			return resultWith(s, StatusFailed), settleErr
+			return resultWith(s, errorStatus(settleErr)), settleErr
 		}
 		markCompleted(&candidate)
 		previous := s
-		committed, commitErr := r.commit(ctx, s, candidate, opts.Store)
+		committed, commitErr := r.commit(ctx, s, candidate, opts.Store, obs)
 		if commitErr != nil {
 			return resultWith(previous, errorStatus(commitErr)), commitErr
 		}

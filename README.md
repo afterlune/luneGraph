@@ -115,6 +115,36 @@ Register each continuation with `RegisterContinuation`, or `RegisterJSONContinua
 
 `Start`, `Resume`, and `Recover` return a `Result[S]` containing a `Checkpoint[S]`. The checkpoint holds invocation positions, activation groups, a local-failure flag, an optional execution-level failure, a revision, and cumulative completed steps. Completed checkpoints contain no invocations or groups. Natural completion may have neither `Final` nor `Failure`; only `EndExecution(state)` supplies a final state. Treat it as immutable. Checkpoints carry `FormatVersion` (`CheckpointFormatVersion` is currently 3); `Resume` and `Recover` reject incompatible or malformed checkpoints with `ErrInvalidCheckpoint`. Version-1 and version-2 checkpoints are not upgraded automatically and must be completed with the old runtime or migrated by the application. `MaxSteps` defaults to 10,000 node starts per call and can be overridden; exhausting it returns `StatusBudget`. `MaxConcurrency` defaults to `GOMAXPROCS(0)`.
 
+### Shared callback concurrency
+
+`MaxConcurrency` limits node concurrency within one public call. Use a shared
+`Limiter` to bound node, join Merge, and continuation Apply callbacks across
+executions, compiled runners, state types, and stores in the same process:
+
+```go
+limiter, err := graph.NewLimiter(32)
+if err != nil {
+    return err
+}
+options := graph.Options[State]{MaxConcurrency: 8, Limiter: limiter, Store: store}
+// Reuse limiter in every participating execution's Options.
+```
+
+Capacity must be positive; a non-nil zero-value Limiter is invalid. Capacity is
+fixed; share the pointer and do not copy the Limiter. A nil Limiter uses only
+the existing local concurrency limit. Waiting responds to context cancellation
+and does not consume the step budget or change the pending CallID. The scheduler
+continues handling running results while waiting for capacity, and creates
+workers only when it schedules tasks. Permits are released after callback
+observation and before checkpoint submission. Clone, Decode, Store and Observer
+do not acquire their own permits; node state cloning happens after admission.
+
+The budget bounds callbacks, rather than execution admission, waiting callers,
+or all process goroutines. There is no FIFO, cross-process budget, run lease, or
+automatic retry. Host applications manage queues and fairness. A callback that
+synchronously drives another execution must avoid waiting on a shared budget
+already occupied by itself. Compiled subgraphs keep using the same execution.
+
 Ready invocations receive starts in round-robin ID order, tracked by `ScheduleCursor` across resumes. Concurrent results are committed in the order the scheduler receives them, so competing `EndExecution` results depend on completion timing. Cancellation waits for running callbacks to return. If a revision, step, or ID counter cannot advance, the runner returns `ErrExecutionLimit` with `StatusFailed` and the last committed checkpoint.
 
 ### Recoverable interruption
@@ -222,6 +252,27 @@ result, err := runner.Start(ctx, "observed-run", 0, options)
 `graph.ObserverFunc` also adapts a function taking `(context.Context, graph.Event)`. Delivery is synchronous and may be concurrent, so observers must be concurrency safe and return promptly. A slow observer adds latency and may affect the completion order of parallel callbacks. Each observer panic is isolated; graph failure policies and checkpoint commit points remain unchanged. The logging adapter reports public calls at Info, callbacks and Store calls at Debug, and errors at Error. A nil logger uses `slog.Default()`.
 
 An `OperationID` correlates one `Start`, `Resume`, or `Recover` call within the current process. `RunID` and persisted `CallID` identify logical node, join, and continuation-apply callbacks across replay; decode events have no CallID. Nodes and continuations in subgraphs use qualified names. A finished callback event reports what that callback returned before routing validation or persistence. For write events, `Revision` is the attempted revision and any Store error may mean the commit outcome is uncertain, except `ErrConflict`, which guarantees no write. Use the Store to confirm recovery state. Events are best effort, are not stored, and can be incomplete after a crash. Error messages remain application-provided and may contain user data.
+
+Node, join and continuation Apply callbacks also emit `PhaseResolved` with
+`Event.Outcome`: `OutcomeCommitted`, `OutcomeDiscarded`, or `OutcomeUnknown`.
+This resolves the callback's result, including handled failures; it does not
+classify external side effects. All callbacks in one candidate, including its
+trigger and nested joins, share the submission outcome. With no Store,
+committed means accepted into the in-memory checkpoint. Interruption, invalid
+transitions, superseded results, cancellation before submission, and CAS
+`ErrConflict` discard results. Other errors returned by CAS, including context
+errors, leave the submission outcome unknown. Reload the Store to confirm it.
+
+A resolved event retains callback identity and Action, has zero Duration, and
+reports the target Revision when commit was entered or the callback's base
+Revision otherwise. Its Err describes rejection or uncertain submission; the
+original callback error remains on the finished event. Every started execution
+callback gets one resolved event before a normally returning public call
+finishes. Crashes and Store panics can leave this sequence incomplete. Consumers
+must handle `PhaseStarted`, `PhaseFinished` and `PhaseResolved` explicitly;
+a non-started event is no longer necessarily a callback finish. Resolution
+events remain transient and do not provide a durable event log.
+
 
 Add `-observe` to either durable example command to write JSON events to stderr. Its result line remains on stdout:
 

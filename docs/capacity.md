@@ -1456,3 +1456,125 @@ The separate one-second-per-Store race soak also passed. Raw benchmark and
 soak logs remain in the temporary directory outside the repository. The normal
 CI tests exercise the same assertions at fixed round counts; the manual soaks
 remain opt-in.
+
+
+## Shared callback budget and result resolution
+
+Collected on 2026-10-09 against baseline `d2baa6e`, with Go 1.26.5,
+Windows/amd64, and AMD Ryzen 7 6800H. The baseline was extracted into a separate
+source directory. Before/after benchmark commands ran serially; results remain
+machine-specific. No Store settings, checkpoint format or commit boundaries
+changed. SQLite retained WAL, synchronous FULL, and one open connection.
+
+### Workload and correctness
+
+`TestCapacitySharedLimiter` uses 64 persisted executions, eight caller workers,
+eight branches, local node concurrency eight, and shared callback capacity one
+or eight, with Memory and SQLite. Each run starts at a fork, joins independently
+cloned mutable map states, waits, accepts typed continuation input, and repeats.
+Seeding creates the first ten-step round; two subsequent rounds run concurrently
+in normal tests. Returned and reloaded checkpoints validate owner, counters,
+branch sums, topology and bounded state. A lightweight shared observer checks
+node/join/Apply lifetimes, the global callback bound, and one committed
+resolution for every started callback. Persisted slots retain references and
+counters instead of duplicate application state.
+
+Public API tests additionally cover different Runner/state types, cancellation
+under an exhausted budget, invalid construction, clone failure, callback panic,
+failure and interruption, and permit reuse. Observation tests cover CAS conflict,
+uncertain writes both with and without a write, Store cancellation/deadline errors,
+nested joins discarded together, accepted input prefixes, stable replay IDs,
+observer panics, and draining callbacks after an escaping Store panic without
+fabricating public completion or result resolution.
+
+```sh
+go test -run 'TestLimiter|TestSharedLimiter' .
+go test -run '^TestCapacitySharedLimiter$' ./internal/capacitytest
+go test -run 'TestResolved|TestStorePanic' ./internal/observationtest
+go test -run '^$' -bench '^BenchmarkCapacitySharedLimiter$' -benchmem -benchtime=500ms -count=3 -cpu 8 ./internal/capacitytest
+```
+
+One shared-budget benchmark operation advances all 64 runs by one complete
+round: 640 committed node steps, 64 joins and 64 continuation applications.
+Store creation, graph compilation, seeding, caller construction and final
+reload validation are outside timing. Callback observation, resolution, state
+checks, individual public-call timing, batch samples and a 10 ms resource
+sampler are included. Rows below select the sample with median batch time from
+three final samples, retaining that sample's coherent latency/resource record.
+The rolling latency window has at most 1,024 calls; it is not whole-run latency.
+
+| Store | Shared capacity | Timed rounds per run | Duration, s | Batch, ms | Calls/s | Rolling p50 / p95, ms | Observed callback peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Memory | 1 | 33 | 0.6293 | 19.072 | 3,356.0 | 2.122 / 2.946 | 1 |
+| Memory | 8 | 100 | 1.1188 | 11.189 | 5,720.2 | 1.149 / 1.901 | 6 |
+| SQLite | 1 | 1 | 1.6622 | 1,661.780 | 38.5 | 195.453 / 278.896 | 1 |
+| SQLite | 8 | 1 | 1.6243 | 1,624.315 | 39.4 | 186.135 / 286.708 | 4 |
+
+| Store / capacity | Seed / sampled peak / drained Go heap, bytes | Seed / sampled peak / drained goroutines |
+| --- | ---: | ---: |
+| Memory / 1 | 594,184 / 3,043,840 / 678,688 | 3 / 20 / 3 |
+| Memory / 8 | 774,704 / 3,656,712 / 783,152 | 3 / 63 / 3 |
+| SQLite / 1 | 750,368 / 2,987,600 / 792,536 | 4 / 22 / 4 |
+| SQLite / 8 | 766,816 / 3,199,624 / 796,816 | 4 / 78 / 4 |
+
+All measured cases drained and reloaded 64 valid waiting checkpoints. Shared
+capacity is an upper bound, not a promised attained concurrency. SQLite final
+samples each completed only one timed batch despite 500 ms requests; these
+finite runs do not establish sustained capacity or prove absence of leaks.
+Resources are process-wide Go measurements, exclude SQLite native memory and
+filesystem cache, and sampled peaks may miss shorter spikes. Callers and idle
+workers are outside the callback bound. These fixtures do not implement host
+admission, FIFO scheduling, ownership or an external-effect receipt protocol.
+
+### Runtime cost and observation tradeoffs
+
+The initial 100 ms / three-sample scan covered sequential sizes 1/16/128,
+fan-out widths 2/8/32, paused inspect/advance with 128 runs, and the existing
+observation workloads. A short sequential-128 sample initially suggested an
+83% one-P slowdown. The longer paired 500 ms / three-sample recheck did not
+reproduce it. The following table reports median [range] in microseconds from
+the longer recheck, rather than treating separated short samples as a stable
+speed comparison:
+
+| Workload | Ps | Baseline, us | Updated, us | Baseline / updated allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| Sequential, 128 steps | 1 | 196.538 [175.621–197.426] | 182.251 [181.449–191.912] | 524 / 524 |
+| Sequential, 128 steps | 8 | 543.794 [529.413–544.365] | 554.066 [401.579–567.244] | 531 / 524 |
+| Fan-out, width 32, serial | 1 | 92.267 [89.798–105.300] | 89.352 [82.793–93.341] | 204 / 204 |
+| Fan-out, width 32, serial | 8 | 215.472 [214.556–217.939] | 217.714 [156.133–219.577] | 204 / 204 |
+| Fan-out, width 32, default | 1 | 99.345 [95.961–101.782] | 104.865 [99.426–118.612] | 204 / 204 |
+| Fan-out, width 32, default | 8 | 155.017 [154.698–163.733] | 161.193 [161.115–164.913] | 211 / 211 |
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/^steps=128$' -benchmem -benchtime=500ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/^width=32$' -benchmem -benchtime=500ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkCapacityPaused/store=(memory|sqlite)/runs=128/' -benchmem -benchtime=100ms -count=3 -cpu 8 ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkObservation$' -benchmem -benchtime=100ms -count=3 -cpu 8 ./internal/observationtest
+```
+
+Paired timing ranges overlap and do not support a general throughput claim.
+Lazy workers do reduce repeatable allocation counts: eight-P sequential work
+uses seven fewer worker allocations; width-two default fan-out uses six fewer.
+Paused inspect creates no workers: Memory drops from 28 to 20 allocs/op and
+SQLite from 117 to 109. Their short-sample median inspect times were 12.035 to
+6.716 us and 55.229 to 46.927 us respectively; these timings are descriptive,
+not a portable target. Existing advance allocation counts were unchanged.
+
+Enabled observation pays for result correlation and one extra event per
+execution callback. In the short eight-P sequential observer samples, no-op
+observation changed from 84 to 96 allocs/op and median 61.053 to 100.421 us;
+Debug JSON slog changed from 151 to 195 allocations and 220.595 to 365.749 us.
+Width-32 fan-out no-op observation changed from 208 to 249 allocations and
+123.450 to 209.368 us; slog from 348 to 457 allocations and 241.536 to
+524.640 us. These fixtures have very small callbacks and make observer costs
+visible. Nil observation has no session, ledger, operation IDs or clock reads.
+The resolution delivery buffer is reused and cleared after delivery, and the
+ledger retains unresolved metadata only. Consumers should budget for enabled
+observation and logging rather than assuming the additional phase is free.
+
+Raw logs were saved outside the repository under the local temporary directory
+as `lunegraph-limiter-baseline-{root,paused,observe}.txt`,
+`lunegraph-limiter-after-{root,paused,observe}.txt`,
+`lunegraph-limiter-paired-{before,after}.txt`,
+`lunegraph-limiter-fanout-{before,after}.txt`, and
+`lunegraph-limiter-capacity-bench.txt`.
