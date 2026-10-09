@@ -117,6 +117,22 @@ Register each continuation with `RegisterContinuation`, or `RegisterJSONContinua
 
 Ready invocations receive starts in round-robin ID order, tracked by `ScheduleCursor` across resumes. Concurrent results are committed in the order the scheduler receives them, so competing `EndExecution` results depend on completion timing. Cancellation waits for running callbacks to return. If a revision, step, or ID counter cannot advance, the runner returns `ErrExecutionLimit` with `StatusFailed` and the last committed checkpoint.
 
+### Recoverable interruption
+
+A node, join, or continuation handler can return `graph.Interrupt(cause)` when it needs the caller to defer further execution, for example while confirming a remote effect's outcome:
+
+```go
+return graph.Transition[State]{}, graph.Interrupt(errConfirmationPending)
+```
+
+The runner returns `StatusInterrupted`, an error matching `ErrInterrupted`, and the last committed checkpoint. `errors.Is` and `errors.As` can also inspect the cause; `Interrupt(nil)` requests interruption without a cause. Failure policies do not apply to this returned control signal. The callback's result and state changes are discarded, with no new checkpoint revision, step, or failure marker. Pending callbacks retain their original `CallID` for replay. Parallel interruption cancels other running callbacks, waits for their return, and discards their uncommitted results; callbacks must respond to context cancellation.
+
+`Wait` commits state and waits for continuation input. Interruption instead exits this public call without committing the current candidate. A join shares a commit with the result that triggered it, so an interrupted join also discards that result; nested joins in the same candidate may replay too. An interrupted continuation remains waiting: resubmit its input and any later uncommitted inputs; earlier committed inputs remain accepted.
+
+The caller decides when to invoke `Recover` or `Resume` again. There is no persisted interruption flag or reason, automatic retry, or unlock operation. External effects still require application idempotency or reconciliation using the run and call identity; interruption does not guarantee exactly-once effects. Clone, Decode, and Store errors retain their existing semantics, and panicking with an interruption error remains a panic. If the public call's context is cancelled when interruption is handled, cancellation takes priority.
+
+This API adds the `"interrupted"` result status. Callers that exhaustively handle statuses must add a branch; checkpoint format 3 and Store interfaces are unchanged. See the interruption recovery tests in `examples/effects` for node, continuation, and join receipt replay.
+
 An optional `graph.Store[S]` provides `Create`, `Load`, revision-based `CompareAndSwap`, and `Delete` (which cleans up all checkpoints of a run, returning `checkpoint.ErrNotFound` if missing). `checkpoint/memory` provides a concurrent in-memory implementation. `checkpoint/sqlite` persists the latest checkpoint for each run in a local SQLite file and supports CAS across processes on the same machine. `checkpoint.Codec[S]` appends an encoding of the complete checkpoint to a caller-provided byte slice and decodes it; `checkpoint.JSON[S]` uses `encoding/json`, so the state type must survive a JSON round trip. `Append` must not retain the destination or returned slice. Applications with other state types can implement the codec interface. This is a source-breaking change for custom codecs: replace `Marshal(value)` with `Append(dst, value)` and append the encoded bytes to `dst`. SQLite requires the database file's parent directory to exist.
 
 To resume a budgeted run after reopening the database, reconstruct the same graph and compile it with the same `MachineID`:

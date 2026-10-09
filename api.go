@@ -80,6 +80,7 @@ const (
 	StatusBudget                = model.StatusBudget
 	StatusFailed                = model.StatusFailed
 	StatusCancelled             = model.StatusCancelled
+	StatusInterrupted           = model.StatusInterrupted
 
 	CheckpointFormatVersion = model.CheckpointFormatVersion
 )
@@ -90,6 +91,7 @@ var (
 	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
 	ErrRunCompleted      = model.ErrRunCompleted
 	ErrRunFailed         = model.ErrRunFailed
+	ErrInterrupted       = model.ErrInterrupted
 )
 
 // New creates a graph builder with the given entry vertex name.
@@ -142,3 +144,10 @@ func EndExecution[S any](state S) Transition[S] { return model.EndExecution(stat
 
 // Return leaves a mounted subgraph and follows the edge leaving its mount point.
 func Return[S any](state S) Transition[S] { return model.Return(state) }
+
+// Interrupt asks a node, join, or continuation handler to end the current call
+// without committing its result or applying its failure policy. The runner
+// returns StatusInterrupted and the last committed checkpoint. Recover or Resume
+// may replay pending callbacks with their original CallID. The cause is preserved
+// for errors.Is and errors.As; a nil cause returns ErrInterrupted.
+func Interrupt(cause error) error { return model.Interrupt(cause) }

@@ -25,6 +25,7 @@ const (
 	StatusBudget                Status = "budget_exhausted"
 	StatusFailed                Status = "failed"
 	StatusCancelled             Status = "cancelled"
+	StatusInterrupted           Status = "interrupted"
 )
 
 // PanicError reports a panic raised by an execution callback.
