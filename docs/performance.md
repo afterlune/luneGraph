@@ -330,6 +330,119 @@ per-test-package percentages printed by `go test -coverpkg=./...`.
 
 ## Reliability checks
 
+### Execution model sequences
+
+The pure test package `internal/modeltest` exercises the public API using two
+four-round graphs: a typed pause/resume loop and a single-level fan-out/join
+loop of width two or four. An independent arithmetic model checks ownership,
+rounds, branch values, mutable state, continuation counts, and waiting/final
+step and revision totals. Partial positions are checked against the allowed
+business phases; the model does not reproduce scheduling order or ID allocation.
+Self-tests verify that incorrect boundaries and speculative state are rejected.
+
+Input byte zero selects width (bit 0), local concurrency (bit 1), and shared
+Limiter capacity (bit 2): clear selects two branches or capacity/concurrency
+one, set selects four. The loop ignores width. Remaining bytes are instruction
+pairs `(a,b)`, capped at 64 instructions: mode is `a%8`, node budget is
+`1+(a/8)%8`, and the matching callback/CAS occurrence is `1+b%4`. A trailing
+unpaired byte uses `b=0`. Modes are normal, CAS conflict, error before write,
+lost acknowledgement after write, Node interruption, Join interruption, Apply
+interruption, and cancellation from an execution callback, numbered zero
+through seven. Each instruction injects at most one fault; a target not reached
+before the call returns does not inject anything. Reaching completion stops
+the fault sequence. The driver then disables faults and allows at most 32
+normal recovery calls to finish.
+
+The Store wrapper separately records actual successful writes and models node
+step commits versus continuation commits. Every public call drains observed
+callbacks, checks their started/finished/resolved counts and limiter peak,
+then reloads the authoritative checkpoint with a fresh uncancelled context.
+Input is sent only to currently waiting invocations. Callback requests and
+CallIDs must remain stable on replay; confirmed callbacks must not replay.
+Unknown resolutions are confirmed only using the wrapper's successful write
+record. Fixed tests assert that fault seeds really inject and return the
+expected error and resolution. They include budget cuts, continuation writes
+with lost acknowledgement, and an uncertain last-branch/join candidate.
+
+Fixed sequences run against Memory and SQLite. After an injected fault, SQLite
+is closed and reopened before the next recovery. Loaded mutable data is also
+modified and loaded again to detect Store aliasing. Checkpoint comparisons use
+the public Clone operation to normalize empty collection representations;
+parallel scheduling order is not compared across Stores. These tests do not
+cover nested groups, subgraphs, failure policies, competing recoveries, or
+exactly-once external effects.
+
+CI runs the fixed tests and fuzz seeds through `go test ./...`; its Linux race
+job also includes them. Continuous fuzz uses Memory and is manual:
+
+```sh
+go test ./internal/modeltest -run '^TestExecutionModelSequences$' -count=20
+go test -race ./internal/modeltest -run '^TestExecutionModelSequences$' -count=20
+go test ./internal/modeltest -run '^$' -fuzz '^FuzzLoopExecution$' -fuzztime=60s -parallel=4 -timeout=3m
+go test ./internal/modeltest -run '^$' -fuzz '^FuzzParallelExecution$' -fuzztime=60s -parallel=4 -timeout=3m
+```
+
+Go saves failing fuzz inputs in the target's `testdata/fuzz` directory. Retain
+the minimized input as a regression before fixing any discovered runtime
+defect. Interesting inputs in Go's local fuzz cache supplement the fixed
+seeds, but are not the reproducible CI corpus.
+
+The model validation working tree based on `9cf31eb` was measured on
+2026-10-09 with Go 1.26.5, Windows/amd64, and AMD Ryzen 7 6800H. There are 17
+fixed loop sequences and 21 parallel sequences, each tested with Memory and
+SQLite (76 Store/sequence combinations). The final 60-second fuzz runs used
+four workers and passed:
+
+| Target | Executions | Initial corpus, including local cache | New interesting inputs |
+| --- | ---: | ---: | ---: |
+| `FuzzLoopExecution` | 197,707 | 103 | 38 |
+| `FuzzParallelExecution` | 79,247 | 209 | 63 |
+
+No failing runtime input was found. These are finite correctness explorations,
+not performance measurements; other verification jobs ran concurrently, and
+the local fuzz cache supplemented the committed seeds. Raw final logs remain
+outside the checkout as `lunegraph-model-loop-fuzz-final.txt` and
+`lunegraph-model-parallel-fuzz-final.txt` in the temporary directory. Linux fuzz
+was not run locally. No runtime code, API, checkpoint format, dependency, or CI
+schedule changed.
+
+All 76 Store/sequence combinations passed 20 repetitions normally and 20 with
+`-race`. The final working tree also passed `go test ./...`,
+`go test -race ./...`, `go vet ./...`, formatting and diff checks. The combined
+coverage gate passed all 13 production packages at or above 85%; the new
+package contains only test files and is automatically excluded.
+
+### Atomic batch deletion comparison
+
+The `DeleteMany` working tree based on `9cf31eb` was measured on 2026-10-09
+using Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H, and eight Ps. The benchmark
+compares repeated single `Delete` calls against one atomic `DeleteMany` call.
+Creation and post-deletion Load checks are outside timing. Each operation
+deletes its entire named batch; setup recreates the rows with no execution
+callbacks or stale owners. Three samples use three operations each:
+
+```sh
+go test ./internal/capacitytest -run '^$' -bench '^BenchmarkDeleteMany$' -benchmem -benchtime=3x -count=3 -cpu=8 -timeout=5m
+```
+
+| Store / batch size | Single / batch median ms | Single / batch B/op | Single / batch allocs/op |
+| --- | ---: | ---: | ---: |
+| Memory / 1 | 0.000800 / 0.000833 | 0 / 16 | 0 / 1 |
+| Memory / 64 | 0.005400 / 0.006067 | 0 / 4,648 | 0 / 4 |
+| Memory / 512 | 0.037733 / 0.039300 | 0 / 36,776 | 0 / 4 |
+| SQLite / 1 | 2.316 / 2.200 | 528 / 1,066 | 15 / 25 |
+| SQLite / 64 | 136.581 / 2.364 | 37,248 / 12,301 | 1,032 / 111 |
+| SQLite / 512 | 1,319.415 / 5.553 | 311,960 / 95,752 | 8,547 / 730 |
+
+Memory batch deletion adds validation/deduplication allocations. SQLite keeps
+its WAL/FULL durability settings and amortizes submission over one transaction,
+including multiple SQL chunks. These short samples show the measured batch
+costs, without establishing stable speedup ratios or portable thresholds.
+The [storage lifecycle measurements](capacity.md#completed-execution-storage-lifecycle)
+include retained rows, payload bytes, files and free pages.
+
+### Existing semantic and integration checks
+
 Run the correctness and static checks alongside benchmark work:
 
 ```sh

@@ -50,3 +50,10 @@ func (s *observedStore[S]) Delete(ctx context.Context, runID string) error {
 	span.End(ctx, model.Event{Err: err})
 	return err
 }
+
+func (s *observedStore[S]) DeleteMany(ctx context.Context, runIDs []string) error {
+	span := s.session.Begin(ctx, model.Event{Operation: model.OperationDelete})
+	err := s.store.DeleteMany(ctx, runIDs)
+	span.End(ctx, model.Event{Err: err})
+	return err
+}

@@ -1760,3 +1760,78 @@ Go heap measurements exclude native allocations such as SQLite memory;
 goroutine peaks are sampled, not exhaustive. No portable heap, latency, or
 throughput threshold is imposed. Local measurements use Windows/amd64; Linux
 remains covered by the CI test and race jobs, rather than a local measurement.
+
+## Completed execution storage lifecycle
+
+`TestCapacityStorageLifecycle` checks three batches of eight completed executions
+with two callers, Memory/SQLite, and two policies: keep every completed run, or
+keep only the two newest batches and delete expired IDs with `DeleteMany`.
+Sixteen waiting executions remain in the same Store and are advanced in turn.
+The caller drains each completed batch before deleting it; IDs are unique and
+never reused. Cleanup selection and quiescence are application responsibilities.
+
+`TestCapacityDeleteManyIsolation` holds an unrelated execution inside a node
+callback while a completed batch is deleted, then checks its resumed state.
+Store contract tests additionally check missing/duplicate IDs, empty input,
+whole-list validation, cancellation, idempotent retries after a lost deletion
+acknowledgement, and 513-ID batches. SQLite injects a trigger error into its
+second SQL chunk and verifies the first chunk rolls back, including after reopen.
+
+The manual measurement creates 64 new executions per batch with eight callers
+for 16 batches, using the existing two-node graph and mutable map state. Each
+policy creates 1,024 completed runs plus 16 waiting runs. It logs per-batch
+creation/deletion time, counts, GC heap and goroutines. SQLite metrics add row
+and encoded payload counts, database/WAL bytes, page count and free pages using
+a separate read connection. Sampling happens after workers drain, without
+explicit WAL checkpoint or VACUUM. Both connections then close; file sizes are
+recorded before reopening and verifying retained, deleted and waiting executions.
+
+```sh
+LUNEGRAPH_STORAGE_MEASURE=1 go test ./internal/capacitytest -run '^TestCapacityStorageLifecycleMeasurement$' -count=1 -v -cpu=8 -timeout=4m
+go test ./internal/capacitytest -run '^$' -bench '^BenchmarkDeleteMany$' -benchmem -benchtime=3x -count=3 -cpu=8 -timeout=5m
+```
+
+PowerShell: set `$env:LUNEGRAPH_STORAGE_MEASURE = '1'`, run the measurement
+command without its shell variable prefix, and remove the environment variable
+in `finally`. Without this value the manual test skips. CI runs only the short
+tests and Store contracts; no scheduled measurement is added.
+
+### Local storage measurements
+
+On 2026-10-09, Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H, `GOMAXPROCS=8`,
+the working tree based on `9cf31eb` produced these final-batch results. Other Go
+verification jobs did not run during the measurement and deletion benchmarks.
+
+| Store / policy | Created / deleted / retained completed | GC heap bytes | Goroutines | SQLite rows / payload bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Memory / all | 1,024 / 0 / 1,024 | 1,894,336 | 3 | n/a |
+| Memory / newest two batches | 1,024 / 896 / 128 | 778,736 | 3 | n/a |
+| SQLite / all | 1,024 / 0 / 1,024 | 755,032 | 5 | 1,040 / 453,676 |
+| SQLite / newest two batches | 1,024 / 896 / 128 | 754,232 | 5 | 144 / 64,812 |
+
+SQLite's five goroutines include the separate metrics connection. Heap includes
+the test harness, logs and Store; it excludes native SQLite memory and filesystem
+cache. These finite samples do not establish a leak bound or a per-run budget.
+
+| SQLite policy | Live database / WAL bytes | Pages / free pages | Closed database / WAL bytes |
+| --- | ---: | ---: | ---: |
+| All | 585,728 / 4,132,392 | 146 / 0 | 598,016 / 0 |
+| Newest two batches | 139,264 / 4,132,392 | 34 / 9 | 139,264 / 0 |
+
+Bounded retention reduced rows and left pages available for reuse. The live WAL
+file still reflected prior writes. Deletion does not promise immediate file
+shrinkage; see SQLite's [VACUUM](https://www.sqlite.org/lang_vacuum.html) and
+[WAL](https://www.sqlite.org/wal.html) documentation. No automatic compaction,
+receipt deletion, TTL policy, or production capacity guarantee is introduced.
+
+Raw logs remain outside the checkout as `lunegraph-storage-lifecycle.txt` and
+`lunegraph-delete-many-bench.txt` in the temporary directory. Linux measurements
+were not run locally.
+
+Batch deletion contract/rollback tests and short lifecycle/isolation tests
+passed 20 repetitions normally and 20 with `-race`. Full tests, full race,
+vet, formatting, and the 13-package production coverage gate passed. An early
+parallel verification attempt timed out in the pre-existing
+`TestLimiterNestedFailGroupProgress/join/memory/success` fixture. Fifty targeted
+repetitions and the subsequent full coverage/race runs passed; its cause was
+not established, and the limiter scheduler was not changed by this work.

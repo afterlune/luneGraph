@@ -137,3 +137,16 @@ func (s *executorTestStore) Delete(ctx context.Context, runID string) error {
 	delete(s.values, runID)
 	return nil
 }
+
+func (s *executorTestStore) DeleteMany(ctx context.Context, ids []string) error {
+	if ctx == nil {
+		return errors.New("nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		delete(s.values, id)
+	}
+	return nil
+}

@@ -406,12 +406,31 @@ explicitly instead of treating every non-started event as finished.
 | `Load` | Return an independent copy of the latest revision | Missing run: `checkpoint.ErrNotFound` |
 | `CompareAndSwap` | Save `expected + 1` for the same run and machine | Stale revision, wrong machine, or skipped revision: `graph.ErrConflict`; malformed header: `graph.ErrInvalidCheckpoint` |
 | `Delete` | Remove all saved checkpoints for a run | Missing run: `checkpoint.ErrNotFound` |
+| `DeleteMany` | Atomically remove the named runs; missing/duplicate IDs are harmless | Invalid ID rejects the whole batch; cancellation or storage failure returns an error |
 
 A valid write header has the current `CheckpointFormatVersion`, nonempty run and
 machine IDs without surrounding whitespace, and a positive revision. CAS at
 the maximum revision returns `graph.ErrExecutionLimit`. A conflict never
 changes the stored checkpoint. Other storage errors may have committed and
 require a fresh `Load` to establish the latest revision.
+
+`DeleteMany(ctx, runIDs)` validates the entire list before deletion. With a
+valid Store and context, an empty list succeeds. IDs are not retained by the
+implementation. Memory deletes under one lock; SQLite executes SQL chunks in
+one transaction. A batch has one atomic outcome, including when a commit error
+leaves that outcome uncertain. Reload target IDs with a fresh context to
+confirm, then retry the idempotent batch as necessary. Invalid IDs never delete
+anything. Separate Load calls can straddle a concurrent deletion; they are not
+a multi-run snapshot.
+
+The caller selects IDs and ensures their executions will no longer be driven.
+Deletion is not cancellation, a completed-only condition, a retention policy,
+or an execution lease. Use unique run IDs for new executions so stale owners
+cannot address a new execution under an old ID. A CAS against a deleted run
+returns conflict; Recover returns not found. Checkpoint deletion does not
+delete application effect receipts or external data. Wrapped batch deletion
+uses one started/finished `OperationDelete` pair, with the wrapper session's
+metadata and the original error; it has no callback resolution event.
 
 ## Bounded execution position
 
