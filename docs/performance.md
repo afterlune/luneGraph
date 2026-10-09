@@ -323,8 +323,8 @@ inconsistent duplicate statement counts, and eligible packages with missing
 or zero effective statements. The threshold uses integer ratios before
 display rounding; aggregate coverage cannot hide an under-covered package.
 
-On 2026-10-09, the Windows/amd64 working tree based on `02a415d` passed all
-13 eligible packages. Their minimum was SQLite at 86.404%; the checker tests
+On 2026-10-09, the Windows/amd64 working tree based on `3a71698` passed all
+13 eligible packages. Their minimum was SQLite at 86.957%; the checker tests
 reached 96.9%. These are combined-profile package values, rather than the
 per-test-package percentages printed by `go test -coverpkg=./...`.
 
@@ -332,17 +332,20 @@ per-test-package percentages printed by `go test -coverpkg=./...`.
 
 ### Execution model sequences
 
-The pure test package `internal/modeltest` exercises the public API using two
-four-round graphs: a typed pause/resume loop and a single-level fan-out/join
-loop of width two or four. An independent arithmetic model checks ownership,
-rounds, branch values, mutable state, continuation counts, and waiting/final
-step and revision totals. Partial positions are checked against the allowed
-business phases; the model does not reproduce scheduling order or ID allocation.
-Self-tests verify that incorrect boundaries and speculative state are rejected.
+The pure test package `internal/modeltest` exercises the public API using
+four-round pause/resume graphs. Its existing models cover a typed loop and a
+single-level fan-out/join loop; the nested model adds an outer fork with a
+healthy branch and a nested fork/join branch of width two or four. An
+independent arithmetic oracle checks owner, round, branch contribution, mutable
+state, activation parent/child topology, local-failure boundaries, confirmed
+callback step counts, continuation counts, and revision totals. It does not
+reproduce scheduler order or ID allocation. Self-tests and per-commit Store
+checks reject invalid checkpoints and speculative state.
 
-Input byte zero selects width (bit 0), local concurrency (bit 1), and shared
-Limiter capacity (bit 2): clear selects two branches or capacity/concurrency
-one, set selects four. The loop ignores width. Remaining bytes are instruction
+For the existing model, input byte zero selects width (bit 0), local
+concurrency (bit 1), and shared Limiter capacity (bit 2): clear selects two
+branches or capacity/concurrency one, set selects four. The loop ignores
+width. Remaining bytes are instruction
 pairs `(a,b)`, capped at 64 instructions: mode is `a%8`, node budget is
 `1+(a/8)%8`, and the matching callback/CAS occurrence is `1+b%4`. A trailing
 unpaired byte uses `b=0`. Modes are normal, CAS conflict, error before write,
@@ -370,7 +373,29 @@ modified and loaded again to detect Store aliasing. Checkpoint comparisons use
 the public Clone operation to normalize empty collection representations;
 parallel scheduling order is not compared across Stores. These tests do not
 cover nested groups, subgraphs, failure policies, competing recoveries, or
-exactly-once external effects.
+exactly-once external effects. The nested model covers no failure, a leaf
+`FailInvocation`, a leaf `FailGroup`, and an inner join `FailInvocation`; the
+outer healthy branch must remain available in each local-failure case. It does
+not cover subgraphs or competing recoveries.
+
+Nested input byte zero uses bits 0–2 for width, local concurrency, and shared
+Limiter capacity as above. Bits 3–4 select the failure policy: no failure,
+leaf `FailInvocation`, leaf `FailGroup`, or inner join `FailInvocation`.
+Following instruction pairs use the same decoding and 64-instruction bound.
+The fixed nested matrix tests both widths, all four local concurrency/capacity
+combinations, all four failure profiles, and Memory/SQLite (64 sequences),
+plus eight targeted fault seeds per Store. The fault seeds require injection
+of CAS conflict, errors before and after writes, node/inner-join/outer-join/
+continuation interruption, and callback cancellation. Fixed cases use a serial
+scheduler to target the first or second join deterministically; model and fuzz
+sequences vary concurrency and limiter capacity independently. Faulted SQLite
+cases close and reopen the database before recovery, which compiles a fresh
+Runner from the same graph definition.
+The driver verifies rejected or interrupted candidates replay with the same
+CallID and callback input when the callback remains eligible. A `FailGroup`
+may permanently remove a sibling callback, whose discarded or uncertain
+result then does not need replay. Callbacks from a write whose acknowledgement
+was lost must not replay.
 
 CI runs the fixed tests and fuzz seeds through `go test ./...`; its Linux race
 job also includes them. Continuous fuzz uses Memory and is manual:
@@ -378,6 +403,9 @@ job also includes them. Continuous fuzz uses Memory and is manual:
 ```sh
 go test ./internal/modeltest -run '^TestExecutionModelSequences$' -count=20
 go test -race ./internal/modeltest -run '^TestExecutionModelSequences$' -count=20
+go test ./internal/modeltest -run '^TestNestedExecutionModelSequences$' -count=20
+go test -race ./internal/modeltest -run '^TestNestedExecutionModelSequences$' -count=20
+go test ./internal/modeltest -run '^$' -fuzz '^FuzzNestedExecution$' -fuzztime=60s -parallel=4 -timeout=3m
 go test ./internal/modeltest -run '^$' -fuzz '^FuzzLoopExecution$' -fuzztime=60s -parallel=4 -timeout=3m
 go test ./internal/modeltest -run '^$' -fuzz '^FuzzParallelExecution$' -fuzztime=60s -parallel=4 -timeout=3m
 ```
@@ -406,11 +434,36 @@ outside the checkout as `lunegraph-model-loop-fuzz-final.txt` and
 was not run locally. No runtime code, API, checkpoint format, dependency, or CI
 schedule changed.
 
-All 76 Store/sequence combinations passed 20 repetitions normally and 20 with
-`-race`. The final working tree also passed `go test ./...`,
+The earlier single-level model's 76 Store/sequence combinations passed 20
+repetitions normally and 20 with `-race`. Nested-model results are recorded
+with its fixed repetition and fuzz runs below. The final working tree also
+passed `go test ./...`,
 `go test -race ./...`, `go vet ./...`, formatting and diff checks. The combined
 coverage gate passed all 13 production packages at or above 85%; the new
 package contains only test files and is automatically excluded.
+
+#### Nested model results
+
+On 2026-10-09, based on `3a71698`, Go 1.26.5, Windows/amd64, and AMD Ryzen 7
+6800H, the nested fixed matrix contains 64 configuration sequences and 16
+required-fault sequences across Memory and SQLite. Its full fixed matrix passed
+20 repetitions normally and 20 with `-race`. `FuzzNestedExecution` ran for 60
+seconds with four workers:
+
+| Target | Executions | Initial corpus | New interesting inputs |
+| --- | ---: | ---: | ---: |
+| `FuzzNestedExecution` | 60,726 | 362 | 53 |
+
+The initial corpus includes 16 generated seeds, four committed minimized
+regression inputs, and Go's machine-local fuzz cache. The four saved inputs
+preserve replay and concurrent-failure cases found while tightening the test
+oracle; they did not identify runtime defects.
+
+No failing runtime input was found. These finite runs validate the tested
+widths, failure policies, callback faults, and concurrency/limiter settings;
+they do not establish correctness for subgraphs, competing recoveries, or
+unbounded graph shapes. No runtime code, public API, checkpoint format,
+dependency, or CI schedule changed.
 
 ### Atomic batch deletion comparison
 
