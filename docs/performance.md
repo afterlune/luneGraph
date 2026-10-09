@@ -54,6 +54,33 @@ still allocates no session or ledger and reads no observation clocks. The
 capacity record preserves sample ranges, observer costs, workload details,
 commands and limitations; there is no machine-independent performance gate.
 
+### Nested failure under exhausted shared admission
+
+`TestLimiterNestedFailGroupProgress` covers node and nested-join `FailGroup`,
+two running descendants beneath a removed group, and an enclosing join under
+an exhausted four-permit limiter. Memory and SQLite cover completion and
+public-call cancellation; Memory also covers CAS conflict and ordinary Store
+errors with and without a write. Every case keeps an independent execution
+active in the same Store and limiter, checks callback result resolution and
+replay identities, and verifies that all permits remain reusable. SQLite is
+closed and reopened before checking recovery. Channels establish the order;
+timeouts only fail a stalled test, and no semaphore fairness is assumed.
+
+Both failure sources stall at baseline `9ceaeda`: cancellation of removed
+callbacks waits for the commit, while the enclosing join waits for permits
+those callbacks retain. The fix cancels pruned callbacks before settling
+enclosing groups, including pruning caused by a nested join. It does not add a
+commit point or a persisted cancellation marker. A rejected candidate still
+replays from its last committed checkpoint.
+
+```sh
+go test -run '^TestLimiterNestedFailGroupProgress$' -count=20 ./internal/observationtest
+go test -race -run '^TestLimiterNestedFailGroupProgress$' -count=20 ./internal/observationtest
+```
+
+See the [failure cancellation comparison](capacity.md#nested-failure-cancellation-under-shared-admission)
+for the same-host sequential and fan-out allocation/timing comparison.
+
 ## Current format-3 diagnosis
 
 The [format-3 scale and cost diagnosis](capacity.md#format-3-scale-and-cost-diagnosis)

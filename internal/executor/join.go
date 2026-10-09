@@ -8,7 +8,7 @@ import (
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
-func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, limiter *limit.Limiter, obs *observation.Session) error {
+func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, limiter *limit.Limiter, obs *observation.Session, cancelPruned func(Checkpoint[S])) error {
 	if len(s.Groups) == 0 {
 		return nil
 	}
@@ -62,6 +62,9 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 			}
 			if err := r.recordFailure(s, invIndex, parent.ID, group.JoinNode, scope, mergeErr); err != nil {
 				return err
+			}
+			if scope == FailGroup && cancelPruned != nil {
+				cancelPruned(*s)
 			}
 			continue
 		}

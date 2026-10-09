@@ -1578,3 +1578,69 @@ as `lunegraph-limiter-baseline-{root,paused,observe}.txt`,
 `lunegraph-limiter-paired-{before,after}.txt`,
 `lunegraph-limiter-fanout-{before,after}.txt`, and
 `lunegraph-limiter-capacity-bench.txt`.
+
+## Nested failure cancellation under shared admission
+
+This follow-up on 2026-10-09 fixes a progress defect at baseline `9ceaeda`.
+`TestLimiterNestedFailGroupProgress` leaves a healthy outer branch joined while
+an inner group owns a deeper group with two active callbacks. A node or nested
+join fails the inner group. An independent execution holds one shared permit;
+the two removed descendants retain theirs until they observe cancellation and
+the test lets them return. A Clone gate takes the fourth permit before outer
+join admission. The enclosing join must progress after the descendants exit,
+while both unrelated permits remain occupied. No deadline expiry or release
+of unrelated permits is allowed to drive successful progress.
+
+Both node and join cases fail on an isolated archive of `9ceaeda`, with only
+the regression tests copied into it: the enclosing join cannot acquire a permit,
+and cancellation of the removed descendants is postponed until after the
+candidate commits. The fix cancels the removed subtree before settling enclosing
+groups. Nested join failure performs the same cancellation before continuing to
+the next group. Returned results from removed callbacks remain discarded, even
+when they return a successful `EndExecution` after observing cancellation.
+
+The 14 cases cover both failure sources: Memory completion, cancellation, CAS
+conflict, an ordinary error before a write, and a lost acknowledgement after a
+write; SQLite completion and cancellation, each followed by close/reopen and
+recovery. They verify the same candidate's node/join resolution, persisted
+CallIDs on replay, no replay of committed callbacks, independent execution
+isolation, final state and counters, checkpoint equality against the Store,
+draining before public finish, and reusability of all four permits. Ordinary
+Store errors remain unknown until a reload confirms the stored position.
+
+### Common-path scheduling comparison
+
+The same Windows/amd64 host uses Go 1.26.5 and an AMD Ryzen 7 6800H. Baseline
+`9ceaeda` and the final working tree each produce 54 samples across 18 cases,
+with 300ms intervals, three repetitions, and one/eight Ps. These scalar-state
+benchmarks use no Store, Observer, or shared Limiter; they measure the common
+scheduling path, not durable or saturated-admission latency.
+
+```sh
+go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
+```
+
+| Workload | Ps | Baseline us, median [range] | Final us, median [range] | allocs/op, baseline -> final |
+| --- | ---: | ---: | ---: | ---: |
+| Sequential, 16 steps | 1 | 32.387 [32.373–33.345] | 34.075 [31.916–37.074] | 76 -> 76 |
+| Sequential, 16 steps | 8 | 73.969 [72.736–75.630] | 77.428 [73.341–78.755] | 76 -> 76 |
+| Sequential, 128 steps | 1 | 235.984 [235.039–248.568] | 258.470 [232.104–278.214] | 524 -> 524 |
+| Sequential, 128 steps | 8 | 555.204 [550.724–577.141] | 558.719 [544.133–570.356] | 524 -> 524 |
+| Fan-out 32, serial | 1 | 105.266 [88.774–121.341] | 115.925 [115.855–129.349] | 204 -> 204 |
+| Fan-out 32, serial | 8 | 217.998 [189.435–220.389] | 223.196 [219.278–234.390] | 204 -> 204 |
+| Fan-out 32, default | 1 | 114.715 [113.893–115.696] | 113.033 [108.564–125.010] | 204 -> 204 |
+| Fan-out 32, default | 8 | 158.060 [156.596–164.886] | 166.198 [163.076–169.382] | 211 -> 211 |
+
+All 18 cases retain their allocation counts. An intermediate pointer-taking
+cancellation callback caused each node candidate to escape: sequential 16/128
+steps added 16/128 allocations and 2,560/20,480 bytes per run. That implementation
+was discarded. The callback now receives a read-only checkpoint header by value;
+ordinary post-commit cancellation calls the shared helper directly.
+
+Several short-sample timing medians rise while all displayed timing ranges
+overlap. These finite samples do not establish a stable throughput change,
+production capacity, or a sustained resource bound. No cross-machine performance
+threshold is introduced. Raw local logs remain outside the repository as
+`lunegraph-failgroup-before.txt` and `lunegraph-failgroup-final.txt`; intermediate
+experiments are in `lunegraph-failgroup-candidate.txt` and
+`lunegraph-failgroup-after.txt`.

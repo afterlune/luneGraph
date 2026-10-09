@@ -122,7 +122,7 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 				return resultWith(s, StatusFailed), routeErr
 			}
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs); settleErr != nil {
+		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs, nil); settleErr != nil {
 			if isJoinInterruption(settleErr) {
 				return interruptedResult(ctx, s, settleErr)
 			}
