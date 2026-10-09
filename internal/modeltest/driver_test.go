@@ -52,7 +52,7 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 	m := model{width: width}
 	c := newController()
 	r := runner(t, m, c)
-	store := openStore(t, kind, m, c)
+	store := openStore[state](t, kind, m, clone, c)
 	limiter, err := graph.NewLimiter(capacity)
 	if err != nil {
 		t.Fatal(err)

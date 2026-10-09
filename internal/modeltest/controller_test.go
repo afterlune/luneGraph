@@ -26,6 +26,9 @@ type controller struct {
 	cancel       context.CancelFunc
 	requests     map[string]request
 	confirmed    map[string]bool
+	attempts     map[string]int
+	faultCallID  string
+	faultCalls   []string
 	writes       map[uint64]bool
 	events       map[eventKey]counts
 	active, peak int
@@ -35,7 +38,7 @@ type controller struct {
 }
 
 func newController() *controller {
-	return &controller{requests: map[string]request{}, confirmed: map[string]bool{}, writes: map[uint64]bool{}, events: map[eventKey]counts{}, outcomes: map[eventKey]graph.CallbackOutcome{}}
+	return &controller{requests: map[string]request{}, confirmed: map[string]bool{}, attempts: map[string]int{}, writes: map[uint64]bool{}, events: map[eventKey]counts{}, outcomes: map[eventKey]graph.CallbackOutcome{}}
 }
 
 func (c *controller) arm(i instruction, cancel context.CancelFunc) {
@@ -45,6 +48,8 @@ func (c *controller) arm(i instruction, cancel context.CancelFunc) {
 	c.cancel = cancel
 	c.seen = 0
 	c.fired = false
+	c.faultCallID = ""
+	c.faultCalls = nil
 }
 
 func (c *controller) triggerLocked(mode int) bool {
@@ -70,6 +75,7 @@ func (c *controller) attempt(_ context.Context, call graph.CallInfo, role string
 		c.problem = fmt.Errorf("invalid callback identity: %+v", call)
 	}
 	req := request{role, call.Node, string(data)}
+	c.attempts[call.CallID]++
 	if prior, ok := c.requests[call.CallID]; ok && prior != req {
 		c.problem = fmt.Errorf("replay request changed for %s: %+v -> %+v", call.CallID, prior, req)
 	}
@@ -79,9 +85,11 @@ func (c *controller) attempt(_ context.Context, call graph.CallInfo, role string
 	c.requests[call.CallID] = req
 	mode := map[string]int{"node": 4, "join": 5, "apply": 6}[role]
 	if c.triggerLocked(mode) {
+		c.faultCallID = call.CallID
 		return graph.Interrupt(nil)
 	}
 	if c.triggerLocked(7) {
+		c.faultCallID = call.CallID
 		c.cancel()
 		return context.Canceled
 	}
@@ -146,4 +154,21 @@ func (c *controller) check(capacity int) error {
 		}
 	}
 	return nil
+}
+
+func (c *controller) confirmedCalls() (nodes, applies int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for callID, request := range c.requests {
+		if !c.confirmed[callID] {
+			continue
+		}
+		switch request.role {
+		case "node":
+			nodes++
+		case "apply":
+			applies++
+		}
+	}
+	return nodes, applies
 }
