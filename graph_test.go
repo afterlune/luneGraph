@@ -306,6 +306,10 @@ func (m *failingStore) Delete(ctx context.Context, id string) error {
 	return m.inner.Delete(ctx, id)
 }
 
+func (m *failingStore) DeleteMany(ctx context.Context, ids []string) error {
+	return m.inner.DeleteMany(ctx, ids)
+}
+
 func TestStoreFailureReturnsLastCommittedCheckpoint(t *testing.T) {
 	g := graph.New[int]("first")
 	called := 0

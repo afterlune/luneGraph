@@ -309,7 +309,20 @@ shared-limiter cancellation and recovery checks; the
 [manual sustained validation](docs/capacity.md#shared-limiter-sustained-validation)
 adds bounded resource sampling and callback result accounting.
 
+`Store.DeleteMany(ctx, runIDs)` atomically deletes a batch. Missing and duplicate
+IDs are harmless; invalid IDs reject the whole batch. It is suitable for
+retryable cleanup after the application stops driving the selected executions.
+An uncertain storage error requires reloading to confirm deletion. Single-run
+`Delete` still reports `checkpoint.ErrNotFound` for a missing run. The library
+does not choose retention periods or run IDs and does not reclaim SQLite file
+space automatically.
+
 ## API migration
+
+`Store[S]` now requires `DeleteMany(context.Context, []string) error`. Custom
+Stores and wrappers must implement the atomic, idempotent batch contract; a
+loop calling single-run `Delete` does not satisfy it. Forward through wrappers
+as one call. Checkpoint format and database schema are unchanged.
 
 The module path is now `github.com/afterlune/luneGraph`. Replace imports of `lune-graph` and its subpackages with the GitHub path. The root package remains named `graph`; this import migration does not change checkpoint format or require a new `MachineID`.
 

@@ -27,6 +27,7 @@ func CloneState(value State) (State, error) {
 // open must return a fresh store for every subtest and register its cleanup.
 func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 	t.Helper()
+	deletion(t, open)
 	t.Run("copies", func(t *testing.T) {
 		store := open(t)
 		ctx := context.Background()
