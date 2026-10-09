@@ -4,6 +4,53 @@
 edges, branches, joins, runs, failures, and checkpoints define the runtime.
 Applications define the meaning of their state and callbacks.
 
+## Explicit recoverable interruption
+
+Nodes, join merges, and continuation Apply handlers may return
+`graph.Interrupt(cause)` (including a wrapped error) to end the current public
+call with `StatusInterrupted` and an error matching `graph.ErrInterrupted`.
+The cause remains available through `errors.Is` and `errors.As`;
+`Interrupt(nil)` returns the sentinel itself. This control signal bypasses
+`OnError` and `FailureOverride` and does not commit a failure or callback result.
+
+The returned checkpoint is the last committed checkpoint. Interruption does
+not advance its revision, steps, or schedule cursor, change its failure flags,
+or replace pending CallIDs. Start and Fork may already have created their
+initial checkpoint, and earlier results within this public call may already
+have committed. With no Store, the same boundary applies to the checkpoint
+returned to the caller for Resume.
+
+Parallel interruption stops scheduling, cancels running callbacks, and drains
+their results before returning. Those uncommitted results are discarded even
+if successful. The runner cannot force callbacks to exit; they must respond
+to context cancellation. Effects performed by discarded callbacks can replay.
+
+A join and its triggering branch result or continuation input belong to the
+same commit candidate. If a join interrupts, that entire candidate is
+discarded, including earlier nested merges in it. Recovery can replay both
+the trigger and joins with their original CallIDs. A continuation interruption
+leaves the invocation waiting; its input is not persisted. Supply that input
+again, along with later uncommitted inputs. Earlier committed inputs must not
+be resubmitted.
+
+Interruption is transient: neither its status nor cause is written into the
+checkpoint. The caller decides when to Recover or Resume; these entrypoints
+do not require an unlock operation and may replay pending callbacks normally.
+Applications remain responsible for idempotency and reconciling uncertain
+external effects. Store commit errors still require reloading to determine
+what was committed.
+
+Only explicitly returned errors from the three effect-capable callback kinds
+are interruption signals. Clone, Decode, and Store errors retain their
+existing behavior even if they wrap `ErrInterrupted`. A panic wrapping the
+marker remains a `PanicError` subject to the applicable failure policy. When
+the public context is cancelled while an interruption is being handled,
+the call returns `StatusCancelled` and the context error instead.
+
+The new `"interrupted"` result status requires an additional branch in
+exhaustive status handling. The checkpoint format and Store contract remain
+unchanged.
+
 ## Subgraph composition
 
 `Graph[S].AddSubgraph` mounts another builder with the same `S`. `Compile`

@@ -50,6 +50,7 @@ const (
 	StatusBudget                = model.StatusBudget
 	StatusFailed                = model.StatusFailed
 	StatusCancelled             = model.StatusCancelled
+	StatusInterrupted           = model.StatusInterrupted
 
 	CheckpointFormatVersion = model.CheckpointFormatVersion
 )
@@ -60,6 +61,7 @@ var (
 	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
 	ErrRunCompleted      = model.ErrRunCompleted
 	ErrRunFailed         = model.ErrRunFailed
+	ErrInterrupted       = model.ErrInterrupted
 )
 
 func validName(name string) bool         { return model.ValidName(name) }

@@ -157,6 +157,10 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		if inv == nil || inv.Status != InvocationReady {
 			continue
 		}
+		if isCallbackInterruption(finished.err) {
+			drain()
+			return interruptedResult(ctx, s, finished.err)
+		}
 		candidate := copyCheckpointInto(&spare, s)
 		candidate.Steps++
 		var processErr error
@@ -188,6 +192,10 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		candidate.ScheduleCursor = cursor
 		if !ended {
 			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); err != nil {
+				if isJoinInterruption(err) {
+					drain()
+					return interruptedResult(ctx, s, err)
+				}
 				if candidate.Failure != nil {
 					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
 					drain()

@@ -215,6 +215,35 @@ counts remained unchanged. These short samples establish allocation behavior,
 not a latency guarantee. Keep the repeatable commands above for longer timing
 comparisons on an otherwise idle machine.
 
+## Recoverable interruption comparison
+
+The interruption implementation was compared with commit `8656f04` on
+2026-10-09, using Go 1.26.5, Windows/amd64, and the same AMD Ryzen 7 6800H.
+The baseline source was extracted into a temporary directory. Baseline and
+candidate benchmarks ran sequentially with the same command:
+
+```sh
+go test -run '^$' -bench 'BenchmarkSequentialExecution/steps=16$|BenchmarkFanoutJoin/width=32/concurrency=serial$|BenchmarkDurableSequentialExecution/storage=memory/steps=16$' -benchmem -benchtime=1s -count=3 -cpu '1,4' .
+```
+
+Values below are medians of three samples. These workloads exercise ordinary
+successful execution, including persisted recovery, where the new callback
+interruption check should not allocate.
+
+| Workload | Ps | Before / after ns/op | Before / after B/op | Before / after allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| Sequential, 16 steps | 1 | 30,898 / 25,707 | 3,168 / 3,168 | 76 / 76 |
+| Sequential, 16 steps | 4 | 54,987 / 50,284 | 4,102 / 4,101 | 79 / 79 |
+| Fan-out/join, width 32, serial | 1 | 120,149 / 88,824 | 29,728 / 29,728 | 204 / 204 |
+| Fan-out/join, width 32, serial | 4 | 224,907 / 155,076 | 29,729 / 29,729 | 204 / 204 |
+| Durable sequential, memory, 16 steps | 1 | 94,005 / 78,746 | 38,664 / 38,664 | 232 / 232 |
+| Durable sequential, memory, 16 steps | 4 | 181,107 / 133,394 | 39,608 / 39,612 | 235 / 235 |
+
+Allocation counts were unchanged in these cases. Timing varied substantially
+between initial 100ms samples and these longer samples; the lower candidate
+medians do not establish a speedup. These measurements also do not quantify
+interruption latency, which includes waiting for cancelled callbacks to exit.
+
 ## Reliability checks
 
 Run the correctness and static checks alongside benchmark work:
@@ -238,6 +267,15 @@ requests across ledger connections, original-result replay, request mismatch,
 and transaction rollback when the receipt insert fails. These tests run in the
 normal test suite on Windows and Linux; they do not establish a throughput or
 capacity limit for the example application.
+
+Explicit interruption checks additionally cover failure-policy bypass, stable
+callback IDs, SQLite reopen, parallel cancellation and draining, continuation
+input prefixes, and rollback of join candidates including nested merges.
+The effects example interrupts after committing a node, continuation, or join
+effect, then verifies receipt replay returns the original result without
+applying the effect again. Cancellation, panic, Clone, Decode, and Store tests
+ensure the interruption marker only controls explicitly returned errors from
+effect-capable callbacks.
 
 The capacity suite also checks bounded checkpoints after repeated branch
 endings and local failures across budgeted loops and typed pauses, and newly

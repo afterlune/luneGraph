@@ -37,6 +37,9 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 			}
 			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID, Node: group.JoinNode, Step: s.Steps, BranchIndex: parent.BranchIndex}
 			merged, mergeErr = r.observedMerge(ctx, obs, s.Revision, call, r.joins[group.JoinNode], values)
+			if isCallbackInterruption(mergeErr) {
+				return &joinInterruption{mergeErr}
+			}
 		}
 		children := make(map[string]bool, len(group.Children))
 		for _, childID := range group.Children {

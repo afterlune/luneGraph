@@ -101,6 +101,9 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 		}
 		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Step: s.Steps, BranchIndex: inv.BranchIndex}
 		updated, applyErr := r.observedApply(ctx, obs, s.Revision, call, *inv, state, input.value)
+		if isCallbackInterruption(applyErr) {
+			return interruptedResult(ctx, s, applyErr)
+		}
 		candidate := copyCheckpointInto(&spare, s)
 		if applyErr != nil {
 			scope := r.scope(r.nodes[inv.Node].OnError, opts)
@@ -116,6 +119,9 @@ func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S
 			}
 		}
 		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); settleErr != nil {
+			if isJoinInterruption(settleErr) {
+				return interruptedResult(ctx, s, settleErr)
+			}
 			if candidate.Failure != nil {
 				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store)
 			}
