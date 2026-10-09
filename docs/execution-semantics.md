@@ -432,6 +432,23 @@ delete application effect receipts or external data. Wrapped batch deletion
 uses one started/finished `OperationDelete` pair, with the wrapper session's
 metadata and the original error; it has no callback resolution event.
 
+## Synchronous callback dependencies
+
+Join `Merge` runs synchronously while the execution driver settles a commit
+candidate. Until it returns, that driver cannot dispatch additional nodes or
+commit other node results, even when those callbacks have already finished.
+A Merge must therefore not wait for another branch's future dispatch or commit
+in the same execution. Express the dependency through graph topology, or ensure
+the prerequisite is met before the triggering node returns. Waiting callbacks
+must still cooperate with context cancellation; a blocked callback retains its
+limiter permit.
+
+The controlled `TestLimiterSynchronousJoinDependency` demonstrates this boundary:
+a separate node finishes while Merge waits for that node's undispatched successor.
+Explicit cancellation drains both callbacks, discards their pending candidate
+and result, preserves the stored checkpoint, and releases every limiter permit.
+Cancellation does not commit an execution failure.
+
 ## Bounded execution position
 
 `EndBranch[S]()` ends a path without a result. Ended and locally failed
