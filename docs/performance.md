@@ -291,6 +291,43 @@ between initial 100ms samples and these longer samples; the lower candidate
 medians do not establish a speedup. These measurements also do not quantify
 interruption latency, which includes waiting for cancelled callbacks to exit.
 
+## Production package coverage
+
+The Linux and Windows CI jobs generate one combined statement profile with
+`go test -coverpkg=./...` and run the private standard-library-only checker:
+
+```sh
+go test -coverpkg=./... -coverprofile="${TMPDIR:-/tmp}/lunegraph-coverage.out" ./...
+go run ./internal/coveragecheck -profile "${TMPDIR:-/tmp}/lunegraph-coverage.out"
+```
+
+PowerShell:
+
+```powershell
+go test -coverpkg=./... "-coverprofile=$env:TEMP/lunegraph-coverage.out" ./...
+if ($LASTEXITCODE -ne 0) { throw 'tests failed' }
+go run ./internal/coveragecheck -profile "$env:TEMP/lunegraph-coverage.out"
+```
+
+The checker discovers source-bearing packages in the main module using
+`go list -json ./...`. All production packages, including examples and their
+ledger, must individually reach 85%. Pure test packages, the exact
+`internal/storetest` helper, and the checker itself are excluded. The checker
+has its own unit tests. Newly added production packages are included without
+updating a package allowlist.
+
+Different test packages can report the same source block. The checker merges
+blocks by filename and source coordinates, counts each statement once, and
+marks a block covered if any test covered it. It rejects malformed profiles,
+inconsistent duplicate statement counts, and eligible packages with missing
+or zero effective statements. The threshold uses integer ratios before
+display rounding; aggregate coverage cannot hide an under-covered package.
+
+On 2026-10-09, the Windows/amd64 working tree based on `02a415d` passed all
+13 eligible packages. Their minimum was SQLite at 86.404%; the checker tests
+reached 96.9%. These are combined-profile package values, rather than the
+per-test-package percentages printed by `go test -coverpkg=./...`.
+
 ## Reliability checks
 
 Run the correctness and static checks alongside benchmark work:

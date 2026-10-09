@@ -292,6 +292,23 @@ builderDiagram := g.ExportMermaid()       // Hierarchical builder topology with 
 runnerDiagram  := runner.ExportMermaid()  // Flattened execution machine with expanded nodes and return targets
 ```
 
+## Verification
+
+CI checks each production package for at least 85% statement coverage, including
+the examples. Run the same gate locally:
+
+```sh
+go test -coverpkg=./... -coverprofile=coverage.out ./...
+go run ./internal/coveragecheck -profile coverage.out
+```
+
+Use a temporary profile path to keep generated files outside the checkout.
+[Verification details](docs/performance.md#production-package-coverage) explain
+the exclusions and profile merging. The default suite includes deterministic
+shared-limiter cancellation and recovery checks; the
+[manual sustained validation](docs/capacity.md#shared-limiter-sustained-validation)
+adds bounded resource sampling and callback result accounting.
+
 ## API migration
 
 The module path is now `github.com/afterlune/luneGraph`. Replace imports of `lune-graph` and its subpackages with the GitHub path. The root package remains named `graph`; this import migration does not change checkpoint format or require a new `MachineID`.

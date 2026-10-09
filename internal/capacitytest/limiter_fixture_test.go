@@ -14,7 +14,11 @@ import (
 type limiterTracker struct {
 	active, peak atomic.Int32
 	starts       [3]atomic.Uint64
+	finishes     [3]atomic.Uint64
 	committed    atomic.Uint64
+	discarded    atomic.Uint64
+	unknown      atomic.Uint64
+	invalid      atomic.Bool
 }
 
 func (m *limiterTracker) Observe(_ context.Context, e graph.Event) {
@@ -35,9 +39,21 @@ func (m *limiterTracker) Observe(_ context.Context, e graph.Event) {
 		for old := m.peak.Load(); n > old && !m.peak.CompareAndSwap(old, n); old = m.peak.Load() {
 		}
 	} else if e.Phase == graph.PhaseFinished {
+		m.finishes[role].Add(1)
 		m.active.Add(-1)
-	} else if e.Phase == graph.PhaseResolved && e.Outcome == graph.OutcomeCommitted {
-		m.committed.Add(1)
+	} else if e.Phase == graph.PhaseResolved {
+		switch e.Outcome {
+		case graph.OutcomeCommitted:
+			m.committed.Add(1)
+		case graph.OutcomeDiscarded:
+			m.discarded.Add(1)
+		case graph.OutcomeUnknown:
+			m.unknown.Add(1)
+		default:
+			m.invalid.Store(true)
+		}
+	} else {
+		m.invalid.Store(true)
 	}
 }
 
@@ -89,6 +105,7 @@ func (p *limiterPopulation) advance(ctx context.Context, i int) (graph.Result[st
 
 func (p *limiterPopulation) verify(t testing.TB, capacity int) {
 	t.Helper()
+	p.tracker.verifyDrained(t, capacity)
 	if p.tracker.active.Load() != 0 || p.tracker.peak.Load() > int32(capacity) || p.tracker.starts[2].Load() == 0 {
 		t.Fatalf("callback budget: active=%d peak=%d apply=%d", p.tracker.active.Load(), p.tracker.peak.Load(), p.tracker.starts[2].Load())
 	}
