@@ -3,6 +3,8 @@ package executor
 import (
 	"context"
 	"fmt"
+
+	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 // recordFailure changes a candidate checkpoint. An execution-level error
@@ -78,8 +80,8 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id strin
 	return nil
 }
 
-func (r *Runner[S]) commitTerminalFailure(ctx context.Context, before, candidate Checkpoint[S], cause error, store Store[S]) (Result[S], error) {
-	committed, err := r.commit(ctx, before, candidate, store)
+func (r *Runner[S]) commitTerminalFailure(ctx context.Context, before, candidate Checkpoint[S], cause error, store Store[S], obs *observation.Session) (Result[S], error) {
+	committed, err := r.commit(ctx, before, candidate, store, obs)
 	if err != nil {
 		return resultWith(committed, errorStatus(err)), err
 	}

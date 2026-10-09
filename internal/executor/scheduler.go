@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/afterlune/luneGraph/internal/limit"
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
@@ -46,11 +47,15 @@ func availableCommits[S any](s Checkpoint[S]) uint64 {
 func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S], obs *observation.Session) (Result[S], error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	results := make(chan workResult[S], opts.MaxConcurrency)
-	running := make(map[string]context.CancelFunc, opts.MaxConcurrency)
-	tasks := make(chan workerTask[S], opts.MaxConcurrency)
+	limiter := opts.Limiter
+	workerLimit := limit.Capacity(limiter, opts.MaxConcurrency)
+	results := make(chan workResult[S], workerLimit)
+	running := make(map[string]context.CancelFunc, workerLimit)
+	tasks := make(chan workerTask[S], workerLimit)
 	var workers sync.WaitGroup
-	for i := 0; i < opts.MaxConcurrency; i++ {
+	workerCount := 0
+	startWorker := func() {
+		workerCount++
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -62,11 +67,18 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 				} else {
 					transition, err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.spec, t.state)
 				}
+				limit.Release(limiter)
 				results <- workResult[S]{id: t.id, transition: transition, err: err}
 			}
 		}()
 	}
 	defer func() {
+		// Also cancel on an escaping Store panic before waiting for workers.
+		// Callback permits are released by their workers on every return.
+		stop()
+		for _, cancel := range running {
+			cancel()
+		}
 		close(tasks)
 		workers.Wait()
 	}()
@@ -86,12 +98,19 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			delete(running, finished.id)
 		}
 	}
+	reserved := false
+	defer func() {
+		if reserved {
+			limit.Release(limiter)
+		}
+	}()
 	for {
+		capacityBlocked := false
 		if err := ctx.Err(); err != nil {
 			drain()
 			return resultWith(s, StatusCancelled), err
 		}
-		for len(running) < opts.MaxConcurrency && used < opts.MaxSteps {
+		for len(running) < workerLimit && used < opts.MaxSteps {
 			if uint64(len(running)) >= availableCommits(s) {
 				break
 			}
@@ -99,10 +118,21 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			if next == nil {
 				break
 			}
+			if !reserved && !limit.TryAcquire(limiter) {
+				capacityBlocked = true
+				break
+			}
+			reserved = false
 			state, err := r.cloneState(next.State, next.ID)
 			if err != nil {
+				limit.Release(limiter)
 				drain()
 				return resultWith(s, StatusFailed), fmt.Errorf("clone node state: %w", err)
+			}
+			if err := ctx.Err(); err != nil {
+				limit.Release(limiter)
+				drain()
+				return resultWith(s, StatusCancelled), err
 			}
 			id := next.ID
 			call := CallInfo{RunID: s.RunID, InvocationID: id, CallID: next.CallID, Node: next.Node, Step: s.Steps, BranchIndex: next.BranchIndex}
@@ -111,6 +141,9 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			running[id] = cancel
 			used++
 			cursor = number
+			if len(running) > workerCount {
+				startWorker()
+			}
 			tasks <- workerTask[S]{
 				ctx:      nodeCtx,
 				id:       id,
@@ -121,7 +154,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 				revision: s.Revision,
 			}
 		}
-		if len(running) == 0 {
+		if len(running) == 0 && !capacityBlocked {
 			if hasReady(s) && availableCommits(s) == 0 {
 				return resultWith(s, StatusFailed), fmt.Errorf("schedule next node: %w", ErrExecutionLimit)
 			}
@@ -141,7 +174,14 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			return resultWith(s, statusOf(s, used >= opts.MaxSteps)), nil
 		}
 		var finished workResult[S]
+		var slots chan<- struct{}
+		if capacityBlocked {
+			slots = limit.Slots(limiter)
+		}
 		select {
+		case slots <- struct{}{}:
+			reserved = true
+			continue
 		case <-ctx.Done():
 			drain()
 			return resultWith(s, StatusCancelled), ctx.Err()
@@ -155,8 +195,10 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		_, inv := indexedInvocation(&index, &s, finished.id)
 		if inv == nil || inv.Status != InvocationReady {
+			obs.DiscardNode(ctx, finished.id)
 			continue
 		}
+		obs.SelectNode(finished.id)
 		if isCallbackInterruption(finished.err) {
 			drain()
 			return interruptedResult(ctx, s, finished.err)
@@ -181,7 +223,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, processErr); failureErr != nil {
 				if candidate.Failure != nil {
 					candidate.ScheduleCursor = cursor
-					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store)
+					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store, obs)
 					drain()
 					return result, commitErr
 				}
@@ -191,13 +233,13 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		}
 		candidate.ScheduleCursor = cursor
 		if !ended {
-			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, obs); err != nil {
+			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs); err != nil {
 				if isJoinInterruption(err) {
 					drain()
 					return interruptedResult(ctx, s, err)
 				}
 				if candidate.Failure != nil {
-					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store)
+					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store, obs)
 					drain()
 					return result, commitErr
 				}
@@ -207,7 +249,7 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 			markCompleted(&candidate)
 		}
 		previous := s
-		committed, err := r.commit(ctx, s, candidate, opts.Store)
+		committed, err := r.commit(ctx, s, candidate, opts.Store, obs)
 		if err != nil {
 			drain()
 			return resultWith(previous, errorStatus(err)), err

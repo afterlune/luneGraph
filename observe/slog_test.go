@@ -75,3 +75,19 @@ func TestSlogFilteringAndDefault(t *testing.T) {
 		t.Fatalf("filtered event allocated: %v", allocs)
 	}
 }
+
+func TestSlogResolvedOutcome(t *testing.T) {
+	var output bytes.Buffer
+	observer := observe.NewSlog(slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	observer.Observe(context.Background(), graph.Event{Operation: graph.OperationJoin, Phase: graph.PhaseResolved, Outcome: graph.OutcomeUnknown, CallID: "c2", Revision: 4, Err: errors.New("unconfirmed")})
+	var fields map[string]any
+	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["phase"] != "resolved" || fields["outcome"] != "unknown" || fields["level"] != "ERROR" || fields["call_id"] != "c2" || fields["revision"] != float64(4) {
+		t.Fatalf("resolution fields=%+v", fields)
+	}
+	if _, exists := fields["duration"]; exists {
+		t.Fatal("resolution has callback duration")
+	}
+}

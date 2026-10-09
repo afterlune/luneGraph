@@ -242,7 +242,8 @@ ledger and graph checkpoints, and the runtime's contract remains at-least-once.
 ## Observation
 
 `Options.Observer` receives a `graph.Event` at `PhaseStarted` and
-`PhaseFinished` for each observed operation. It is optional and applies only to
+`PhaseFinished` for each observed operation. Execution callbacks additionally
+receive `PhaseResolved`, described below. It is optional and applies only to
 the current public call; the compiled Runner does not retain it. With a nil
 observer, the runtime does not create an observation session, allocate an
 operation ID, or read clocks.
@@ -273,7 +274,7 @@ Revision means the following:
 - A public start event has revision zero for Start and Recover, or the supplied
   reference revision for Resume. Its finished event has the returned checkpoint
   revision, even when the call returns an error.
-- Callback events have the revision of the checkpoint used to schedule or
+- Started and finished callback events have the revision of the checkpoint used to schedule or
   apply the callback, before committing its outcome.
 - Create and CAS events have the attempted write revision. Load starts at zero
   and finishes with the loaded revision on success, or zero on error.
@@ -281,7 +282,7 @@ Revision means the following:
 Status is populated only on public finished events. Action is populated only
 on node finished events and describes the callback's returned decision before
 transition validation. Err is the actual callback or Store error, or the public
-call's returned error. A locally handled callback error can therefore coexist
+call's returned error. Resolved events instead report their resolution cause. A locally handled callback error can therefore coexist
 with a successful public return. A successful callback event does not mean that
 its outcome passed validation or committed. A Store error does not establish
 whether its write committed, except for the documented no-write guarantee of
@@ -318,6 +319,76 @@ callbacks and Store calls, and Error for any event carrying an error. It checks
 `slog.Default()` at construction. Its handler must support concurrent calls.
 The adapter adds no persistence and makes no delivery guarantee beyond the
 Observer contract.
+
+
+## Shared callback budget
+
+`Options.Limiter` optionally participates in a fixed, process-local budget
+created with `graph.NewLimiter(capacity)`. Capacity must be positive; a non-nil
+zero value is rejected during option validation. Share the pointer across
+executions, runners and state types; there is no mutable capacity or Close.
+
+Node, join Merge and continuation Apply callbacks each acquire one permit.
+Node admission precedes state cloning; clone failure releases the reservation.
+Merge and Apply acquire before callback observation starts. Clone, continuation
+Decode, Store and Observer do not acquire additional permits. Callback started
+and finished delivery occur within the permit lifetime, so a slow observer
+can delay availability. No permit is held during checkpoint submission.
+
+Node scheduling uses the smaller of the local node concurrency and shared
+capacity, starts workers on demand, and reuses them within the public call.
+When admission is blocked, the scheduler selects among results, capacity and
+context cancellation. Waiting does not start a callback, emit callback events,
+consume node starts, or replace pending CallIDs. Cancellation while waiting
+returns the last committed checkpoint and StatusCancelled without applying a
+failure policy. Already running callbacks still drain under the existing
+cancellation contract. Budgets release on callback return, panic conversion,
+interruption and pre-callback clone failure.
+
+This is a callback budget, not execution admission or ownership. Independent
+Recover calls still contend through CAS and can replay the same CallID. Hosts
+own queueing and fairness; neither FIFO nor cross-process limiting is promised.
+Avoid synchronously driving another execution from a callback if the same
+budget is already occupied by that callback and cannot admit the nested work.
+
+## Callback result resolution
+
+Execution callbacks (node, join and Apply) have a third observation phase,
+`PhaseResolved`, with one of these `CallbackOutcome` values:
+
+| Outcome | Meaning |
+| --- | --- |
+| `OutcomeCommitted` | Candidate accepted, including committed failure handling; with no Store, accepted in memory only. |
+| `OutcomeDiscarded` | Result rejected before submission, or CAS returned ErrConflict with its guaranteed no-write semantics. |
+| `OutcomeUnknown` | CAS returned another error, including cancellation/deadline errors; reload to determine actual persistence. |
+
+Existing callback finished events report callback return, before validation or
+commit. Resolved events correlate by `(OperationID, Operation, CallID)`; use
+RunID and CallID to correlate logical replay across public calls. Resolved
+Revision is the target revision when commit was entered, otherwise that
+callback's original base revision. Resolved Err is the rejection or uncertain
+submission reason; it is nil for committed outcomes even if the original
+callback error was handled and committed. Action retains the node decision,
+Time records resolution, Duration is zero, and Status remains unset.
+
+A candidate consists of its triggering node or Apply and all joins invoked
+while settling it, including nested merges and handled merge failures. Their
+results resolve together. A later join interruption discards earlier merges
+in that candidate. Input application resolves one committed prefix at a time;
+a later interrupted input does not discard an earlier committed application.
+Other parallel callback attempts remain unresolved until processed or drained;
+superseded results resolve as discarded. Every started execution callback gets
+exactly one resolution before a normally returning public call finishes.
+Decode, Store and public operations keep only started/finished phases.
+
+Only enabled observation allocates the unresolved metadata ledger. Entries are
+removed on resolution, retain no state/payload/error history, and all remaining
+entries are discarded after workers drain. Events can interleave across
+workers and executions, and are neither persisted nor atomically coupled to
+Store writes. A crash, Store panic, or observer delivery panic can leave the
+consumer's record incomplete. Later recovery does not rewrite earlier unknown
+events or reconstruct missing events. Consumers should switch on phases
+explicitly instead of treating every non-started event as finished.
 
 ## Store contract
 

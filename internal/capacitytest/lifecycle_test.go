@@ -31,7 +31,7 @@ func (c *callbackTracker) Observe(_ context.Context, e graph.Event) {
 	if e.Operation == graph.OperationNode {
 		if e.Phase == graph.PhaseStarted {
 			c.active++
-		} else {
+		} else if e.Phase == graph.PhaseFinished {
 			c.active--
 		}
 		if c.active > c.peak {

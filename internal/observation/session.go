@@ -4,6 +4,7 @@ package observation
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,11 +13,17 @@ import (
 
 var nextOperationID atomic.Uint64
 
-// Session is immutable and belongs to one public Runner call.
+// Session belongs to one public Runner call. It retains only unresolved
+// callback metadata; application state and payloads never enter this ledger.
 type Session struct {
 	observer         model.Observer
 	id               uint64
 	machineID, runID string
+	mu               sync.Mutex
+	pending          map[string]pendingCallback
+	// Resolution is driven by the public-call goroutine, never a worker.
+	// Reuse its delivery buffer without retaining delivered metadata.
+	resolved []model.Event
 }
 
 func New(observer model.Observer, machineID, runID string) *Session {
@@ -36,6 +43,14 @@ type Span struct {
 func (s *Session) Begin(ctx context.Context, event model.Event) Span {
 	event.OperationID, event.MachineID, event.RunID = s.id, s.machineID, s.runID
 	event.Phase, event.Time = model.PhaseStarted, time.Now()
+	if executionCallback(event.Operation) {
+		s.mu.Lock()
+		if s.pending == nil {
+			s.pending = make(map[string]pendingCallback)
+		}
+		s.pending[event.CallID] = pendingCallback{event: event, selected: event.Operation != model.OperationNode}
+		s.mu.Unlock()
+	}
 	s.deliver(ctx, event)
 	return Span{session: s, event: event, started: time.Now()}
 }
@@ -45,6 +60,13 @@ func (span Span) End(ctx context.Context, result model.Event) {
 	event.Phase, event.Time = model.PhaseFinished, time.Now()
 	event.Duration = event.Time.Sub(span.started)
 	event.Status, event.Action, event.Revision, event.Err = result.Status, result.Action, result.Revision, result.Err
+	if executionCallback(event.Operation) {
+		span.session.mu.Lock()
+		pending := span.session.pending[event.CallID]
+		pending.event.Action = event.Action
+		span.session.pending[event.CallID] = pending
+		span.session.mu.Unlock()
+	}
 	span.session.deliver(ctx, event)
 }
 

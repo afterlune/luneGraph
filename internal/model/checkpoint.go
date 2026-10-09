@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strconv"
+
+	"github.com/afterlune/luneGraph/internal/limit"
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
@@ -112,7 +114,10 @@ type Store[S any] interface {
 type Options[S any] struct {
 	// Observer optionally receives transient execution events. Nil disables
 	// observation without allocating a session or reading clocks.
-	Observer        Observer
+	Observer Observer
+	// Limiter optionally shares a callback budget across executions and runners.
+	// Node, join and continuation Apply callbacks acquire one permit each.
+	Limiter         *limit.Limiter
 	MaxSteps        int
 	MaxConcurrency  int
 	Store           Store[S]

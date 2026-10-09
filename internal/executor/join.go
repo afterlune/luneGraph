@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/afterlune/luneGraph/internal/limit"
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
-func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, obs *observation.Session) error {
+func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, limiter *limit.Limiter, obs *observation.Session) error {
 	if len(s.Groups) == 0 {
 		return nil
 	}
@@ -36,7 +37,10 @@ func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex
 				}
 			}
 			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID, Node: group.JoinNode, Step: s.Steps, BranchIndex: parent.BranchIndex}
-			merged, mergeErr = r.observedMerge(ctx, obs, s.Revision, call, r.joins[group.JoinNode], values)
+			merged, mergeErr = r.limitedMerge(ctx, limiter, obs, s.Revision, call, r.joins[group.JoinNode], values)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if isCallbackInterruption(mergeErr) {
 				return &joinInterruption{mergeErr}
 			}

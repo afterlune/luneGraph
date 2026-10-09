@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime"
 
+	"github.com/afterlune/luneGraph/internal/limit"
 	"github.com/afterlune/luneGraph/internal/model"
 	"github.com/afterlune/luneGraph/internal/observation"
 )
@@ -14,6 +15,9 @@ import (
 const defaultMaxSteps = 10_000
 
 func normalizeOptions[S any](opts Options[S]) (Options[S], error) {
+	if err := limit.Validate(opts.Limiter); err != nil {
+		return opts, err
+	}
 	if opts.MaxSteps < 0 || opts.MaxConcurrency < 0 {
 		return opts, errors.New("limits must not be negative")
 	}
@@ -92,19 +96,28 @@ func invocationNumber(id string) uint64 {
 	return n
 }
 
-func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], store Store[S]) (Checkpoint[S], error) {
+func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], store Store[S], obs *observation.Session) (Checkpoint[S], error) {
 	if err := ctx.Err(); err != nil {
+		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
 		return before, err
 	}
 	if before.Revision == math.MaxUint64 {
-		return before, fmt.Errorf("commit revision: %w", ErrExecutionLimit)
+		err := fmt.Errorf("commit revision: %w", ErrExecutionLimit)
+		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
+		return before, err
 	}
 	after.Revision = before.Revision + 1
 	if store != nil {
 		if err := store.CompareAndSwap(ctx, before.Revision, after); err != nil {
+			outcome := model.OutcomeUnknown
+			if errors.Is(err, ErrConflict) {
+				outcome = model.OutcomeDiscarded
+			}
+			obs.ResolveSelected(ctx, outcome, after.Revision, err)
 			return before, err
 		}
 	}
+	obs.ResolveSelected(ctx, model.OutcomeCommitted, after.Revision, nil)
 	return after, nil
 }
 
@@ -123,6 +136,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Opt
 		defer func() {
 			// A Store panic is not a returned result and leaves spans incomplete.
 			if result.Status != "" {
+				obs.DiscardPending(ctx, retErr)
 				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
@@ -178,6 +192,7 @@ func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
 		defer func() {
 			if result.Status != "" {
+				obs.DiscardPending(ctx, retErr)
 				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
