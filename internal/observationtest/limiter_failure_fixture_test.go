@@ -41,16 +41,7 @@ func closeOnce(ch chan struct{}) func() {
 	return func() { once.Do(func() { close(ch) }) }
 }
 
-func waitFailureSignal(t *testing.T, ctx context.Context, ch <-chan struct{}, name string) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-ctx.Done():
-		t.Fatalf("%s: %v", name, ctx.Err())
-	}
-}
-
-func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *failureFixture {
+func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int]) *failureFixture {
 	t.Helper()
 	f := &failureFixture{store: store, log: &recorder{}, cloneReached: make(chan struct{}), blockedCancelled: make(chan struct{}), holderDone: make(chan error, 1)}
 	f.ctx, f.cancel = context.WithTimeout(context.Background(), 5*time.Second)
@@ -81,12 +72,15 @@ func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *fai
 		select {
 		case <-f.holderDone:
 		case <-time.After(5 * time.Second):
+			f.diagnose(t, "draining independent holder")
 			t.Error("independent holder did not drain")
 		}
 	})
 	blockedStarted := make(chan struct{})
 	aCommitted := make(chan struct{})
 	markACommitted := closeOnce(aCommitted)
+	bWaiting := make(chan struct{})
+	markBWaiting := closeOnce(bWaiting)
 	f.observer = graph.ObserverFunc(func(ctx context.Context, event graph.Event) {
 		f.log.Observe(ctx, event)
 		if event.Node == "a" && event.Phase == graph.PhaseResolved && event.Outcome == graph.OutcomeCommitted {
@@ -109,7 +103,14 @@ func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *fai
 	node(t, g, "inner", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
 		return graph.To(s, "deep", trigger), nil
 	})
-	node(t, g, "deep", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+	node(t, g, "deep", func(ctx context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+		if order == "nested-first" {
+			select {
+			case <-bWaiting:
+			case <-ctx.Done():
+				return graph.Transition[int]{}, ctx.Err()
+			}
+		}
 		return graph.To(s, "blocked-a", "blocked-b"), nil
 	})
 	blocked := func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
@@ -143,7 +144,14 @@ func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *fai
 			t.Fatal(err)
 		}
 	} else {
-		node(t, g, "nested", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+		node(t, g, "nested", func(ctx context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+			if order == "deep-first" {
+				select {
+				case <-blockedStarted:
+				case <-ctx.Done():
+					return graph.Transition[int]{}, ctx.Err()
+				}
+			}
 			return graph.To(s, "a", "b"), nil
 		})
 		for _, name := range []string{"a", "b"} {
@@ -156,16 +164,26 @@ func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *fai
 					case <-ctx.Done():
 						return graph.Transition[int]{}, ctx.Err()
 					}
+					markBWaiting()
+					select {
+					case <-blockedStarted:
+					case <-ctx.Done():
+						return graph.Transition[int]{}, ctx.Err()
+					}
 				}
 				return graph.To(s, "innerjoin"), nil
 			})
 			edge(t, g, "nested", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", From: "nested", OnError: graph.FailGroup, Merge: func(ctx context.Context, _ graph.CallInfo, _ []int) (int, error) {
-			select {
-			case <-blockedStarted:
-			case <-ctx.Done():
-				return 0, ctx.Err()
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", From: "nested", OnError: graph.FailGroup, Merge: func(_ context.Context, _ graph.CallInfo, _ []int) (int, error) {
+			// Merge runs on the scheduler: prerequisites must already be met.
+			for _, prerequisite := range []<-chan struct{}{aCommitted, blockedStarted} {
+				select {
+				case <-prerequisite:
+				default:
+					t.Error("innerjoin entered before its prerequisites")
+					return 0, errors.New("join prerequisite missing")
+				}
 			}
 			return 0, boom
 		}}); err != nil {
@@ -240,7 +258,7 @@ func newFailureFixture(t *testing.T, origin string, store graph.Store[int]) *fai
 		f.holderDone <- err
 		close(f.holderDone)
 	}()
-	waitFailureSignal(t, f.ctx, holderStarted, "holder did not start")
+	f.wait(t, f.ctx, holderStarted, "holder did not start")
 	return f
 }
 

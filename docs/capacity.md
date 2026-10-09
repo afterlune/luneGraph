@@ -1835,3 +1835,51 @@ parallel verification attempt timed out in the pre-existing
 `TestLimiterNestedFailGroupProgress/join/memory/success` fixture. Fifty targeted
 repetitions and the subsequent full coverage/race runs passed; its cause was
 not established, and the limiter scheduler was not changed by this work.
+
+### Controlled nested limiter ordering
+
+On 2026-10-09, Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H, the working
+tree based on `d366629` removed a scheduler dependency from the nested failure
+fixture. Previously `innerjoin.Merge` waited for blocked descendants from a
+separate group. Because Merge runs synchronously, entering it before the deep
+fork result committed could prevent those descendants from being dispatched.
+The historical timeout above was not reproduced, so this dependency has not
+been established as the cause of that particular failure.
+
+Node `b` now waits for both `a`'s committed resolution and the two blocked
+descendants to start before returning its transition to `innerjoin`. Merge
+asserts those prerequisites without waiting. Channels force both deep-first
+(descendants start before the nested fork) and nested-first (`a` commits and
+`b` reaches its prerequisite gate before the deep fork returns) orders. The
+independent holder, clone-owned final permit, delayed descendant exits,
+cancellation, conflict, uncertain writes, reopen and CallID replay assertions
+remain in place. There are 21 cases: seven node failures and fourteen join
+failures across Memory and SQLite.
+
+The minimal `TestLimiterSynchronousJoinDependency` deliberately enters Merge
+before releasing another node. Observation proves the node callback finishes
+while its result remains uncommitted and its successor remains undispatched.
+Manual cancellation then verifies complete callback resolution, an unchanged
+stored checkpoint, no execution failure, and reuse of all four permits. The
+five-second deadlines remain safety fuses; no deadline increase or retry was
+introduced. Fixture timeouts report the current waiting phase, limiter occupancy,
+the last 64 observation events and goroutine stacks. Cleanup releases gates,
+cancels executions and drains callbacks before SQLite closes.
+
+Reproduction commands (quote `-cpu=1,8` in PowerShell):
+
+```sh
+go test ./internal/observationtest -run '^TestLimiterSynchronousJoinDependency$' -count=100 -cpu=1,8
+go test -race ./internal/observationtest -run '^TestLimiterSynchronousJoinDependency$' -count=100 -cpu=1,8
+go test ./internal/observationtest -run '^TestLimiterNestedFailGroupProgress$/join/memory' -count=100 -cpu=1,8
+go test -race ./internal/observationtest -run '^TestLimiterNestedFailGroupProgress$/join/memory' -count=100 -cpu=1,8
+go test ./internal/observationtest -run '^TestLimiterNestedFailGroupProgress$' -count=20
+go test -race ./internal/observationtest -run '^TestLimiterNestedFailGroupProgress$' -count=20
+```
+
+All six runs passed. Each CPU setting runs the 100 repetitions separately;
+the full matrix runs 420 cases per verification mode. Full tests, full race,
+vet, formatting and the 13-package production coverage gate passed. This work
+changes tests and documents the existing synchronous boundary; it does not
+change the scheduler, public API or checkpoint format, or establish fairness
+or production capacity bounds.
