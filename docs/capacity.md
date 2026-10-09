@@ -1644,3 +1644,119 @@ threshold is introduced. Raw local logs remain outside the repository as
 `lunegraph-failgroup-before.txt` and `lunegraph-failgroup-final.txt`; intermediate
 experiments are in `lunegraph-failgroup-candidate.txt` and
 `lunegraph-failgroup-after.txt`.
+
+## Shared limiter sustained validation
+
+`TestCapacitySharedLimiterSoak` is a manual extension of the finite shared
+limiter checks. It uses 64 fixed executions sharing a compiled Runner and
+Store, eight callers, fan-out width eight, local node concurrency eight, and
+global callback capacities one and eight. Memory and SQLite are tested in four
+sequential cases. Each caller exclusively owns eight execution slots; the
+harness never concurrently recovers the same execution.
+
+Run all four cases for 60 seconds each:
+
+```sh
+LUNEGRAPH_SOAK_DURATION=60s go test ./internal/capacitytest -run '^TestCapacitySharedLimiterSoak$' -count=1 -v -cpu=8 -timeout=8m
+```
+
+PowerShell:
+
+```powershell
+$env:LUNEGRAPH_SOAK_DURATION = '60s'
+try {
+    go test ./internal/capacitytest -run '^TestCapacitySharedLimiterSoak$' -count=1 -v -cpu=8 -timeout=8m
+} finally {
+    Remove-Item Env:LUNEGRAPH_SOAK_DURATION
+}
+```
+
+Unset duration skips the manual test. For a race smoke run, use `1s` and add
+`-race`. CI runs the deterministic
+`TestCapacitySharedLimiterCancellationRecovery` without the duration variable;
+there is no scheduled sustained job. That test blocks a started branch until
+cancellation, verifies discarded callback results, reloads the authoritative
+checkpoint, completes the interrupted round, advances another execution, and
+acquires the full limiter capacity to detect leaked permits.
+
+Each resumed round advances ten node steps and one typed continuation.
+Deadline cancellation drains all workers and the resource sampler before
+verification. Every started node, join, and continuation must have a finished
+event and a result resolution; committed, discarded, and unknown totals must
+sum to starts. Active callbacks must be zero and the observed peak must respect
+the configured capacity. Progress snapshots read separate atomic counters and
+may momentarily disagree; accounting assertions run only after draining.
+
+Recovery first reloads all 64 authoritative checkpoints. Waiting executions
+stay at their boundary. An unfinished round receives only its remaining node
+step budget and no continuation input, preventing a committed continuation
+from being applied again. The harness checks ownership, round state, aggregate
+branch values, continuation count, revision, steps, bounded topology, and
+equality with a second Store load. It then advances a new round on the same
+limiter to verify continued admission.
+
+Measurements retain counters, fixed execution references, and a rolling window
+of at most 1,024 successful-call latencies. They do not retain callback IDs or
+full event histories. Throughput counts successful calls and their node steps
+only; cancelled calls may have committed a prefix, reported separately through
+authoritative reload and recovery step counts. Samples record Go heap and
+goroutines every 500ms, with progress every five seconds and GC observations
+after seeding, draining, and recovery. Reload time includes both Store loads per
+execution; recovery time counts only invocations needed to finish partial
+rounds. Seeding and recovery are outside the requested run duration.
+
+### Local 60-second results
+
+On 2026-10-09, the working tree based on `02a415d` ran all four cases with
+Go 1.26.5, Windows/amd64, AMD Ryzen 7 6800H, and `GOMAXPROCS=8`. The measured
+phase lasted 60 seconds per case; total test time including setup and recovery
+was 243.82 seconds. No other Go verification jobs ran during these measurements.
+Four one-second race smoke cases also passed.
+
+The deterministic cancellation/recovery test passed 20 repetitions normally
+and 20 with `-race`, exercising all four combinations each time. Local
+`go test ./...`, `go test -race ./...`, `go vet ./...`, `gofmt -l .`, and
+`git diff --check` also passed. The production coverage gate passed all 13
+eligible packages. There are no public API or checkpoint format changes.
+
+| Store / capacity | Successful / cancelled calls | Successful steps | Calls/s | Rolling p50 / p95 ms | Callback peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Memory / 1 | 308,199 / 8 | 3,081,990 | 5,136.64 | 1.608 / 2.587 | 1 |
+| Memory / 8 | 452,990 / 7 | 4,529,900 | 7,549.65 | 1.077 / 1.726 | 8 |
+| SQLite / 1 | 2,415 / 8 | 24,150 | 40.25 | 190.858 / 282.894 | 1 |
+| SQLite / 8 | 2,425 / 8 | 24,250 | 40.42 | 193.394 / 283.468 | 5 |
+
+Values below are bytes of Go heap and sampled goroutine counts. GC values are
+captured while the population, Runner, and Store are still retained; SQLite's
+Store goroutine remains alive until test cleanup.
+
+| Store / capacity | Heap after seed / drain / recovery GC | Sampled peak heap | Goroutines seed / peak / drain / recovery |
+| --- | ---: | ---: | ---: |
+| Memory / 1 | 548,928 / 835,928 / 801,088 | 3,064,256 | 3 / 20 / 3 / 3 |
+| Memory / 8 | 790,472 / 868,368 / 820,624 | 3,126,808 | 3 / 64 / 3 / 3 |
+| SQLite / 1 | 759,696 / 819,072 / 792,312 | 3,161,776 | 4 / 22 / 4 / 4 |
+| SQLite / 8 | 777,856 / 828,832 / 794,880 | 2,953,528 | 4 / 78 / 4 / 4 |
+
+Callback counts include initial seeding and recovery, ending at the
+`after_recovery_gc` observation before the final admission check. Each row has
+identical started and finished counts, zero active callbacks, and an exact
+match between total starts and resolved outcomes.
+
+| Store / capacity | Starts: node / join / Apply | Committed / discarded / unknown | Drain / reload / recovery ms | Reloaded steps / recovery steps |
+| --- | ---: | ---: | ---: | ---: |
+| Memory / 1 | 3,082,693 / 308,270 / 308,205 | 3,699,164 / 4 / 0 | 0.000 / 0.000 / 0.000 | 3,082,665 / 25 |
+| Memory / 8 | 4,530,614 / 453,060 / 452,996 | 5,436,656 / 12 / 2 | 0.541 / 0.000 / 1.065 | 4,530,573 / 27 |
+| SQLite / 1 | 24,877 / 2,487 / 2,423 | 29,779 / 0 / 8 | 2.566 / 60.671 / 108.550 | 24,832 / 38 |
+| SQLite / 8 | 24,983 / 2,496 / 2,432 | 29,887 / 17 / 7 | 1.093 / 31.184 / 62.628 | 24,932 / 28 |
+
+Zero timings are below the local clock's measurement resolution. Unknown
+outcomes during cancellation are permitted by the Store contract; the
+authoritative reload checks succeeded for every execution. Raw logs remain
+outside the checkout as `lunegraph-limiter-soak-60s.txt` and
+`lunegraph-limiter-soak-race.txt` in the temporary directory.
+
+These finite runs do not establish day-long stability or production capacity.
+Go heap measurements exclude native allocations such as SQLite memory;
+goroutine peaks are sampled, not exhaustive. No portable heap, latency, or
+throughput threshold is imposed. Local measurements use Windows/amd64; Linux
+remains covered by the CI test and race jobs, rather than a local measurement.
