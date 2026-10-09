@@ -36,6 +36,7 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 			var active atomic.Int32
 			var replayMu sync.Mutex
 			var replay []string
+			var interruptedReplay []string
 			boom := errors.New("deliberate failure")
 			g := graph.New[state]("work")
 			err := g.AddNode(graph.NodeSpec[state]{Name: "work", OnError: graph.FailExecution, Run: func(ctx context.Context, call graph.CallInfo, s state) (graph.Transition[state], error) {
@@ -58,6 +59,14 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 					replayMu.Lock()
 					replay = append(replay, call.CallID)
 					replayMu.Unlock()
+				case "interrupt":
+					replayMu.Lock()
+					interruptedReplay = append(interruptedReplay, call.CallID)
+					first := len(interruptedReplay) == 1
+					replayMu.Unlock()
+					if first {
+						return graph.EndExecution(s), graph.Interrupt(nil)
+					}
 				}
 				return graph.EndExecution(s), nil
 			}})
@@ -84,6 +93,8 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 					id = "fail"
 				case 2:
 					id = "conflict"
+				case 3:
+					id = "interrupt"
 				}
 				out, err := r.Start(callCtx, id, initial(id), graph.Options[state]{Store: store})
 				saved, loadErr := store.Load(context.Background(), id)
@@ -104,8 +115,12 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 					if !errors.Is(err, boom) || !saved.Completed || saved.Failure == nil {
 						return fmt.Errorf("failure terminal: %+v, %v", saved, err)
 					}
-				case "conflict":
-					if !errors.Is(err, graph.ErrConflict) || saved.Revision != 1 || saved.Completed {
+				case "conflict", "interrupt":
+					want := graph.ErrConflict
+					if id == "interrupt" {
+						want = graph.ErrInterrupted
+					}
+					if !errors.Is(err, want) || saved.Revision != 1 || saved.Completed || saved.Failure != nil || saved.HadLocalFailures {
 						return fmt.Errorf("conflict wrote state: %+v, %v", saved, err)
 					}
 					out, err = r.Recover(context.Background(), id, nil, graph.Options[state]{Store: store})
@@ -128,6 +143,9 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 			}
 			if active.Load() != 0 || len(replay) != 2 || replay[0] == "" || replay[0] != replay[1] {
 				t.Fatalf("callbacks did not drain or replay identity changed: active=%d replay=%v", active.Load(), replay)
+			}
+			if len(interruptedReplay) != 2 || interruptedReplay[0] == "" || interruptedReplay[0] != interruptedReplay[1] {
+				t.Fatalf("interruption replay identity: %v", interruptedReplay)
 			}
 		})
 	}

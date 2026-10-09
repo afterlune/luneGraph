@@ -11,6 +11,35 @@ a deep-copy Clone. The fixtures require no workload-specific runtime APIs.
 
 ## Repeatable workloads
 
+The interruption reliability workloads additionally exercise mutable state
+through repeated node, join, and continuation interruptions. Their fixtures
+live alongside the existing capacity tests and use only the public API.
+
+`TestCapacityInterruptionLifecycle` runs four rounds with no Store, Memory,
+and SQLite, widths 8/128, and node concurrency 1/8.
+`TestCapacitySharedInterruptionLifecycle` runs eight rounds across 16 runs,
+four callers, and eight branches, sharing one compiled Runner and Store.
+Normal tests also cover state isolation from mutable-map changes, fresh-Runner
+SQLite reopen for all three callback kinds, deterministic overlapping recovery
+outcomes, and waiting for a callback that delays its response to cancellation.
+These tests run in the existing Windows/Linux CI without enabling a soak.
+
+The interruption controller requests interruption on the first attempt of
+each targeted callback, then permits replay of the same RunID/CallID with the
+same source state. It retains only pending identities and removes committed
+ones after each call. Persisted slots keep counters and input addresses, not
+duplicate application states. At each returned checkpoint, active topology
+is bounded by `width + 1` invocations and one group. Round boundaries collapse
+to one waiting invocation with no group and no retained controller entries.
+This is a test readiness protocol, not a production lease or an effect receipt.
+
+Interruption benchmarks include the test controller, deep-copy state,
+state/counter checks, and persisted reload checks. Setup and the first round
+are outside timing. Each timed operation completes a new round from a waiting
+checkpoint, including replay of a continuation input, fork/branch callbacks,
+and a join. A round commits ten node steps and one continuation application;
+the number of interrupted public calls can vary with scheduling.
+
 | Benchmark | Sizes | One measured operation |
 | --- | --- | --- |
 | `BenchmarkCapacityCompile` | 128 / 1,024 / 8,192 sequential nodes | Compile an already constructed definition. A complete execution validates the fixture before timing. |
@@ -19,6 +48,7 @@ a deep-copy Clone. The fixtures require no workload-specific runtime APIs.
 | `BenchmarkCapacityShared` | 16 / 64 / 256 fixed runs; 1 / 8 / 32 caller workers | Advance every run once using one shared Runner, with no Store, Memory, or SQLite. |
 | `BenchmarkCapacityPaused` | Memory: 128 / 1,024 / 8,192; SQLite: 128 / 1,024 paused runs | Recover one run without input (`inspect`) or apply a typed continuation and advance it to the next wait (`advance`). |
 | `BenchmarkCapacityHistory` | 32 / 128 / 512 rounds; terminal / failure / mixed history; no Store / Memory / SQLite | Inspect one waiting execution after a fixed number of branch-outcome rounds, using Resume without a Store or Recover with a Store. |
+| `BenchmarkCapacityInterruption` | Memory / SQLite; eight branches; node concurrency 1 / 8 | Complete one round from a waiting checkpoint, including continuation, node, and join interruptions and their recovery. |
 
 Graph construction, Store creation, initial checkpoints, and caller worker
 construction are outside timing. Assertions inside each measured operation
@@ -1297,3 +1327,132 @@ to seed levels. A separate one-second-per-Store race soak passed. These soaks
 validate resource and recovery behavior, not a version-to-version throughput
 claim. Raw benchmark samples, compiler diagnostics, profiles, and binaries
 remain in the temporary directory outside the repository.
+
+## Recoverable interruption capacity validation (format 3)
+
+The runtime at commit `72f255a`, with the new interruption capacity fixtures,
+was measured on 2026-10-09 using Go 1.26.5, Windows/amd64, and an AMD Ryzen 7
+6800H. This validation adds tests and measurements, with no public API,
+checkpoint-format, Store, or runtime changes.
+
+The manual `TestCapacityInterruptionSoak` is skipped unless the existing
+`LUNEGRAPH_SOAK_DURATION` variable is set. It runs Memory and SQLite separately,
+using 64 runs, eight caller workers, eight branches, and node concurrency eight.
+One complete round per run is seeded before timing; each run then starts at a
+waiting continuation. The Store population is fixed. Each caller exclusively
+advances its assigned runs; same-run competition uses separate deterministic
+tests with channel barriers rather than this throughput workload.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCapacityInterruption$' -benchmem -benchtime=500ms -count=3 -cpu '1,8' ./internal/capacitytest
+LUNEGRAPH_SOAK_DURATION=60s go test -run '^TestCapacityInterruptionSoak$' -count=1 -v -timeout 4m -cpu 8 ./internal/capacitytest
+LUNEGRAPH_SOAK_DURATION=1s go test -race -run '^TestCapacityInterruptionSoak$' -count=1 -v -timeout 2m -cpu 8 ./internal/capacitytest
+```
+
+PowerShell enables the same manual test as follows:
+
+```powershell
+$env:LUNEGRAPH_SOAK_DURATION = '60s'
+try {
+    go test -run '^TestCapacityInterruptionSoak$' -count=1 -v -timeout 4m -cpu 8 ./internal/capacitytest
+} finally {
+    Remove-Item Env:LUNEGRAPH_SOAK_DURATION
+}
+```
+
+Unlike the earlier soak's `successful_calls`, these reports distinguish
+`normal_calls`, `interrupted_calls`, and `cancelled_calls`. Non-cancelled
+throughput and the rolling p50/p95 include both normal and interrupted public
+calls, using the last 1,024 such latencies. Their duration includes persisted
+reload and result checks by the harness. Step accounting uses returned
+checkpoint deltas, not callback attempts or a fixed steps-per-call estimate.
+An interrupted call can contain an earlier committed prefix; a cancelled call
+can have an uncertain acknowledgement. After draining, the harness reloads
+all runs and separately reports authoritative total steps and recovery steps.
+The seeded population accounts for 640 steps in that authoritative total.
+
+Resources are sampled every 500ms, with progress logs every five seconds.
+Heap is process-wide Go live heap, including test state, pending readiness
+records, runtime caches, and measurements; SQLite file sizes, native memory,
+and filesystem cache are excluded. Measurements are bounded: the controller
+retains only current callback identities and per-run active callback counts,
+and latency storage is a fixed ring. Each public call must drain its own
+callbacks before returning, independently of other active runs.
+
+After cancellation, a fresh context reloads each authoritative checkpoint,
+resubmits only still-waiting inputs, and advances partial rounds to their next
+waiting boundary. If a continuation has interrupted without committing,
+that input is also retried. Every final run must have one waiting invocation,
+no groups, valid owner/state/counters, no failure marker, and no pending test
+controller entries. Drain and recovery elapsed times are reported separately;
+post-drain recovery does not contribute to throughput or latency samples.
+
+These measurements establish behavior for this bounded test workload, not a
+production capacity limit or a comparison with the successful-only workloads.
+There are no cross-machine heap, latency, or throughput gates. Sampled goroutine
+counts supplement deterministic callback-draining assertions; process-wide
+resource samples alone are not a proof of absence of all resource leaks.
+
+### Interruption round benchmarks
+
+Three 500ms samples per configuration report median [minimum–maximum] in
+milliseconds. Allocation columns are medians. SQLite executes 18–22 rounds
+per sample here; these are diagnostic measurements rather than tail-latency
+or sustained throughput estimates. No baseline comparison is implied.
+
+| Store | Node concurrency | Ps | ms/round [range] | B/round | allocs/round |
+| --- | ---: | ---: | --- | ---: | ---: |
+| Memory | 1 | 1 | 0.869 [0.834–0.966] | 510,893 | 6,894 |
+| Memory | 1 | 8 | 1.403 [1.240–1.416] | 511,148 | 6,894 |
+| Memory | 8 | 1 | 0.574 [0.559–0.584] | 264,245 | 2,730 |
+| Memory | 8 | 8 | 0.726 [0.710–0.779] | 264,543 | 2,732 |
+| SQLite | 1 | 1 | 31.609 [30.573–33.173] | 956,272 | 17,741 |
+| SQLite | 1 | 8 | 31.322 [30.854–31.535] | 966,867 | 17,753 |
+| SQLite | 8 | 1 | 28.809 [27.613–28.946] | 384,811 | 7,480 |
+| SQLite | 8 | 8 | 27.955 [27.400–28.405] | 393,085 | 7,493 |
+
+Parallel first attempts can request interruption before their sibling results
+are drained, letting a subsequent public call replay several branches together.
+Serial first attempts instead require more public calls and more fixture
+reloads and comparisons. The differing allocation counts therefore include
+controller and harness behavior; they are not isolated scheduler allocation
+measurements or an argument to increase concurrency for every application.
+
+### Sixty-second interruption soak
+
+Each Store ran separately on eight Ps. Duration is frozen after callers and
+the sampler drain; latencies exclude post-drain recovery. Normal calls in this
+workload reach a waiting round boundary; interrupted calls may still have
+committed earlier results. Callback first-attempt counts also include seeding
+and final recovery, and can exceed public interruption counts because of
+discarded parallel results.
+
+| Store | Normal / interrupted / cancelled calls | Non-cancelled calls/s | Rolling p50 / p95, ms | Observed committed steps |
+| --- | --- | ---: | --- | ---: |
+| Memory | 105,880 / 423,677 / 5 | 8,825.93 | 0.5367 / 2.6346 | 1,058,831 |
+| SQLite | 2,173 / 8,869 / 5 | 183.95 | 33.7065 / 116.2744 | 21,966 |
+
+| Store | Seed GC heap, B | Sampled peak heap, B | Drain / recovery GC heap, B | Seed / peak / drain / recovery goroutines | Drain / recovery, ms |
+| --- | ---: | ---: | --- | --- | --- |
+| Memory | 666,584 | 5,051,056 | 1,589,368 / 1,002,432 | 3 / 76 / 3 / 3 | 0.0000 / 43.5990 |
+| SQLite | 788,536 | 3,010,008 | 1,127,296 / 851,912 | 4 / 78 / 4 / 4 | 26.1713 / 855.8139 |
+
+Drain timing starts when the coordinator observes context cancellation, so a
+rounded zero means the workers had already drained at that observation point.
+It does not establish zero callback cancellation latency. Remaining post-GC
+heap includes persisted runs, test metadata, and runtime caches; no fixed heap
+threshold is applied.
+
+Reload confirmed total committed steps of 1,059,471 for Memory and 22,607 for
+SQLite, including the 640 seeded steps. Memory's returned-delta count matches
+the loaded count after subtracting seeding. SQLite committed one additional
+step across the cancellation/acknowledgement boundary, confirmed only by
+reload. Recovery then committed 609 and 333 more steps respectively to finish
+pending rounds. All 64 runs per Store ended at checked waiting boundaries;
+pending controller entries and active callback counts were zero, and sampled
+goroutine counts returned to seed levels.
+
+The separate one-second-per-Store race soak also passed. Raw benchmark and
+soak logs remain in the temporary directory outside the repository. The normal
+CI tests exercise the same assertions at fixed round counts; the manual soaks
+remain opt-in.

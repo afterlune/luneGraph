@@ -40,6 +40,15 @@ Applications remain responsible for idempotency and reconciling uncertain
 external effects. Store commit errors still require reloading to determine
 what was committed.
 
+Interruption does not claim exclusive ownership of a run. Two concurrent
+Recover calls can both replay the same persisted CallID and return
+`StatusInterrupted` without either writing a checkpoint. Another call can
+also commit a completion or failure while an interrupted call is still
+running. The interrupted call returns its own last committed checkpoint,
+which may then be stale. Load or Recover the latest checkpoint to inspect
+the authoritative outcome; Resume with the older revision returns
+`ErrConflict`. An interruption cannot undo or unlock a committed terminal.
+
 Only explicitly returned errors from the three effect-capable callback kinds
 are interruption signals. Clone, Decode, and Store errors retain their
 existing behavior even if they wrap `ErrInterrupted`. A panic wrapping the
