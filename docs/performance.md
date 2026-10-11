@@ -16,7 +16,7 @@ Run focused comparisons serially on the same machine and Go version:
 
 ```sh
 go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin|BenchmarkConcurrentRuns|BenchmarkDurableSequentialExecution|BenchmarkDurableFanoutJoin)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
-go test -run '^$' -bench '^(BenchmarkCapacity|BenchmarkDeleteMany)' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkCapacity' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/capacitytest
 go test -run '^$' -bench '^BenchmarkObservation$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/observationtest
 go test -run '^$' -bench '^BenchmarkCheckpointCopyInto$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/model
 go test -run '^$' -bench '^(BenchmarkJSONCheckpointEncoding|BenchmarkCheckpointCAS|BenchmarkSQLiteReopenRecover)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./checkpoint/...
@@ -27,7 +27,7 @@ The benchmark families cover:
 - Sequential and fan-out execution; independent runs sharing a compiled Runner.
 - Repeated durable recovery with Memory and SQLite Stores.
 - Graph compilation, fan-out, nested groups, shared runs, paused populations,
-  history, interruptions, callback limiting, and batch deletion.
+  history, interruptions, and callback limiting.
 - Checkpoint encoding/copying and disabled, no-op, and slog observation.
 
 The graph-scale benchmarks use fixed public-API workloads and verify results;

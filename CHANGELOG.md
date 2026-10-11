@@ -12,6 +12,8 @@
   clear active topology. Custom Stores must implement the new delta contract.
 - Store.Load returns Invocations and Groups in ascending lexicographic ID order;
   ActivationGroup.Children keeps fan-out target order. Custom Stores must match.
+- Remove Store.DeleteMany. Stores expose single-run Delete only; repeated deletes
+  are caller-managed and do not provide atomic multi-run cleanup.
 - Replace checkpoint.Codec with StateCodec[S]; JSON[S] now encodes S. SQLite
   owns metadata and stores only changed states. For whole-checkpoint interchange,
   JSON[graph.Checkpoint[S]] is still a normal generic JSON codec.

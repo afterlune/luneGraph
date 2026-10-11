@@ -99,8 +99,10 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 				t.Fatal(err)
 			}
 			started = time.Now()
-			if err := store.DeleteMany(ctx, old); err != nil {
-				t.Fatal(err)
+			for _, id := range old {
+				if err := store.Delete(ctx, id); err != nil {
+					t.Fatal(err)
+				}
 			}
 			deleteMS = float64(time.Since(started)) / float64(time.Millisecond)
 			deleted += len(old)

@@ -32,9 +32,8 @@ snapshot replacement semantics.
 ## Deletion and codecs
 
 Delete removes every record of one run and reports checkpoint.ErrNotFound when
-missing. DeleteMany validates every ID before writing, tolerates duplicates and
-missing IDs, and is atomic even when SQL parameter limits require chunks.
-Callers ensure quiescence. Store deletion does not implement TTL or effect cleanup.
+missing. Callers ensure quiescence and own retention. Store deletion does not
+implement TTL, effects cleanup, or atomic multi-run deletion.
 
 SQLite uses StateCodec[S]. Append must append to and not retain caller buffers;
 Unmarshal must return an independent state. Preserve all application-required
@@ -47,5 +46,5 @@ Use the built-in Stores and internal/storetest suite as contract references.
 Test canonical Load ordering and preservation of child target order, ownership
 after caller mutation, stale/missing/wrong-machine writes, mixed delta atomicity,
 terminal rejection, cancellation, uncertain acks, concurrent loads/writes and
-deletion rollback. Add process-kill tests for durable backends. Any serialization
-optimization must pass independent-reader and reopen checks.
+single-run deletion. Add process-kill tests for durable backends. Any
+serialization optimization must pass independent-reader and reopen checks.

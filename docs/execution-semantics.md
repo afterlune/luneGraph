@@ -147,7 +147,7 @@ checkpoints does not delete external data or receipts.
 
 ## Store and codec contracts
 
-Store has Create, Load, Commit, Delete and DeleteMany. Commit takes expected
+Store has Create, Load, Commit and single-run Delete. Commit takes expected
 revision and a Change: authoritative Header/Final and listed invocation/group
 upserts/deletions. Omitted records stay unchanged. IDs cannot repeat or be both
 upserted/deleted. Missing deletion IDs are harmless. Completed changes contain
@@ -169,11 +169,10 @@ ErrConflict guarantees no write. Other Store errors, including context errors,
 can be uncertain. Reload rather than retrying an obsolete candidate. There is
 no automatic Store retry or distributed lease.
 
-Delete reports ErrNotFound when missing. DeleteMany validates the entire batch,
-atomically removes all named records and tolerates missing/duplicate IDs. Empty
-batches are no-ops with valid context/Store. Callers own quiescence and retention;
-do not reuse IDs while old owners can address them. Deletion makes SQLite pages
-reusable, without guaranteeing immediate file shrink.
+Delete removes one run and reports ErrNotFound when missing. Callers own
+quiescence and retention; do not reuse IDs while old owners can address them.
+Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
+SQLite pages reusable, without guaranteeing immediate file shrink.
 
 Format 4/schema 2 reject older versions. Finish old runs with their matching
 runtime and use a new database for new executions. No automatic migration or

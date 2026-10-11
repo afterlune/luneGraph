@@ -110,11 +110,6 @@ type Store[S any] interface {
 	Load(context.Context, string) (Checkpoint[S], error)
 	Commit(context.Context, uint64, Change[S]) error
 	Delete(context.Context, string) error
-	// DeleteMany atomically removes the named runs. Missing and duplicate IDs
-	// are harmless. Invalid IDs reject the whole batch. An empty batch is a
-	// no-op with a valid context and Store. Commit errors can be uncertain;
-	// reload before retrying. Callers own execution quiescence and retention.
-	DeleteMany(context.Context, []string) error
 }
 
 // Options controls one call's node-start budget, node/join concurrency, storage, and failure scope.

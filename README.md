@@ -122,11 +122,12 @@ encodes S only; execution metadata is stored separately. Memory Store is in
 checkpoint/memory and requires an independent-copy Clone.
 
 Store.Commit(expectedRevision, Change[S]) atomically applies changed records.
-Custom Stores implement Create, Load, Commit, Delete and DeleteMany. ErrConflict
+Custom Stores implement Create, Load, Commit and single-run Delete. ErrConflict
 guarantees no write; other Store errors can leave the outcome uncertain. Reload
 before replay. Load returns Invocations and Groups sorted by ascending
 lexicographic ID; ActivationGroup.Children preserves fan-out target order. CAS
-does not grant exclusive execution ownership.
+does not grant exclusive execution ownership. Multi-run cleanup is caller-owned;
+repeated Delete calls do not form an atomic batch.
 
 ## Outcomes and effects
 
@@ -202,7 +203,8 @@ production capacity.
 ## Format-4 migration
 
 Replace custom Store.CompareAndSwap with Commit and preserve delta atomicity and
-ownership. Replace Codec[S] with StateCodec[S]. JSON[S].Append/Unmarshal now
+ownership. Remove Store.DeleteMany implementations; repeated Delete calls are
+not atomic as a batch. Replace Codec[S] with StateCodec[S]. JSON[S].Append/Unmarshal now
 operate on S, not Checkpoint[S]; for complete checkpoint interchange instantiate
 JSON[graph.Checkpoint[S]]. Add independent Merge commits to revision accounting
 and replace OperationCompareAndSwap with OperationCommit. Handle the Builder

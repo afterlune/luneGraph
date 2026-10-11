@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestCapacityDeleteManyIsolation(t *testing.T) {
+func TestCapacityDeleteIsolation(t *testing.T) {
 	for _, kind := range []string{"memory", "sqlite"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -45,8 +45,10 @@ func TestCapacityDeleteManyIsolation(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			if err := store.DeleteMany(ctx, []string{"old-a", "old-b"}); err != nil {
-				t.Fatal(err)
+			for _, id := range []string{"old-a", "old-b"} {
+				if err := store.Delete(ctx, id); err != nil {
+					t.Fatal(err)
+				}
 			}
 			close(release)
 			select {

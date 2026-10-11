@@ -41,13 +41,6 @@ func (m *mockStore) Delete(_ context.Context, runID string) error {
 	return nil
 }
 
-func (m *mockStore) DeleteMany(_ context.Context, ids []string) error {
-	for _, id := range ids {
-		m.deleted = id
-	}
-	return nil
-}
-
 type recordObserver struct {
 	events []model.Event
 }
