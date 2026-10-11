@@ -166,7 +166,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			}
 		}
 		if resolved {
-			return invalidCheckpoint("group %q should already be settled", group.ID)
+			active = true
 		}
 	}
 	if maxID >= s.NextID {

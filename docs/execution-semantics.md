@@ -1,466 +1,201 @@
-# Execution semantics
-
-`lune-graph` executes a compiled graph over a caller-defined `S`. Graph nodes,
-edges, branches, joins, runs, failures, and checkpoints define the runtime.
-Applications define the meaning of their state and callbacks.
-
-## Explicit recoverable interruption
-
-Nodes, join merges, and continuation Apply handlers may return
-`graph.Interrupt(cause)` (including a wrapped error) to end the current public
-call with `StatusInterrupted` and an error matching `graph.ErrInterrupted`.
-The cause remains available through `errors.Is` and `errors.As`;
-`Interrupt(nil)` returns the sentinel itself. This control signal bypasses
-`OnError` and `FailureOverride` and does not commit a failure or callback result.
-
-The returned checkpoint is the last committed checkpoint. Interruption does
-not advance its revision, steps, or schedule cursor, change its failure flags,
-or replace pending CallIDs. Start and Fork may already have created their
-initial checkpoint, and earlier results within this public call may already
-have committed. With no Store, the same boundary applies to the checkpoint
-returned to the caller for Resume.
-
-Parallel interruption stops scheduling, cancels running callbacks, and drains
-their results before returning. Those uncommitted results are discarded even
-if successful. The runner cannot force callbacks to exit; they must respond
-to context cancellation. Effects performed by discarded callbacks can replay.
-
-A join and its triggering branch result or continuation input belong to the
-same commit candidate. If a join interrupts, that entire candidate is
-discarded, including earlier nested merges in it. Recovery can replay both
-the trigger and joins with their original CallIDs. A continuation interruption
-leaves the invocation waiting; its input is not persisted. Supply that input
-again, along with later uncommitted inputs. Earlier committed inputs must not
-be resubmitted.
-
-Interruption is transient: neither its status nor cause is written into the
-checkpoint. The caller decides when to Recover or Resume; these entrypoints
-do not require an unlock operation and may replay pending callbacks normally.
-Applications remain responsible for idempotency and reconciling uncertain
-external effects. Store commit errors still require reloading to determine
-what was committed.
-
-Interruption does not claim exclusive ownership of a run. Two concurrent
-Recover calls can both replay the same persisted CallID and return
-`StatusInterrupted` without either writing a checkpoint. Another call can
-also commit a completion or failure while an interrupted call is still
-running. The interrupted call returns its own last committed checkpoint,
-which may then be stale. Load or Recover the latest checkpoint to inspect
-the authoritative outcome; Resume with the older revision returns
-`ErrConflict`. An interruption cannot undo or unlock a committed terminal.
-
-Only explicitly returned errors from the three effect-capable callback kinds
-are interruption signals. Clone, Decode, and Store errors retain their
-existing behavior even if they wrap `ErrInterrupted`. A panic wrapping the
-marker remains a `PanicError` subject to the applicable failure policy. When
-the public context is cancelled while an interruption is being handled,
-the call returns `StatusCancelled` and the context error instead.
-
-The new `"interrupted"` result status requires an additional branch in
-exhaustive status handling. The checkpoint format and Store contract remain
-unchanged.
-
-## Subgraph composition
-
-`Graph[S].AddSubgraph` mounts another builder with the same `S`. `Compile`
-recursively expands each mount into the parent machine, so a run still has one
-state, one scheduler, and one checkpoint. A mount name acts as a graph vertex:
-incoming edges enter the child graph's configured entry, and its optional
-single outgoing edge is the destination for `Return(state)`. A return with no
-destination ends that invocation branch. `EndBranch` and `EndExecution` inside
-a child keep their run-wide behavior. `Return` from an unmounted node is an
-invalid transition.
-
-Nested and repeated mounts receive qualified node, join, and continuation
-names based on their mount paths. For example, a child node `review` mounted
-as `worker` is stored as `worker/review`; a continuation `approval` in that
-child is stored as `worker/approval`. Node targets and wait continuation keys
-are resolved within the graph where the callback was registered. These names
-are part of the checkpoint's execution position, so recovery requires the same
-expanded graph and a compatible `MachineID`. Subgraphs do not change the
-checkpoint format.
-
-## State ownership
-
-Every run owns a `Checkpoint[S]`. The runner calls `Config.Clone` before passing
-state to a node or continuation and when giving branch states to a join. `Clone`
-must copy every mutable map, slice, pointer target, or other reference that a
-callback may change. Stores own independent copies of values passed to them and
-return independent values from `Load`. Treat returned checkpoints as immutable.
-
-Keep large artifacts in an application-owned store and put references in `S`:
-
-```go
-type ArtifactRef struct {
-    URI      string
-    MIMEType string
-    Size     int64
-}
-
-type PipelineState struct {
-    Input  ArtifactRef
-    Output *ArtifactRef
-}
-```
-
-The graph runtime does not interpret artifact content or URI schemes. A
-persisted state must round-trip through its chosen `checkpoint.Codec[S]` without
-losing data required by callbacks. `checkpoint.JSON[S]` uses `encoding/json`.
-
-## Commit points
-
-When `Options.Store` is set, `Start` creates revision 1 with the entry
-invocation ready **before** calling its node. Every accepted node outcome then
-advances `Steps` and commits one new revision with `CompareAndSwap`. This
-includes a transition to waiting, a completed branch, a locally handled
-failure, or an execution-level failure. The latest committed checkpoint is the
-recovery point.
-
-`Resume` checks the supplied run, machine, format, and revision against the
-Store, then executes the checkpoint loaded from it. It decodes all supplied
-inputs before applying any. Each accepted input is applied and committed
-separately. A later error under a local failure policy leaves the committed
-prefix available; `FailExecution` commits a failure terminal after that prefix.
-Calling `Resume` without inputs advances ready invocations after a step budget
-was exhausted. `Status` describes why the current call returned; the checkpoint
-holds the persisted execution position.
-
-`Recover(ctx, runID, inputs, opts)` requires a Store and loads its latest
-checkpoint once. An active run follows the same input and scheduling rules as
-`Resume`. A successfully completed run with no inputs returns the stored result
-without executing callbacks or writing a new revision. A persisted
-execution-level failure returns `StatusFailed`, the stored checkpoint, and
-`graph.ErrRunFailed` with the recorded message; its original Go error type
-cannot be reconstructed from storage. Inputs to any terminal run return
-`graph.ErrRunCompleted`, `StatusFailed`, and the stored checkpoint without being
-consumed. `Resume` continues to reject terminal checkpoints. If another executor
-commits between `Recover`'s load and CAS, the losing write returns
-`graph.ErrConflict`; `Recover` does not retry automatically.
-
-`Fork(ctx, newRunID, checkpoint, opts)` creates an independent execution starting
-from an existing checkpoint's execution position and state. The target checkpoint
-must not be terminal (`ErrRunCompleted`). If a Store is configured, `Fork` initializes
-the new run at revision 1 using `Store.Create` (returning `ErrConflict` if `newRunID`
-already exists). The original execution remains unchanged. `Fork` allows exploration,
-speculative execution, or trial branches without mutating the parent run's history.
-
-`FailExecution`, including a root `FailGroup` escalation, commits a terminal
-checkpoint with `Completed=true`, no active invocations or groups, and one
-`Failure` pointer. Earlier local failures remain represented by
-`HadLocalFailures`; their messages and states are not retained. Node failures
-advance `Steps`; continuation failures only
-advance the revision. The originating call returns
-its original error after a successful commit. Cancellation, invalid transitions,
-and state-copy failures do not create a failed terminal. A Store error is not
-itself a terminal failure, but it may leave a terminal write's outcome unknown;
-reload before deciding whether to retry. A crash before the terminal commits
-can still cause the callback to run again.
-
-`FailGroup` from an invocation in an activation group removes that group's child
-invocations and all nested groups beneath them, then marks the group's parent
-invocation failed. Running callbacks in the removed subtree are canceled before
-settling enclosing groups, so their callback permits can be released before an
-enclosing join waits for admission. All callbacks are drained before the public
-call returns. This cancellation belongs to the current call and does not confirm
-that its failure candidate was committed. If the candidate is rejected or its
-submission is uncertain, reload the Store; recovery can replay callbacks canceled
-from the uncommitted candidate using their persisted CallIDs.
-Enclosing groups remain active and settle under their own join rules;
-only children that reach an enclosing join contribute states. `FailGroup` at the
-root escalates to `FailExecution`.
-
-Concurrent node results commit in arrival order. `EndExecution` cancels other
-running callbacks and commits the winner's final state. A callback can finish
-without its result being committed if another result ends the run or a commit
-fails.
-
-## Recovery and external effects
-
-An executing node remains **ready** in the last committed checkpoint until its
-outcome commits. If the process stops in that interval, loading the checkpoint
-and resuming runs the node again. Cancellation and an uncertain Store write can
-also leave a callback's external effect ahead of the stored checkpoint.
-Therefore a callback may execute more than once across recovery. The runtime
-does not make callback side effects exactly once.
-
-Node, join merge, and continuation apply callbacks receive a `CallInfo` with
-`RunID`, `InvocationID`, `CallID`, `Node`, `Step`, and `BranchIndex`.
-`Node` identifies the current executing node or join name. `Step` provides the
-execution step count at invocation start. `BranchIndex` gives the branch index
-within the activation group for fan-out branches (0 for sequential paths).
-The runtime persists a callback's ID
-before that callback can start. Recovery reuses the same ID when replaying that
-logical callback. A new node visit in a loop, a new continuation application,
-or a new fan-out join gets a new ID. Use an application-specific namespace with
-`RunID` and `CallID` as the deduplication key; invocation IDs identify paths
-and are reused across sequential node visits. This key lets an application
-recognize replays but cannot make an external effect atomic with checkpoint
-commit. The external system must provide idempotency or atomic deduplication.
-State clone functions and continuation decoders are expected to be pure and do
-not receive a `CallInfo`.
-
-Checkpoint format 3 persists callback IDs without accumulating branch outcomes
-or local-failure records. Version-1 and version-2 checkpoints are rejected
-by this runner with `ErrInvalidCheckpoint`; applications must finish those runs
-with the older runtime or migrate them before recovery.
-
-`graph.ErrConflict` from a Store write guarantees that the attempted write did
-not happen. Another Store error, including cancellation during a write, may
-leave the outcome unknown. Load the latest checkpoint before deciding whether
-to retry. Rebuild the same graph with a compatible `MachineID` when resuming in
-a new process. An incompatible graph definition needs a new machine ID or an
-application-managed migration.
-
-### Transactional application receipts
-
-The [effect example](../examples/effects) demonstrates this boundary using a
-local counter. Its application ledger owns a separate SQLite file and stores
-the increment and original result under `(namespace, RunID, CallID)`.
-An immediate write transaction serializes the receipt lookup, counter update,
-and receipt insert across connections. Both writes commit together or roll
-back together. A matching receipt returns the stored result rather than the
-counter's current value; reusing its key with a different increment returns a
-checkable application error. The namespace versions the operation semantics.
-
-The recovery sequence is:
-
-1. The callback commits the counter update and receipt in the application DB.
-2. The graph commits the callback outcome in its independent checkpoint DB.
-3. If step 2 fails or the process crashes before it, recovery loads the latest
-   checkpoint. A pending callback replays with the same CallID and reads the
-   receipt, restoring the original result without another counter update.
-4. If the checkpoint write succeeded but its acknowledgement was lost, recovery
-   advances the committed checkpoint instead of repeating an accepted callback.
-
-Applications must retain receipts while a callback can still be replayed.
-Completed-run recovery returns persisted state without invoking callbacks.
-The example uses `FailExecution` for business errors; it adds no automatic
-retry policy. A ledger commit error can itself have an uncertain outcome:
-inspect the receipt before deciding how to resolve a business failure. A
-terminal graph failure is not made resumable by finding a receipt.
-
-This pattern protects effects performed inside the application transaction.
-A receipt inserted separately from a remote write does not provide the same
-guarantee. Remote effects still need the destination's idempotency or an
-application-managed protocol. There is no atomic transaction between this
-ledger and graph checkpoints, and the runtime's contract remains at-least-once.
-
-## Observation
-
-`Options.Observer` receives a `graph.Event` at `PhaseStarted` and
-`PhaseFinished` for each observed operation. Execution callbacks additionally
-receive `PhaseResolved`, described below. It is optional and applies only to
-the current public call; the compiled Runner does not retain it. With a nil
-observer, the runtime does not create an observation session, allocate an
-operation ID, or read clocks.
-
-| Operation | Observed boundary |
-| --- | --- |
-| `OperationStart`, `OperationResume`, `OperationRecover` | One public call, including validation, cancellation, and draining workers |
-| `OperationNode`, `OperationJoin` | The callback, including panic conversion, before accepting its outcome |
-| `OperationDecode`, `OperationApply` | One continuation decoder or typed apply callback |
-| `OperationCreate`, `OperationLoad`, `OperationCompareAndSwap`, `OperationDelete` | One actual call to the configured Store |
-
-Public calls begin observation after checking that their Runner and context are
-non-nil. Other validation errors still produce a public finished event with the
-returned status and error. Internal recovery does not produce a nested public
-`Resume` event. Recovering a terminal run produces a public pair and a Load
-pair, without callback or write events.
-
-Every event from one public call has the same process-local `OperationID`,
-RunID, and compiled MachineID. OperationID is not persisted and must not be
-used as a cross-process identifier. Node, join, and continuation apply events
-use the callback's persisted CallID; replay uses that ID again in a new public
-operation. InvocationID identifies the path. Decode events have InvocationID
-and Continuation but no CallID. Subgraph node and continuation names are
-qualified as in the checkpoint.
-
-Revision means the following:
-
-- A public start event has revision zero for Start and Recover, or the supplied
-  reference revision for Resume. Its finished event has the returned checkpoint
-  revision, even when the call returns an error.
-- Started and finished callback events have the revision of the checkpoint used to schedule or
-  apply the callback, before committing its outcome.
-- Create and CAS events have the attempted write revision. Load starts at zero
-  and finishes with the loaded revision on success, or zero on error.
-
-Status is populated only on public finished events. Action is populated only
-on node finished events and describes the callback's returned decision before
-transition validation. Err is the actual callback or Store error, or the public
-call's returned error. Resolved events instead report their resolution cause. A locally handled callback error can therefore coexist
-with a successful public return. A successful callback event does not mean that
-its outcome passed validation or committed. A Store error does not establish
-whether its write committed, except for the documented no-write guarantee of
-ErrConflict. Confirm execution position through the Store. Errors are shared
-with execution handling; observers must treat them and referenced objects as
-read-only.
-
-Delivery is synchronous on the operation's goroutine. One operation starts
-before it finishes, and a public call finishes after all its running callbacks
-have returned and their events have been delivered. Different workers and
-different public calls can deliver events concurrently and have no total
-ordering. Canceled or superseded callbacks still produce finished events if
-they return, even when their results are discarded. A slow observer may change
-the arrival order of parallel results.
-
-Observers must be concurrency safe, return promptly, and avoid recursively
-driving the same execution. Each observation panic is recovered independently
-and does not become a Failure or alter the callback's returned value. There is
-no observer timeout or asynchronous queue. Events retain the operation's
-context, including cancellation; observers must decide how to report canceled
-operations themselves.
-
-Time is the event creation time. Duration uses the monotonic clock and excludes
-delivery of that operation's started and finished events. Public-call duration
-includes nested event delivery and worker draining. Events contain no state,
-checkpoint objects, or payload bytes; their error messages are still supplied
-by application callbacks or stores. Events are transient and can be incomplete
-after a crash or an unrecovered panic. Store panics remain outside the callback
-panic boundary and do not produce misleading finished events.
-
-The optional `observe.NewSlog` adapter uses Info for public calls, Debug for
-callbacks and Store calls, and Error for any event carrying an error. It checks
-`Logger.Enabled` before constructing attributes. A nil logger selects
-`slog.Default()` at construction. Its handler must support concurrent calls.
-The adapter adds no persistence and makes no delivery guarantee beyond the
-Observer contract.
-
-
-## Shared callback budget
-
-`Options.Limiter` optionally participates in a fixed, process-local budget
-created with `graph.NewLimiter(capacity)`. Capacity must be positive; a non-nil
-zero value is rejected during option validation. Share the pointer across
-executions, runners and state types; there is no mutable capacity or Close.
-
-Node, join Merge and continuation Apply callbacks each acquire one permit.
-Node admission precedes state cloning; clone failure releases the reservation.
-Merge and Apply acquire before callback observation starts. Clone, continuation
-Decode, Store and Observer do not acquire additional permits. Callback started
-and finished delivery occur within the permit lifetime, so a slow observer
-can delay availability. No permit is held during checkpoint submission.
-
-Node scheduling uses the smaller of the local node concurrency and shared
-capacity, starts workers on demand, and reuses them within the public call.
-When admission is blocked, the scheduler selects among results, capacity and
-context cancellation. Waiting does not start a callback, emit callback events,
-consume node starts, or replace pending CallIDs. Cancellation while waiting
-returns the last committed checkpoint and StatusCancelled without applying a
-failure policy. Already running callbacks still drain under the existing
-cancellation contract. Budgets release on callback return, panic conversion,
-interruption and pre-callback clone failure.
-
-This is a callback budget, not execution admission or ownership. Independent
-Recover calls still contend through CAS and can replay the same CallID. Hosts
-own queueing and fairness; neither FIFO nor cross-process limiting is promised.
-Avoid synchronously driving another execution from a callback if the same
-budget is already occupied by that callback and cannot admit the nested work.
-
-## Callback result resolution
-
-Execution callbacks (node, join and Apply) have a third observation phase,
-`PhaseResolved`, with one of these `CallbackOutcome` values:
-
-| Outcome | Meaning |
-| --- | --- |
-| `OutcomeCommitted` | Candidate accepted, including committed failure handling; with no Store, accepted in memory only. |
-| `OutcomeDiscarded` | Result rejected before submission, or CAS returned ErrConflict with its guaranteed no-write semantics. |
-| `OutcomeUnknown` | CAS returned another error, including cancellation/deadline errors; reload to determine actual persistence. |
-
-Existing callback finished events report callback return, before validation or
-commit. Resolved events correlate by `(OperationID, Operation, CallID)`; use
-RunID and CallID to correlate logical replay across public calls. Resolved
-Revision is the target revision when commit was entered, otherwise that
-callback's original base revision. Resolved Err is the rejection or uncertain
-submission reason; it is nil for committed outcomes even if the original
-callback error was handled and committed. Action retains the node decision,
-Time records resolution, Duration is zero, and Status remains unset.
-
-A candidate consists of its triggering node or Apply and all joins invoked
-while settling it, including nested merges and handled merge failures. Their
-results resolve together. A later join interruption discards earlier merges
-in that candidate. Input application resolves one committed prefix at a time;
-a later interrupted input does not discard an earlier committed application.
-Other parallel callback attempts remain unresolved until processed or drained;
-superseded results resolve as discarded. Every started execution callback gets
-exactly one resolution before a normally returning public call finishes.
-Decode, Store and public operations keep only started/finished phases.
-
-Only enabled observation allocates the unresolved metadata ledger. Entries are
-removed on resolution, retain no state/payload/error history, and all remaining
-entries are discarded after workers drain. Events can interleave across
-workers and executions, and are neither persisted nor atomically coupled to
-Store writes. A crash, Store panic, or observer delivery panic can leave the
-consumer's record incomplete. Later recovery does not rewrite earlier unknown
-events or reconstruct missing events. Consumers should switch on phases
-explicitly instead of treating every non-started event as finished.
-
-## Store contract
-
-`Store[S]` implementations follow these rules:
-
-| Operation | Successful result | Checkable failure |
+# Execution semantics — checkpoint format 4
+
+The graph describes allowed control flow. Each execution owns its evolving `S`.
+Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
+codecs and Stores must satisfy their documented concurrency contracts.
+
+## State and composition
+
+- Clone is required before nodes, continuation Apply and Merge inputs. Copy every
+  mutable reference a callback can change. ValueClone is for scalar/immutable
+  state. JSONClone requires a semantics-preserving JSON round trip; unexported or
+  ignored fields and concrete interface types can be lost. Clone and Decode
+  must not perform side effects.
+- Fan-out gives each target independent state and creates one activation group.
+  Merge receives only joined states, in target order, possibly empty. Ended or
+  failed branches do not provide business results. Nested groups and loops are
+  allowed; each activation has independent callback identities.
+- Compile expands subgraphs into the same machine, state type, scheduler and
+  checkpoint. Names are qualified by mount path. A mount has at most one exit;
+  Return follows it or ends its invocation without an exit. Return outside a
+  mount is invalid. EndExecution ends the entire run.
+- To/Wait targets must be declared edges; Wait names a registered continuation.
+  EndBranch discards its business result. EndExecution supplies Final. Natural
+  completion can have neither Final nor Failure.
+- Returned checkpoints are immutable caller views. Callbacks transfer ownership
+  of returned state; they must not mutate retained references after returning. Stores own copies of writes
+  and return independent copies from Load. Large content belongs in external
+  storage; graph state should carry references.
+
+## Independent callback commits
+
+Start creates revision 1 before invoking callbacks. Accepted node outcomes,
+continuation applications and joins each commit independently. Internal
+settlement of a group without Merge can also advance the revision.
+
+A branch reaching a join commits its state first. Once all children are joined,
+ended or failed, the group is a persisted pending join. Merge runs as a worker
+independently of other branches. Its result updates the parent and removes that
+activation's children in one commit. Slow Merge callbacks do not block the driver
+from dispatching or accepting independent node results. Express dependencies in
+topology: waiting for work that requires the waiting callback's own permit can
+still exhaust a shared Limiter.
+
+This changes format 3: a rejected/interrupted Merge leaves triggering branches
+committed. Only the pending Merge replays. Committed inner joins stay committed
+when an outer join interrupts.
+
+Revision counts accepted commits. Steps counts accepted node outcomes, including
+ordinary node failures; Merge and Apply do not increase Steps. MaxSteps bounds
+node starts per public call, default 10,000. After exhaustion, admitted tasks
+finish and eligible joins settle; no new nodes start. Ready nodes then produce
+StatusBudget. MaxConcurrency, default GOMAXPROCS, bounds nodes and joins together.
+Continuation inputs apply sequentially before the driver starts. Counter
+exhaustion returns ErrExecutionLimit and the last committed position without a
+terminal Failure.
+
+Each public call orders initially ready nodes numerically after the persisted
+ScheduleCursor, wrapping around it. New ready work joins a local FIFO queue.
+Results commit in driver receive order; competing EndExecution results depend
+on completion timing. No global FIFO admission or deterministic parallel
+completion is promised.
+
+## Waiting, interruption and cancellation
+
+ResumeInput addresses a waiting invocation. Inputs are validated and decoded
+before any Apply; duplicate/invalid addresses reject the batch. Decode failure
+leaves it unchanged. Inputs then commit one at a time. A later failure or
+interruption preserves the accepted prefix. Resubmit only inputs whose original
+waiting CallID remains pending in the authoritative checkpoint.
+
+Wait commits state and waits for input. Interrupt(cause), including wrapped
+signals, discards the current callback result and exits with StatusInterrupted
+and ErrInterrupted. No interruption flag, cause, revision or step is persisted;
+failure policy is bypassed. Panicking with an interruption signal remains a
+panic. Clone, Decode and Store errors are not interruption control signals.
+The caller decides when to retry.
+
+Cancellation and interruption stop scheduling, cancel workers and wait for their
+return. Other uncommitted results are discarded. Callbacks must cooperate with
+context cancellation; Go functions cannot be forcibly stopped. Cancellation
+takes priority when observed while handling interruption.
+
+## Failures and public-call outcomes
+
+Ordinary node, Merge and Apply errors use declared policy or FailureOverride.
+Apply uses the suspending node's policy.
+
+- FailInvocation is the default. The path fails; enclosing groups continue.
+  HadLocalFailures is persisted. Details are transient events, not growing
+  checkpoint history.
+- FailGroup removes the activation and descendants, marks its parent failed, and
+  cancels removed workers after accepting the failure commit. Their late results
+  are discarded. At the root it becomes FailExecution. A rejected commit can
+  replay original pending callbacks.
+- FailExecution commits Completed with Failure and no active topology. The
+  original call returns its Go error; Recover returns ErrRunFailed with the
+  recorded message, without reconstructing the original error type.
+- Callback/Clone panics become PanicError; execution failures retain panic stacks.
+  Invalid transitions, cancellation and copy errors preserve the last committed
+  checkpoint without a terminal Failure. Store/codec panics are outside the
+  callback panic boundary.
+
+Status describes this call, not necessarily the execution's lifetime:
+
+| Result | Meaning | Next action |
 | --- | --- | --- |
-| `Create` | Save revision 1 for a new run | Existing run: `graph.ErrConflict`; malformed header: `graph.ErrInvalidCheckpoint` |
-| `Load` | Return an independent copy of the latest revision | Missing run: `checkpoint.ErrNotFound` |
-| `CompareAndSwap` | Save `expected + 1` for the same run and machine | Stale revision, wrong machine, or skipped revision: `graph.ErrConflict`; malformed header: `graph.ErrInvalidCheckpoint` |
-| `Delete` | Remove all saved checkpoints for a run | Missing run: `checkpoint.ErrNotFound` |
-| `DeleteMany` | Atomically remove the named runs; missing/duplicate IDs are harmless | Invalid ID rejects the whole batch; cancellation or storage failure returns an error |
+| Completed, nil error | Terminal; Final may be nil | Consume/clean up |
+| CompletedWithFailures, nil error | Terminal with local failures | Apply application policy |
+| Waiting | Active paths need input | Persist input externally; Resume/Recover |
+| Budget | Ready work remains | Resume/Recover without new input |
+| Interrupted, ErrInterrupted | Callback result discarded | Reconcile; retry pending identity |
+| Cancelled, context error | Call stopped; run may remain active | Reload durable state before retry |
+| Failed with checkpoint.Failure | Acknowledged failed terminal | Inspect; do not continue |
+| Failed without terminal Failure | Call failed; run may remain active | Inspect error; fix/reload |
+| ErrConflict | This commit did not write | Load authoritative position |
+| Other Store error | Commit may have happened | Load before replay |
 
-A valid write header has the current `CheckpointFormatVersion`, nonempty run and
-machine IDs without surrounding whitespace, and a positive revision. CAS at
-the maximum revision returns `graph.ErrExecutionLimit`. A conflict never
-changes the stored checkpoint. Other storage errors may have committed and
-require a fresh `Load` to establish the latest revision.
+Checking only error misses local failures. Checking only StatusFailed does not
+identify a durable terminal. After uncertain writes the returned checkpoint can
+be older than the authoritative one.
 
-`DeleteMany(ctx, runIDs)` validates the entire list before deletion. With a
-valid Store and context, an empty list succeeds. IDs are not retained by the
-implementation. Memory deletes under one lock; SQLite executes SQL chunks in
-one transaction. A batch has one atomic outcome, including when a commit error
-leaves that outcome uncertain. Reload target IDs with a fresh context to
-confirm, then retry the idempotent batch as necessary. Invalid IDs never delete
-anything. Separate Load calls can straddle a concurrent deletion; they are not
-a multi-run snapshot.
+## Recovery, forks and effects
 
-The caller selects IDs and ensures their executions will no longer be driven.
-Deletion is not cancellation, a completed-only condition, a retention policy,
-or an execution lease. Use unique run IDs for new executions so stale owners
-cannot address a new execution under an old ID. A CAS against a deleted run
-returns conflict; Recover returns not found. Checkpoint deletion does not
-delete application effect receipts or external data. Wrapped batch deletion
-uses one started/finished `OperationDelete` pair, with the wrapper session's
-metadata and the original error; it has no callback resolution event.
+Recover loads and drives the latest checkpoint. A terminal run returns without
+callbacks or another revision; failed terminals return ErrRunFailed. Inputs to
+terminal runs return ErrRunCompleted. Resume rejects any valid terminal position
+with ErrRunCompleted; malformed positions use ErrInvalidCheckpoint. With a Store,
+Resume treats its supplied checkpoint as an identity/version/revision reference,
+loads authoritative state and rejects stale references with ErrConflict.
 
-## Synchronous callback dependencies
+Fork clones an active source, changes RunID, creates revision 1 in the target
+Store and drives it. It does not load/change the source run. Completed sources
+are rejected. Pending CallIDs may be retained because RunID provides a new
+namespace. Applications account for effects in speculative branches.
 
-Join `Merge` runs synchronously while the execution driver settles a commit
-candidate. Until it returns, that driver cannot dispatch additional nodes or
-commit other node results, even when those callbacks have already finished.
-A Merge must therefore not wait for another branch's future dispatch or commit
-in the same execution. Express the dependency through graph topology, or ensure
-the prerequisite is met before the triggering node returns. Waiting callbacks
-must still cooperate with context cancellation; a blocked callback retains its
-limiter permit.
+Every node, Merge and Apply has a CallID persisted before it starts. It survives
+replay; new loop visits/activations get new IDs. An application namespace plus
+RunID/CallID identifies logical effects. Other CallInfo fields, including Step,
+describe dispatch and need not be identical across concurrent replays. CAS is a
+commit check, not a run lease: concurrent Recover calls can invoke the same
+logical callback before one loses a commit.
 
-The controlled `TestLimiterSynchronousJoinDependency` demonstrates this boundary:
-a separate node finishes while Merge waits for that node's undispatched successor.
-Explicit cancellation drains both callbacks, discards their pending candidate
-and result, preserves the stored checkpoint, and releases every limiter permit.
-Cancellation does not commit an execution failure.
+Effects are at-least-once. Transactional effect/receipt recording, remote
+idempotency keys and reconciliation belong to applications. Callback result
+resolution says nothing definitive about its external effect. Deleting
+checkpoints does not delete external data or receipts.
 
-## Bounded execution position
+## Store and codec contracts
 
-`EndBranch[S]()` ends a path without a result. Ended and locally failed
-invocations exist only while their activation is unsettled; settlement removes
-them and releases their states. A local failure sets `HadLocalFailures` for
-the remainder of the execution, including across recovery. It does not append
-an error record. Detailed errors remain available in transient observer events
-or application-owned receipts.
+Store has Create, Load, Commit, Delete and DeleteMany. Commit takes expected
+revision and a Change: authoritative Header/Final and listed invocation/group
+upserts/deletions. Omitted records stay unchanged. IDs cannot repeat or be both
+upserted/deleted. Missing deletion IDs are harmless. Completed changes contain
+no upserts and remove all active records atomically.
 
-Completed checkpoints contain no invocations or activation groups.
-`EndExecution(state)` sets `Final`; natural completion leaves `Final` nil.
-`FailExecution` instead sets `Failure`, with its invocation ID, node, message,
-and optional panic stack. A completed checkpoint with neither `Final` nor
-`Failure` is valid. These changes do not add or remove commit boundaries,
-alter callback IDs, or change at-least-once recovery and Store guarantees.
+Create accepts revision 1 and rejects existing RunID. Commit accepts expected+1
+for the same identity, rejects terminal runs, and prevents Steps/NextID regression
+or clearing HadLocalFailures. Stores check basic headers/change shape; Runner
+also validates topology against the definition. Writes own independent state and
+structural copies; Load returns an independent full checkpoint.
+
+Memory clones changed states only. SQLite schema 2 separates header, invocations
+and groups; changes commit in one transaction and Load uses a consistent read
+transaction. SQLite uses WAL, synchronous=FULL and one connection. StateCodec[S]
+encodes S only; SQLite owns scheduling metadata. JSON[S] requires JSON-preserving
+state; custom codecs support concurrent use.
+
+ErrConflict guarantees no write. Other Store errors, including context errors,
+can be uncertain. Reload rather than retrying an obsolete candidate. There is
+no automatic Store retry or distributed lease.
+
+Delete reports ErrNotFound when missing. DeleteMany validates the entire batch,
+atomically removes all named records and tolerates missing/duplicate IDs. Empty
+batches are no-ops with valid context/Store. Callers own quiescence and retention;
+do not reuse IDs while old owners can address them. Deletion makes SQLite pages
+reusable, without guaranteeing immediate file shrink.
+
+Format 4/schema 2 reject older versions. Finish old runs with their matching
+runtime and use a new database for new executions. No automatic migration or
+compatibility execution machine is supplied. MachineID remains an application
+controlled definition identity; change it for incompatible graphs.
+
+## Shared admission and observation
+
+Limiter bounds node, Merge and Apply callbacks across runners/executions/state
+types in one process. Nil uses local limits. Capacity is fixed and positive;
+share its pointer, never copy it. Waiting responds to cancellation and does not
+consume a node start or change CallID. Node Clone runs after admission; Merge
+input cloning runs before admission. Clone, Decode, Store and Observer do not
+acquire their own permits. Callback permits release after observation, before
+submission. Limiter does not bound resident runs, waiting callers or total
+memory. Hosts own admission queues and fairness.
+
+Observers synchronously receive transient metadata, never state/input bytes.
+They can be concurrent and must return promptly. Delivery panics are isolated;
+blocking observers still delay work. Nil observation has no session/ledger/clock
+reads. Started/Finished pair callback work; Resolved marks its individual
+committed/discarded/unknown result. OperationCommit replaces CompareAndSwap.
+OperationID correlates one process-local public call; RunID/CallID correlate
+replay. Durations exclude their own delivery. Err can contain application text
+and must be treated read-only.

@@ -15,7 +15,7 @@ func TestModelRejectsIncorrectBoundaries(t *testing.T) {
 		if width > 0 {
 			cp.Invocations[0].Node = "boundary"
 		}
-		cp.Revision = cp.Steps + 2
+		cp.Revision = cp.Steps + 2 + uint64(2*m.roundJoins())
 		if err := m.check(cp); err != nil {
 			t.Fatal(err)
 		}

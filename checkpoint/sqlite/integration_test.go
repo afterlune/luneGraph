@@ -16,8 +16,8 @@ type ackLossStore struct {
 	report error
 }
 
-func (s *ackLossStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[int]) error {
-	if err := s.Store.CompareAndSwap(ctx, expected, next); err != nil {
+func (s *ackLossStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
+	if err := s.Store.Commit(ctx, expected, change); err != nil {
 		return err
 	}
 	if s.report != nil {

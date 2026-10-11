@@ -53,96 +53,74 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 		return resultWith(checkpoint, StatusFailed), err
 	}
 	if checkpoint.Completed {
-		return resultWith(checkpoint, StatusFailed), invalidCheckpoint("execution is already completed")
+		return resultWith(checkpoint, StatusFailed), ErrRunCompleted
 	}
 	return r.resumeValidated(ctx, checkpoint, inputs, opts, obs)
 }
 
 // resumeValidated advances a loaded active checkpoint without reading the Store again.
 func (r *Runner[S]) resumeValidated(ctx context.Context, checkpoint Checkpoint[S], inputs []ResumeInput, opts Options[S], obs *observation.Session) (Result[S], error) {
-	s := copyCheckpoint(checkpoint)
-	index := newInvocationIndex(s)
-	var progress groupProgress
-	var spare Checkpoint[S]
-	if len(inputs) != 0 && s.Revision == math.MaxUint64 {
-		return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
+	l := newLive(checkpoint)
+	l.failureOverride = opts.FailureOverride
+	if len(inputs) > 0 && l.header.Revision == math.MaxUint64 {
+		return resultWith(l.snapshot(), StatusFailed), ErrExecutionLimit
 	}
 	type decoded struct {
 		id    string
 		value any
 	}
 	decodedInputs := make([]decoded, 0, len(inputs))
-	seen := make(map[string]bool, len(inputs))
+	seen := make(map[string]bool)
 	for _, input := range inputs {
 		if seen[input.InvocationID] {
-			return resultWith(s, StatusFailed), fmt.Errorf("duplicate resume input for %q", input.InvocationID)
+			return resultWith(l.snapshot(), StatusFailed), fmt.Errorf("duplicate resume input for %q", input.InvocationID)
 		}
 		seen[input.InvocationID] = true
-		_, inv := indexedInvocation(&index, &s, input.InvocationID)
-		if inv == nil || inv.Status != InvocationWaiting {
-			return resultWith(s, StatusFailed), fmt.Errorf("invocation %q is not waiting", input.InvocationID)
+		inv, ok := l.invocation(input.InvocationID)
+		if !ok || inv.Status != InvocationWaiting {
+			return resultWith(l.snapshot(), StatusFailed), fmt.Errorf("invocation %q is not waiting", input.InvocationID)
 		}
-		value, decodeErr := r.observedDecode(ctx, obs, s.Revision, *inv, input.Payload)
-		if decodeErr != nil {
-			return resultWith(s, StatusWaiting), fmt.Errorf("decode input for %q: %w", input.InvocationID, decodeErr)
+		value, err := r.observedDecode(ctx, obs, l.header.Revision, inv, input.Payload)
+		if err != nil {
+			return resultWith(l.snapshot(), StatusWaiting), fmt.Errorf("decode input for %q: %w", inv.ID, err)
 		}
-		decodedInputs = append(decodedInputs, decoded{id: input.InvocationID, value: value})
+		decodedInputs = append(decodedInputs, decoded{inv.ID, value})
 	}
 	for _, input := range decodedInputs {
-		if s.Revision == math.MaxUint64 {
-			return resultWith(s, StatusFailed), fmt.Errorf("apply resume input: %w", ErrExecutionLimit)
+		if l.header.Revision == math.MaxUint64 {
+			return resultWith(l.snapshot(), StatusFailed), ErrExecutionLimit
 		}
-		_, inv := indexedInvocation(&index, &s, input.id)
-		if inv == nil || inv.Status != InvocationWaiting {
-			return resultWith(s, StatusFailed), fmt.Errorf("invocation %q is no longer waiting", input.id)
+		inv, ok := l.invocation(input.id)
+		if !ok || inv.Status != InvocationWaiting {
+			return resultWith(l.snapshot(), StatusFailed), fmt.Errorf("invocation %q is no longer waiting", input.id)
 		}
-		state, cloneErr := r.cloneState(inv.State, inv.ID)
-		if cloneErr != nil {
-			return resultWith(s, StatusFailed), fmt.Errorf("clone waiting state: %w", cloneErr)
+		state, err := r.cloneState(inv.State, inv.ID)
+		if err != nil {
+			return resultWith(l.snapshot(), StatusFailed), fmt.Errorf("clone waiting state: %w", err)
 		}
-		call := CallInfo{RunID: s.RunID, InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Step: s.Steps, BranchIndex: inv.BranchIndex}
-		updated, applyErr := r.limitedApply(ctx, opts.Limiter, obs, s.Revision, call, *inv, state, input.value)
-		if err := ctx.Err(); err != nil {
-			return resultWith(s, StatusCancelled), err
+		call := CallInfo{RunID: l.header.RunID, InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Step: l.header.Steps, BranchIndex: inv.BranchIndex}
+		updated, err := r.limitedApply(ctx, opts.Limiter, obs, l.header.Revision, call, inv, state, input.value)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return resultWith(l.snapshot(), StatusCancelled), cancelled
 		}
-		if isCallbackInterruption(applyErr) {
-			return interruptedResult(ctx, s, applyErr)
+		if isCallbackInterruption(err) {
+			return interruptedResult(ctx, l.snapshot(), err)
 		}
-		candidate := copyCheckpointInto(&spare, s)
-		if applyErr != nil {
-			scope := r.scope(r.nodes[inv.Node].OnError, opts)
-			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, applyErr); failureErr != nil {
-				if candidate.Failure != nil {
-					return r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store, obs)
-				}
-				return resultWith(s, StatusFailed), failureErr
-			}
-		} else {
-			if routeErr := r.route(&candidate, &index, inv.ID, inv.Node, updated, inv.Next); routeErr != nil {
-				return resultWith(s, StatusFailed), routeErr
-			}
+		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.To(updated, inv.Next...), err: err}
+		c, terminalErr, buildErr := r.resultChange(l, out)
+		if buildErr != nil {
+			return resultWith(l.snapshot(), errorStatus(buildErr)), buildErr
 		}
-		if settleErr := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs, nil); settleErr != nil {
-			if isJoinInterruption(settleErr) {
-				return interruptedResult(ctx, s, settleErr)
-			}
-			if candidate.Failure != nil {
-				return r.commitTerminalFailure(ctx, s, candidate, settleErr, opts.Store, obs)
-			}
-			return resultWith(s, errorStatus(settleErr)), settleErr
+		c.Header.Steps = l.header.Steps
+		if err := r.submit(ctx, l, c, opts.Store, obs); err != nil {
+			return resultWith(l.snapshot(), errorStatus(err)), err
 		}
-		markCompleted(&candidate)
-		previous := s
-		committed, commitErr := r.commit(ctx, s, candidate, opts.Store, obs)
-		if commitErr != nil {
-			return resultWith(previous, errorStatus(commitErr)), commitErr
+		if terminalErr != nil {
+			return resultWith(l.snapshot(), StatusFailed), terminalErr
 		}
-		s = committed
-		spare = previous
-		clearCheckpointStateValues(&spare)
 	}
-	if s.Completed {
-		return resultWith(s, statusOf(s, false)), nil
+	if l.header.Completed {
+		return resultWith(l.snapshot(), statusOf(l.header, false)), nil
 	}
-	return r.drive(ctx, s, opts, obs)
+	return r.driveLive(ctx, l, opts, obs)
 }

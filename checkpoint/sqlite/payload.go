@@ -1,14 +1,12 @@
 package sqlite
 
-import graph "github.com/afterlune/luneGraph"
-
 const maxPooledPayloadCapacity = 1 << 20
 
 type payloadBuffer struct {
 	data []byte
 }
 
-func (s *Store[S]) encodePayload(value graph.Checkpoint[S]) (*payloadBuffer, error) {
+func (s *Store[S]) encodePayload(value S) (*payloadBuffer, error) {
 	buffer, ok := s.payloadBuffers.Get().(*payloadBuffer)
 	if !ok {
 		buffer = &payloadBuffer{}

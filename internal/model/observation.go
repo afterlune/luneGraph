@@ -9,17 +9,17 @@ import (
 type EventOperation string
 
 const (
-	OperationStart          EventOperation = "start"
-	OperationResume         EventOperation = "resume"
-	OperationRecover        EventOperation = "recover"
-	OperationNode           EventOperation = "node"
-	OperationJoin           EventOperation = "join"
-	OperationDecode         EventOperation = "decode"
-	OperationApply          EventOperation = "apply"
-	OperationCreate         EventOperation = "create"
-	OperationLoad           EventOperation = "load"
-	OperationCompareAndSwap EventOperation = "compare_and_swap"
-	OperationDelete         EventOperation = "delete"
+	OperationStart   EventOperation = "start"
+	OperationResume  EventOperation = "resume"
+	OperationRecover EventOperation = "recover"
+	OperationNode    EventOperation = "node"
+	OperationJoin    EventOperation = "join"
+	OperationDecode  EventOperation = "decode"
+	OperationApply   EventOperation = "apply"
+	OperationCreate  EventOperation = "create"
+	OperationLoad    EventOperation = "load"
+	OperationCommit  EventOperation = "commit"
+	OperationDelete  EventOperation = "delete"
 )
 
 // EventPhase identifies the beginning or end of an operation.

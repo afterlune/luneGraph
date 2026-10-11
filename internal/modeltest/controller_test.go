@@ -166,7 +166,7 @@ func (c *controller) confirmedCalls() (nodes, applies int) {
 		switch request.role {
 		case "node":
 			nodes++
-		case "apply":
+		case "apply", "join":
 			applies++
 		}
 	}

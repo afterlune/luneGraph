@@ -15,11 +15,11 @@ type rejectNextCASStore struct {
 	reject atomic.Bool
 }
 
-func (s *rejectNextCASStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[int]) error {
+func (s *rejectNextCASStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
 	if s.reject.CompareAndSwap(true, false) {
 		return graph.ErrConflict
 	}
-	return s.Store.CompareAndSwap(ctx, expected, next)
+	return s.Store.Commit(ctx, expected, change)
 }
 
 func TestLoopAllocatesDistinctCallIDs(t *testing.T) {
@@ -154,10 +154,10 @@ func TestJoinCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		t.Fatalf("join call was not persisted: checkpoint=%+v merge=%+v", first.Checkpoint.Groups[0], mergeCalls[0])
 	}
 	out, err := runner.Recover(context.Background(), "join-replay", nil, graph.Options[int]{Store: store, MaxConcurrency: 1})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 3 || len(mergeCalls) != 2 || len(rightCalls) != 2 {
+	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 3 || len(mergeCalls) != 2 || len(rightCalls) != 1 {
 		t.Fatalf("recovered join = %+v, merges=%+v, right calls=%+v, err=%v", out, mergeCalls, rightCalls, err)
 	}
-	if mergeCalls[0] != mergeCalls[1] || rightCalls[0] != rightCalls[1] {
+	if mergeCalls[0] != mergeCalls[1] {
 		t.Fatalf("replayed callback identity changed: merges=%+v right=%+v", mergeCalls, rightCalls)
 	}
 }

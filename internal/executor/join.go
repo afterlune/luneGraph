@@ -1,86 +1,106 @@
 package executor
 
 import (
-	"context"
 	"fmt"
-
-	"github.com/afterlune/luneGraph/internal/limit"
-	"github.com/afterlune/luneGraph/internal/observation"
 )
 
-func (r *Runner[S]) settleGroups(ctx context.Context, s *Checkpoint[S], invIndex *invocationIndex, progress *groupProgress, override *FailureScope, limiter *limit.Limiter, obs *observation.Session, cancelPruned func(Checkpoint[S])) error {
-	if len(s.Groups) == 0 {
-		return nil
+// resultChange builds an isolated candidate containing only touched topology.
+func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], error, error) {
+	id := out.ref.id
+	scope := FailInvocation
+	node := ""
+	if out.ref.join {
+		g := l.groups[id]
+		id = g.ParentID
+		node = g.JoinNode
+		if node != "" {
+			scope = r.joins[node].OnError
+		}
+	} else {
+		inv, _ := l.invocation(id)
+		node = inv.Node
+		scope = r.nodes[node].OnError
 	}
-	for {
-		index := readyGroup(s, invIndex, progress)
-		if index < 0 {
-			return nil
+	// Caller applies its per-invocation override before invoking this method.
+	if l.failureOverride != nil {
+		scope = *l.failureOverride
+	}
+	before := l.candidate(id, out.err != nil && scope == FailGroup)
+	if out.ref.join {
+		g := l.groups[out.ref.id]
+		seenI := make(map[string]bool)
+		seenG := make(map[string]bool)
+		for _, v := range before.Invocations {
+			seenI[v.ID] = true
 		}
-		group := s.Groups[index]
-		_, parent := indexedInvocation(invIndex, s, group.ParentID)
-		if parent == nil {
-			return fmt.Errorf("group %q has missing parent", group.ID)
+		for _, v := range before.Groups {
+			seenG[v.ID] = true
 		}
-		var merged S
-		var mergeErr error
-		if group.JoinNode != "" {
-			values := make([]S, 0, len(group.Children))
-			for _, childID := range group.Children {
-				_, child := indexedInvocation(invIndex, s, childID)
-				if child.Status == InvocationJoined {
-					value, err := r.cloneState(child.State, childID)
-					if err != nil {
-						return fmt.Errorf("clone join input: %w", err)
-					}
-					values = append(values, value)
-				}
-			}
-			call := CallInfo{RunID: s.RunID, InvocationID: parent.ID, CallID: group.CallID, Node: group.JoinNode, Step: s.Steps, BranchIndex: parent.BranchIndex}
-			merged, mergeErr = r.limitedMerge(ctx, limiter, obs, s.Revision, call, r.joins[group.JoinNode], values)
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if isCallbackInterruption(mergeErr) {
-				return &joinInterruption{mergeErr}
+		if !seenG[g.ID] {
+			before.Groups = append(before.Groups, g)
+		}
+		for _, child := range g.Children {
+			if !seenI[child] {
+				inv, _ := l.invocation(child)
+				before.Invocations = append(before.Invocations, inv)
 			}
 		}
-		children := make(map[string]bool, len(group.Children))
-		for _, childID := range group.Children {
-			children[childID] = true
+	}
+	l.beforeInv, l.beforeGroups = before.Invocations, before.Groups
+	after := before
+	clear(l.afterInv)
+	clear(l.afterGroups)
+	after.Invocations = append(l.afterInv[:0], before.Invocations...)
+	after.Groups = append(l.afterGroups[:0], before.Groups...)
+	index := newInvocationIndex(after)
+	var terminalErr error
+	if out.ref.join {
+		g := l.groups[out.ref.id]
+		remove := make(map[string]bool, len(g.Children))
+		for _, child := range g.Children {
+			remove[child] = true
 		}
-		removeInvocations(invIndex, s, children)
-		copy(s.Groups[index:], s.Groups[index+1:])
-		s.Groups[len(s.Groups)-1] = ActivationGroup{}
-		s.Groups = s.Groups[:len(s.Groups)-1]
-		_, parent = indexedInvocation(invIndex, s, group.ParentID)
+		removeInvocations(&index, &after, remove)
+		kept := after.Groups[:0]
+		for _, group := range after.Groups {
+			if group.ID != g.ID {
+				kept = append(kept, group)
+			}
+		}
+		clear(after.Groups[len(kept):])
+		after.Groups = kept
+		_, parent := indexedInvocation(&index, &after, id)
 		parent.ChildGroupID = ""
-		if mergeErr != nil {
-			scope := r.joins[group.JoinNode].OnError
-			if override != nil {
-				scope = *override
-			}
-			if err := r.recordFailure(s, invIndex, parent.ID, group.JoinNode, scope, mergeErr); err != nil {
-				return err
-			}
-			if scope == FailGroup && cancelPruned != nil {
-				cancelPruned(*s)
-			}
-			continue
-		}
-		if group.JoinNode == "" {
+		if out.err != nil {
+			terminalErr = r.recordFailure(&after, &index, id, node, scope, out.err)
+		} else if g.JoinNode == "" {
 			parent.Status = InvocationEnded
-			continue
+			parent.CallID = ""
+		} else {
+			parent.State = out.state
+			next := ""
+			for target := range r.edges[g.JoinNode] {
+				next = target
+			}
+			if next == "" {
+				parent.Status = InvocationEnded
+				parent.CallID = ""
+			} else if err := r.setTarget(&after, parent, next); err != nil {
+				return Change[S]{}, nil, &TransitionError{InvocationID: id, Node: node, Cause: err}
+			}
 		}
-		parent.State = merged
-		var next string
-		for target := range r.edges[group.JoinNode] {
-			next = target
-		}
-		if next == "" {
-			parent.Status = InvocationEnded
-		} else if err := r.setTarget(s, parent, next); err != nil {
-			return &TransitionError{InvocationID: parent.ID, Node: group.JoinNode, Cause: err}
+	} else {
+		after.Steps++
+		if out.err != nil {
+			terminalErr = r.recordFailure(&after, &index, id, node, scope, out.err)
+		} else if _, err := r.applyTransition(&after, &index, id, out.transition); err != nil {
+			return Change[S]{}, nil, err
 		}
 	}
+	if terminalErr != nil && after.Failure == nil {
+		return Change[S]{}, nil, fmt.Errorf("record failure: %w", terminalErr)
+	}
+	l.afterInv = after.Invocations
+	l.afterGroups = after.Groups
+	return l.localChange(before, after), terminalErr, nil
 }

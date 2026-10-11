@@ -29,7 +29,8 @@ func (m *mockStore) Load(_ context.Context, runID string) (model.Checkpoint[int]
 	return m.loaded, nil
 }
 
-func (m *mockStore) CompareAndSwap(_ context.Context, expected uint64, cp model.Checkpoint[int]) error {
+func (m *mockStore) Commit(_ context.Context, expected uint64, change model.Change[int]) error {
+	cp := change.Checkpoint()
 	m.casRev = expected
 	m.casCp = cp
 	return nil
@@ -91,7 +92,7 @@ func TestObservedStore(t *testing.T) {
 
 	// 3. CompareAndSwap
 	casCp := model.Checkpoint[int]{RunID: "run-1", Revision: 6}
-	if err := wrapped.CompareAndSwap(ctx, 5, casCp); err != nil {
+	if err := wrapped.Commit(ctx, 5, (casCp).Change()); err != nil {
 		t.Fatal(err)
 	}
 	if raw.casRev != 5 || raw.casCp.Revision != 6 {

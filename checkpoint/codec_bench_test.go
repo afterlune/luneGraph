@@ -47,7 +47,7 @@ func BenchmarkJSONCheckpointEncoding(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	codec := checkpoint.JSON[codecBenchmarkState]{}
+	codec := checkpoint.JSON[graph.Checkpoint[codecBenchmarkState]]{}
 
 	b.Run("Marshal", func(b *testing.B) {
 		b.ReportAllocs()

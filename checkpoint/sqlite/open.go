@@ -24,22 +24,18 @@ import (
 // ErrSchemaVersion reports an unsupported SQLite checkpoint schema.
 var ErrSchemaVersion = errors.New("unsupported checkpoint database schema")
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Store is a concurrent-safe, persistent implementation of graph.Store.
 type Store[S any] struct {
 	db             *sql.DB
-	codec          checkpoint.Codec[S]
+	codec          checkpoint.StateCodec[S]
 	payloadBuffers sync.Pool
-	stmtCreate     *sql.Stmt
-	stmtLoad       *sql.Stmt
-	stmtCAS        *sql.Stmt
-	stmtDelete     *sql.Stmt
 }
 
 // Open opens or creates a local SQLite database. Its parent directory must
 // already exist. Close the returned Store when it is no longer needed.
-func Open[S any](ctx context.Context, dbPath string, codec checkpoint.Codec[S]) (*Store[S], error) {
+func Open[S any](ctx context.Context, dbPath string, codec checkpoint.StateCodec[S]) (*Store[S], error) {
 	if ctx == nil {
 		return nil, errors.New("context must not be nil")
 	}
@@ -70,8 +66,10 @@ func Open[S any](ctx context.Context, dbPath string, codec checkpoint.Codec[S]) 
 	u := url.URL{Scheme: "file", Path: path}
 	params := url.Values{}
 	params.Set("_busy_timeout", "5000")
+	params.Set("_txlock", "immediate")
 	params.Set("_journal_mode", "WAL")
 	params.Set("_synchronous", "FULL")
+	params.Set("_foreign_keys", "ON")
 	u.RawQuery = params.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
@@ -82,40 +80,7 @@ func Open[S any](ctx context.Context, dbPath string, codec checkpoint.Codec[S]) 
 		db.Close()
 		return nil, err
 	}
-	stmtCreate, err := db.PrepareContext(ctx, "INSERT INTO checkpoints (run_id, machine_id, revision, payload) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING")
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("prepare create statement: %w", err)
-	}
-	stmtLoad, err := db.PrepareContext(ctx, "SELECT machine_id, revision, payload FROM checkpoints WHERE run_id = ?")
-	if err != nil {
-		stmtCreate.Close()
-		db.Close()
-		return nil, fmt.Errorf("prepare load statement: %w", err)
-	}
-	stmtCAS, err := db.PrepareContext(ctx, "UPDATE checkpoints SET revision = ?, payload = ? WHERE run_id = ? AND machine_id = ? AND revision = ?")
-	if err != nil {
-		stmtCreate.Close()
-		stmtLoad.Close()
-		db.Close()
-		return nil, fmt.Errorf("prepare cas statement: %w", err)
-	}
-	stmtDelete, err := db.PrepareContext(ctx, "DELETE FROM checkpoints WHERE run_id = ?")
-	if err != nil {
-		stmtCreate.Close()
-		stmtLoad.Close()
-		stmtCAS.Close()
-		db.Close()
-		return nil, fmt.Errorf("prepare delete statement: %w", err)
-	}
-	return &Store[S]{
-		db:         db,
-		codec:      codec,
-		stmtCreate: stmtCreate,
-		stmtLoad:   stmtLoad,
-		stmtCAS:    stmtCAS,
-		stmtDelete: stmtDelete,
-	}, nil
+	return &Store[S]{db: db, codec: codec}, nil
 }
 
 // SQLite's busy timeout does not cover every lock encountered while two
@@ -151,7 +116,7 @@ func openAndInitialize(ctx context.Context, db *sql.DB) error {
 	}
 }
 
-func nilCodec[S any](codec checkpoint.Codec[S]) bool {
+func nilCodec[S any](codec checkpoint.StateCodec[S]) bool {
 	value := reflect.ValueOf(codec)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -162,58 +127,117 @@ func nilCodec[S any](codec checkpoint.Codec[S]) bool {
 }
 
 func initialize(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		return err
+	}
 	var version int
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("read checkpoint schema version: %w", err)
+		return err
 	}
 	if version != 0 && version != schemaVersion {
 		return fmt.Errorf("%w: version %d", ErrSchemaVersion, version)
 	}
-	if version == schemaVersion {
-		return checkSchema(ctx, db)
+	if version == 0 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, query := range []string{
+			`CREATE TABLE IF NOT EXISTS checkpoints (run_id TEXT PRIMARY KEY,machine_id TEXT NOT NULL,revision TEXT NOT NULL,payload BLOB NOT NULL,final BLOB) WITHOUT ROWID`,
+			`CREATE TABLE IF NOT EXISTS invocations (run_id TEXT NOT NULL,id TEXT NOT NULL,metadata BLOB NOT NULL,state BLOB NOT NULL,PRIMARY KEY(run_id,id),FOREIGN KEY(run_id) REFERENCES checkpoints(run_id) ON DELETE CASCADE) WITHOUT ROWID`,
+			`CREATE TABLE IF NOT EXISTS groups (run_id TEXT NOT NULL,id TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(run_id,id),FOREIGN KEY(run_id) REFERENCES checkpoints(run_id) ON DELETE CASCADE) WITHOUT ROWID`,
+		} {
+			if _, err := tx.ExecContext(ctx, query); err != nil {
+				return err
+			}
+		}
+		if err := checkSchemaTx(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
-	const schema = `CREATE TABLE IF NOT EXISTS checkpoints (
-		run_id TEXT PRIMARY KEY,
-		machine_id TEXT NOT NULL,
-		revision TEXT NOT NULL,
-		payload BLOB NOT NULL
-	) WITHOUT ROWID`
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("create checkpoint schema: %w", err)
-	}
-	if err := checkSchema(ctx, db); err != nil {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
-		return fmt.Errorf("record checkpoint schema version: %w", err)
+	defer tx.Rollback()
+	return checkSchemaTx(ctx, tx)
+}
+func checkSchemaTx(ctx context.Context, tx *sql.Tx) error {
+	expected := map[string][]string{"checkpoints": {"run_id:TEXT", "machine_id:TEXT", "revision:TEXT", "payload:BLOB", "final:BLOB"}, "invocations": {"run_id:TEXT", "id:TEXT", "metadata:BLOB", "state:BLOB"}, "groups": {"run_id:TEXT", "id:TEXT", "payload:BLOB"}}
+	for table, columns := range expected {
+		rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+		if err != nil {
+			return err
+		}
+		index := 0
+		for rows.Next() {
+			var cid, notNull, primary int
+			var name, kind string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primary); err != nil {
+				rows.Close()
+				return err
+			}
+			wantPK := 0
+			if index == 0 {
+				wantPK = 1
+			} else if table != "checkpoints" && index == 1 {
+				wantPK = 2
+			}
+			wantNull := 1
+			if table == "checkpoints" && index == 4 {
+				wantNull = 0
+			}
+			if index >= len(columns) || columns[index] != name+":"+strings.ToUpper(kind) || cid != index || primary != wantPK || notNull != wantNull || defaultValue.Valid {
+				rows.Close()
+				return ErrSchemaVersion
+			}
+			index++
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if index != len(columns) {
+			return ErrSchemaVersion
+		}
+		if table != "checkpoints" {
+			if err := checkForeignKey(ctx, tx, table); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-func checkSchema(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, "PRAGMA table_info(checkpoints)")
+func checkForeignKey(ctx context.Context, tx *sql.Tx, table string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_list("+table+")")
 	if err != nil {
-		return fmt.Errorf("inspect checkpoint schema: %w", err)
+		return err
 	}
 	defer rows.Close()
-	expected := []struct{ name, kind string }{{"run_id", "TEXT"}, {"machine_id", "TEXT"}, {"revision", "TEXT"}, {"payload", "BLOB"}}
-	index := 0
+	count := 0
 	for rows.Next() {
-		var cid, notNull, primary int
-		var name, kind string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primary); err != nil {
-			return fmt.Errorf("inspect checkpoint schema: %w", err)
+		var id, sequence int
+		var target, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &sequence, &target, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			return err
 		}
-		if index >= len(expected) || cid != index || name != expected[index].name || !strings.EqualFold(kind, expected[index].kind) || notNull != 1 || defaultValue.Valid || (index == 0 && primary != 1) || (index != 0 && primary != 0) {
+		if sequence != 0 || target != "checkpoints" || from != "run_id" || to != "run_id" || onUpdate != "NO ACTION" || onDelete != "CASCADE" || match != "NONE" {
 			return ErrSchemaVersion
 		}
-		index++
+		count++
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("inspect checkpoint schema: %w", err)
+		return err
 	}
-	if index != len(expected) {
+	if count != 1 {
 		return ErrSchemaVersion
 	}
 	return nil
@@ -224,26 +248,8 @@ func (s *Store[S]) Close() error {
 	if s == nil || s.db == nil {
 		return errors.New("store is nil")
 	}
-	var err error
-	if s.stmtCreate != nil {
-		err = errors.Join(err, s.stmtCreate.Close())
-		s.stmtCreate = nil
-	}
-	if s.stmtLoad != nil {
-		err = errors.Join(err, s.stmtLoad.Close())
-		s.stmtLoad = nil
-	}
-	if s.stmtCAS != nil {
-		err = errors.Join(err, s.stmtCAS.Close())
-		s.stmtCAS = nil
-	}
-	if s.stmtDelete != nil {
-		err = errors.Join(err, s.stmtDelete.Close())
-		s.stmtDelete = nil
-	}
-	db := s.db
-	s.db = nil
-	return errors.Join(err, db.Close())
+	// Callers must drain users before closing. database/sql owns close coordination.
+	return s.db.Close()
 }
 
 var _ graph.Store[int] = (*Store[int])(nil)

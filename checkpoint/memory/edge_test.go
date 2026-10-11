@@ -32,7 +32,7 @@ func TestStoreRejectsNilAndCanceledContextsAndNilReceiver(t *testing.T) {
 	if _, err := nilStore.Load(context.Background(), "run"); err == nil {
 		t.Fatal("nil store Load succeeded")
 	}
-	if err := nilStore.CompareAndSwap(context.Background(), 1, next); err == nil {
+	if err := nilStore.Commit(context.Background(), 1, (next).Change()); err == nil {
 		t.Fatal("nil store CompareAndSwap succeeded")
 	}
 
@@ -43,7 +43,7 @@ func TestStoreRejectsNilAndCanceledContextsAndNilReceiver(t *testing.T) {
 	if _, err := store.Load(nilContext, "run"); err == nil {
 		t.Fatal("Load accepted a nil context")
 	}
-	if err := store.CompareAndSwap(nilContext, 1, next); err == nil {
+	if err := store.Commit(nilContext, 1, (next).Change()); err == nil {
 		t.Fatal("CompareAndSwap accepted a nil context")
 	}
 
@@ -55,7 +55,7 @@ func TestStoreRejectsNilAndCanceledContextsAndNilReceiver(t *testing.T) {
 	if _, err := store.Load(ctx, "run"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Load = %v", err)
 	}
-	if err := store.CompareAndSwap(ctx, 1, next); !errors.Is(err, context.Canceled) {
+	if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled CompareAndSwap = %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestCloneFailuresDoNotWriteOrOverwrite(t *testing.T) {
 		t.Fatalf("failed Load clone = %v", err)
 	}
 	next := stateCheckpoint("run", 2, 2)
-	if err := store.CompareAndSwap(ctx, 1, next); !errors.Is(err, boom) {
+	if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, boom) {
 		t.Fatalf("failed CAS clone = %v", err)
 	}
 	fail = false
@@ -130,7 +130,7 @@ func TestCancellationDuringClonePreventsCreateAndCAS(t *testing.T) {
 	casCtx, cancelCAS := context.WithCancel(context.Background())
 	cancelOnClone = cancelCAS
 	cancelClone = true
-	if err := store.CompareAndSwap(casCtx, 1, stateCheckpoint("cas", 2, 2)); !errors.Is(err, context.Canceled) {
+	if err := store.Commit(casCtx, 1, (stateCheckpoint("cas", 2, 2)).Change()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CAS canceled during clone = %v", err)
 	}
 	stored, err := store.Load(context.Background(), "cas")

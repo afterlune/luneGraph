@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"runtime"
 
 	"github.com/afterlune/luneGraph/internal/limit"
@@ -67,20 +66,6 @@ func statusOf[S any](s Checkpoint[S], exhausted bool) Status {
 	return StatusWaiting
 }
 
-func markCompleted[S any](s *Checkpoint[S]) {
-	if len(s.Groups) != 0 {
-		return
-	}
-	for _, inv := range s.Invocations {
-		if inv.Status == InvocationReady || inv.Status == InvocationWaiting || inv.Status == InvocationGroup {
-			return
-		}
-	}
-	s.Completed = true
-	s.Invocations = nil
-	s.Groups = nil
-}
-
 func invocationNumber(id string) uint64 {
 	if len(id) <= 1 || id[0] != 'i' {
 		return 0
@@ -94,31 +79,6 @@ func invocationNumber(id string) uint64 {
 		n = n*10 + uint64(c-'0')
 	}
 	return n
-}
-
-func (r *Runner[S]) commit(ctx context.Context, before, after Checkpoint[S], store Store[S], obs *observation.Session) (Checkpoint[S], error) {
-	if err := ctx.Err(); err != nil {
-		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
-		return before, err
-	}
-	if before.Revision == math.MaxUint64 {
-		err := fmt.Errorf("commit revision: %w", ErrExecutionLimit)
-		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
-		return before, err
-	}
-	after.Revision = before.Revision + 1
-	if store != nil {
-		if err := store.CompareAndSwap(ctx, before.Revision, after); err != nil {
-			outcome := model.OutcomeUnknown
-			if errors.Is(err, ErrConflict) {
-				outcome = model.OutcomeDiscarded
-			}
-			obs.ResolveSelected(ctx, outcome, after.Revision, err)
-			return before, err
-		}
-	}
-	obs.ResolveSelected(ctx, model.OutcomeCommitted, after.Revision, nil)
-	return after, nil
 }
 
 // Start creates a new execution and runs until completion, waiting, or budget exhaustion.

@@ -20,12 +20,6 @@ func TestCallbackInterruptionClassification(t *testing.T) {
 			t.Fatalf("%v classified %v", tc.err, got)
 		}
 	}
-	if isJoinInterruption(marker) || !isJoinInterruption(fmt.Errorf("wrapped: %w", &joinInterruption{marker})) {
-		t.Fatal("join source classification failed")
-	}
-	if !errors.Is(&joinInterruption{marker}, marker) {
-		t.Fatal("join cause lost")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result, err := interruptedResult(ctx, Checkpoint[int]{Revision: 7}, marker)

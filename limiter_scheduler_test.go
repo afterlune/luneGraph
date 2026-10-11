@@ -74,7 +74,7 @@ func TestLimiterWaitingJoinCancellationDoesNotFailExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := r.Start(ctx, "join", 1, graph.Options[int]{Limiter: l, MaxConcurrency: 1})
-	if !errors.Is(err, context.Canceled) || out.Status != graph.StatusCancelled || merged.Load() || out.Checkpoint.Completed || out.Checkpoint.Failure != nil || out.Checkpoint.Revision != 3 || out.Checkpoint.Steps != 2 {
+	if !errors.Is(err, context.Canceled) || out.Status != graph.StatusCancelled || merged.Load() || out.Checkpoint.Completed || out.Checkpoint.Failure != nil || out.Checkpoint.Revision != 4 || out.Checkpoint.Steps != 3 {
 		t.Fatalf("join=%+v %v merged=%v clones=%d", out, err, merged.Load(), clones)
 	}
 	release()

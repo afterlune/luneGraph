@@ -200,7 +200,7 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 					if err != nil || done.Status != graph.StatusCompleted || *done.Checkpoint.Final != want || len(outerCalls) != 2 || outerCalls[0] != outerCalls[1] || lastTrigger != triggerCalls[len(triggerCalls)-1] {
 						t.Fatalf("done=%+v triggers=%+v outer=%+v %v", done, triggerCalls, outerCalls, err)
 					}
-					if nested && (len(innerCalls) != 2 || innerCalls[0] != innerCalls[1]) {
+					if nested && len(innerCalls) != 1 {
 						t.Fatalf("inner identity=%+v", innerCalls)
 					}
 				})

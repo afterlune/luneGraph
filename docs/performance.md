@@ -1,5 +1,8 @@
 # Performance, concurrency, and reliability baseline
 
+> Format-4 execution changes are documented in [core-changes.md](core-changes.md).
+> Historical format-2/3 measurements below do not describe current join commit boundaries or Store interfaces.
+
 The project uses three engineering standards:
 
 - **High performance:** keep repeatable benchmarks for graph scheduling and checkpoint persistence. Compare results on the same Go version and machine before and after runtime changes.

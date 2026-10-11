@@ -1,8 +1,11 @@
 # Capacity and sustained execution baseline
 
-Capacity is a measured property of a workload, Store, and machine. This suite
-supports the goal of serving as a generic graph substrate for a large Agent OS;
-it does not introduce agent concepts or claim a production capacity limit.
+> Format-4 execution changes are documented in [core-changes.md](core-changes.md).
+> Historical format-2/3 measurements below do not describe current join commit boundaries or Store interfaces.
+
+Capacity depends on a workload, Store, and machine. These fixtures measure the
+graph runtime through its public API; they do not set a portable production
+capacity target.
 
 All fixtures live in `internal/capacitytest`, separated into state, graph,
 Store, worker, benchmark, isolation, lifecycle, and measurement files. They use
@@ -800,7 +803,7 @@ Priorities supported by this baseline:
 
 The samples establish exercised sizes, recovery costs, and optimization inputs.
 They do not establish a maximum number of executions, a distributed scheduler,
-a run lease, or an Agent OS production readiness claim.
+or a distributed run lease.
 
 ## Scheduling optimization sample (format 2)
 

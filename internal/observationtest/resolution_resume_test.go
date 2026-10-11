@@ -8,7 +8,7 @@ import (
 	graph "github.com/afterlune/luneGraph"
 )
 
-func TestResolvedNestedJoinInterruptionDiscardsWholeCandidate(t *testing.T) {
+func TestResolvedNestedJoinInterruptionPreservesCommittedInnerJoin(t *testing.T) {
 	g := graph.New[int]("outer")
 	node(t, g, "outer", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
 		return graph.To(s, "inner", "sibling"), nil
@@ -45,7 +45,7 @@ func TestResolvedNestedJoinInterruptionDiscardsWholeCandidate(t *testing.T) {
 	r, log := compile(t, g), &recorder{}
 	opts := graph.Options[int]{Observer: log, MaxConcurrency: 1, Store: memoryStore(t)}
 	first, err := r.Start(context.Background(), "nested", 1, opts)
-	if !errors.Is(err, graph.ErrInterrupted) || len(first.Checkpoint.Groups) != 2 {
+	if !errors.Is(err, graph.ErrInterrupted) || len(first.Checkpoint.Groups) != 1 {
 		t.Fatalf("interruption=%+v %v", first, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationStart, first, err)
@@ -55,7 +55,11 @@ func TestResolvedNestedJoinInterruptionDiscardsWholeCandidate(t *testing.T) {
 	}
 	ids := map[string]string{}
 	for _, e := range joins {
-		if e.Outcome != graph.OutcomeDiscarded || e.Revision != first.Checkpoint.Revision {
+		want := graph.OutcomeDiscarded
+		if e.Node == "innerjoin" {
+			want = graph.OutcomeCommitted
+		}
+		if e.Outcome != want || e.Revision != first.Checkpoint.Revision {
 			t.Fatalf("nested resolution=%+v", e)
 		}
 		ids[e.Node] = e.CallID
@@ -67,7 +71,7 @@ func TestResolvedNestedJoinInterruptionDiscardsWholeCandidate(t *testing.T) {
 	}
 	checkCall(t, log.snapshot()[before:], graph.OperationRecover, last, err)
 	joins = resolved(log.snapshot()[before:], graph.OperationJoin)
-	if len(joins) != 2 {
+	if len(joins) != 1 {
 		t.Fatalf("replayed joins=%+v", joins)
 	}
 	for _, e := range joins {

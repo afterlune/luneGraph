@@ -12,6 +12,8 @@ import (
 )
 
 type (
+	Header            = model.Header
+	Change[S any]     = model.Change[S]
 	Limiter           = limit.Limiter
 	Event             = model.Event
 	EventOperation    = model.EventOperation
@@ -46,23 +48,23 @@ type (
 )
 
 const (
-	OperationStart          = model.OperationStart
-	OperationResume         = model.OperationResume
-	OperationRecover        = model.OperationRecover
-	OperationNode           = model.OperationNode
-	OperationJoin           = model.OperationJoin
-	OperationDecode         = model.OperationDecode
-	OperationApply          = model.OperationApply
-	OperationCreate         = model.OperationCreate
-	OperationLoad           = model.OperationLoad
-	OperationCompareAndSwap = model.OperationCompareAndSwap
-	OperationDelete         = model.OperationDelete
-	PhaseStarted            = model.PhaseStarted
-	PhaseFinished           = model.PhaseFinished
-	PhaseResolved           = model.PhaseResolved
-	OutcomeCommitted        = model.OutcomeCommitted
-	OutcomeDiscarded        = model.OutcomeDiscarded
-	OutcomeUnknown          = model.OutcomeUnknown
+	OperationStart   = model.OperationStart
+	OperationResume  = model.OperationResume
+	OperationRecover = model.OperationRecover
+	OperationNode    = model.OperationNode
+	OperationJoin    = model.OperationJoin
+	OperationDecode  = model.OperationDecode
+	OperationApply   = model.OperationApply
+	OperationCreate  = model.OperationCreate
+	OperationLoad    = model.OperationLoad
+	OperationCommit  = model.OperationCommit
+	OperationDelete  = model.OperationDelete
+	PhaseStarted     = model.PhaseStarted
+	PhaseFinished    = model.PhaseFinished
+	PhaseResolved    = model.PhaseResolved
+	OutcomeCommitted = model.OutcomeCommitted
+	OutcomeDiscarded = model.OutcomeDiscarded
+	OutcomeUnknown   = model.OutcomeUnknown
 
 	ActionContinue     = model.ActionContinue
 	ActionWait         = model.ActionWait
@@ -128,7 +130,8 @@ func ValueClone[S any](state S) (S, error) {
 }
 
 // JSONClone returns a Clone function that deep-copies state via JSON encoding and decoding.
-// Provides an immediate deep-copy implementation for complex structs without writing manual copy logic.
+// State must survive a JSON round trip. Unexported and json:"-" fields are lost;
+// interface values may change concrete types. Prefer a manual Clone for hot paths.
 func JSONClone[S any](state S) (S, error) {
 	data, err := json.Marshal(state)
 	if err != nil {

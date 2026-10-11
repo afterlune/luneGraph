@@ -16,7 +16,8 @@ type conflictStore struct {
 	once sync.Once
 }
 
-func (s *conflictStore) CompareAndSwap(ctx context.Context, revision uint64, next graph.Checkpoint[state]) error {
+func (s *conflictStore) Commit(ctx context.Context, revision uint64, change graph.Change[state]) error {
+	next := change.Checkpoint()
 	conflict := false
 	if next.RunID == "conflict" {
 		s.once.Do(func() { conflict = true })
@@ -24,7 +25,7 @@ func (s *conflictStore) CompareAndSwap(ctx context.Context, revision uint64, nex
 	if conflict {
 		return graph.ErrConflict
 	}
-	return s.Store.CompareAndSwap(ctx, revision, next)
+	return s.Store.Commit(ctx, revision, change)
 }
 
 func TestSharedExecutionFailureIsolation(t *testing.T) {

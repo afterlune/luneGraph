@@ -84,7 +84,7 @@ func checkHistory(cp graph.Checkpoint[state], mode string, round int) error {
 		return err
 	}
 	inputs := (round - 1) / 4
-	if s.Owner != cp.RunID || s.Round != round || s.Total != round || s.Values["sum"] != round || s.Values["branch"] != -1 || s.Values["inputs"] != inputs || cp.Completed || cp.Final != nil || len(cp.Invocations) != 1 || len(cp.Groups) != 0 || cp.Failure != nil || cp.HadLocalFailures != (mode != "terminal") || cp.Steps != uint64(round*historyStepsPerRound) || cp.Revision != cp.Steps+1+uint64(inputs) {
+	if s.Owner != cp.RunID || s.Round != round || s.Total != round || s.Values["sum"] != round || s.Values["branch"] != -1 || s.Values["inputs"] != inputs || cp.Completed || cp.Final != nil || len(cp.Invocations) != 1 || len(cp.Groups) != 0 || cp.Failure != nil || cp.HadLocalFailures != (mode != "terminal") || cp.Steps != uint64(round*historyStepsPerRound) || cp.Revision != cp.Steps+1+uint64(inputs)+uint64(round) {
 		return fmt.Errorf("invalid history boundary: round=%d state=%+v revision=%d steps=%d topology=%d/%d", round, s, cp.Revision, cp.Steps, len(cp.Invocations), len(cp.Groups))
 	}
 	wantStatus := graph.InvocationReady

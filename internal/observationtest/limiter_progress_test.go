@@ -16,7 +16,8 @@ type gatedCommitStore struct {
 	write func(context.Context, uint64, graph.Checkpoint[int]) error
 }
 
-func (s gatedCommitStore) CompareAndSwap(ctx context.Context, before uint64, cp graph.Checkpoint[int]) error {
+func (s gatedCommitStore) Commit(ctx context.Context, before uint64, change graph.Change[int]) error {
+	cp := change.Checkpoint()
 	return s.write(ctx, before, cp)
 }
 
@@ -94,7 +95,7 @@ func TestLimiterProcessesReturnedResultsWhileBudgetExhausted(t *testing.T) {
 				held.Add(1)
 			}
 		}
-		if err := memory.CompareAndSwap(ctx, before, cp); err != nil {
+		if err := memory.Commit(ctx, before, (cp).Change()); err != nil {
 			return err
 		}
 		for _, inv := range cp.Invocations {

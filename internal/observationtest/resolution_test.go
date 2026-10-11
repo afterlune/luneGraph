@@ -134,7 +134,7 @@ func TestResolvedJoinBatch(t *testing.T) {
 			for _, name := range []string{"a", "b"} {
 				edge(t, g, name, "join")
 			}
-			store := &faultStore{Store: memoryStore(t), revision: 4}
+			store := &faultStore{Store: memoryStore(t), revision: 5}
 			if mode == "conflict" {
 				store.fault = graph.ErrConflict
 			} else if mode == "unknown" {
@@ -150,15 +150,15 @@ func TestResolvedJoinBatch(t *testing.T) {
 			if len(joins) != 1 || len(nodes) != 3 {
 				t.Fatalf("events=%+v", log.snapshot())
 			}
-			want, rev := graph.OutcomeCommitted, uint64(4)
+			want, rev := graph.OutcomeCommitted, uint64(5)
 			if mode == "interrupt" {
-				want, rev = graph.OutcomeDiscarded, 3
+				want, rev = graph.OutcomeDiscarded, 4
 			} else if mode == "conflict" {
 				want = graph.OutcomeDiscarded
 			} else if mode == "unknown" {
 				want = graph.OutcomeUnknown
 			}
-			if joins[0].Outcome != want || joins[0].Revision != rev || nodes[2].Outcome != want || nodes[2].Revision != rev || nodes[0].Outcome != graph.OutcomeCommitted || nodes[1].Outcome != graph.OutcomeCommitted {
+			if joins[0].Outcome != want || joins[0].Revision != rev || nodes[2].Outcome != graph.OutcomeCommitted || nodes[2].Revision != 4 || nodes[0].Outcome != graph.OutcomeCommitted || nodes[1].Outcome != graph.OutcomeCommitted {
 				t.Fatalf("nodes=%+v joins=%+v", nodes, joins)
 			}
 		})

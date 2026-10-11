@@ -63,7 +63,7 @@ func TestInterruptionDrainsWorkersBeforePublicFinish(t *testing.T) {
 		t.Fatalf("public finish=%+v", events[len(events)-1])
 	}
 	saved, loadErr := store.Load(ctx, "interruption")
-	if loadErr != nil || saved.Revision != 2 || len(finished(events, graph.OperationCompareAndSwap)) != 1 {
+	if loadErr != nil || saved.Revision != 2 || len(finished(events, graph.OperationCommit)) != 1 {
 		t.Fatalf("saved=%+v %v", saved, loadErr)
 	}
 }

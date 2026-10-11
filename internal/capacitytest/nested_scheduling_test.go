@@ -16,7 +16,7 @@ type revisionConflictStore struct {
 	once     sync.Once
 }
 
-func (s *revisionConflictStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[state]) error {
+func (s *revisionConflictStore) Commit(ctx context.Context, expected uint64, change graph.Change[state]) error {
 	conflict := false
 	if expected == s.revision {
 		s.once.Do(func() { conflict = true })
@@ -24,7 +24,7 @@ func (s *revisionConflictStore) CompareAndSwap(ctx context.Context, expected uin
 	if conflict {
 		return graph.ErrConflict
 	}
-	return s.Store.CompareAndSwap(ctx, expected, next)
+	return s.Store.Commit(ctx, expected, change)
 }
 
 func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
@@ -118,7 +118,7 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 			if out.Status != graph.StatusCompletedWithFailures || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 15 || out.Checkpoint.Steps != 19 || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || conflicts != 1 {
 				t.Fatalf("nested failure recovery: %+v conflicts=%d", out, conflicts)
 			}
-			if len(nodeCalls) != 2 || nodeCalls[0] == "" || nodeCalls[0] != nodeCalls[1] || len(joinCalls) != 2 || joinCalls[0] == "" || joinCalls[0] != joinCalls[1] {
+			if len(nodeCalls) != 2 || nodeCalls[0] == "" || nodeCalls[0] != nodeCalls[1] || len(joinCalls) != 1 || joinCalls[0] == "" {
 				t.Fatalf("compaction replay IDs: node=%v join=%v", nodeCalls, joinCalls)
 			}
 		})

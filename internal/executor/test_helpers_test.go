@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/afterlune/luneGraph/internal/testchange"
 	"testing"
 
 	"github.com/afterlune/luneGraph/internal/model"
@@ -106,7 +107,8 @@ func (s *executorTestStore) Load(ctx context.Context, runID string) (Checkpoint[
 	return copyCheckpoint(checkpoint), nil
 }
 
-func (s *executorTestStore) CompareAndSwap(ctx context.Context, expected uint64, next Checkpoint[int]) error {
+func (s *executorTestStore) Commit(ctx context.Context, expected uint64, change Change[int]) error {
+	next := change.Checkpoint()
 	if ctx == nil {
 		return errors.New("nil context")
 	}
@@ -120,7 +122,7 @@ func (s *executorTestStore) CompareAndSwap(ctx context.Context, expected uint64,
 	if !exists || current.Revision != expected || next.Revision != expected+1 || current.MachineID != next.MachineID {
 		return ErrConflict
 	}
-	s.values[next.RunID] = copyCheckpoint(next)
+	s.values[next.RunID] = copyCheckpoint(testchange.Apply(current, change))
 	return nil
 }
 

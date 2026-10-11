@@ -18,9 +18,9 @@ type faultStore struct {
 	armed bool
 }
 
-func (s *faultStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[state]) error {
+func (s *faultStore) Commit(ctx context.Context, expected uint64, change graph.Change[state]) error {
 	if !s.armed {
-		return s.Store.CompareAndSwap(ctx, expected, next)
+		return s.Store.Commit(ctx, expected, change)
 	}
 	s.armed = false
 	if s.mode == "conflict" {
@@ -29,7 +29,7 @@ func (s *faultStore) CompareAndSwap(ctx context.Context, expected uint64, next g
 	if s.mode == "before" {
 		return errAcknowledgement
 	}
-	if err := s.Store.CompareAndSwap(ctx, expected, next); err != nil {
+	if err := s.Store.Commit(ctx, expected, change); err != nil {
 		return err
 	}
 	return errAcknowledgement

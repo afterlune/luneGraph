@@ -107,7 +107,7 @@ func TestResumeValidationStoreAndCommitErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := completedRunner.Resume(context.Background(), completed.Checkpoint, nil, Options[int]{}); !errors.Is(err, ErrInvalidCheckpoint) {
+	if _, err := completedRunner.Resume(context.Background(), completed.Checkpoint, nil, Options[int]{}); !errors.Is(err, ErrRunCompleted) {
 		t.Fatalf("completed checkpoint Resume error = %v", err)
 	}
 

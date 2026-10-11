@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"github.com/afterlune/luneGraph/internal/model"
 	"strconv"
 	"testing"
 )
@@ -21,7 +22,8 @@ func TestInvocationIndexTracksAppendCompactionAndCheckpointCopy(t *testing.T) {
 	appendInvocation(&index, &checkpoint, Invocation[int]{ID: "i3", State: 3})
 
 	var spare Checkpoint[int]
-	candidate := copyCheckpointInto(&spare, checkpoint)
+	model.CopyInto(&spare, checkpoint)
+	candidate := spare
 	if position, invocation := indexedInvocation(&index, &candidate, "i3"); position != 2 || invocation == nil || invocation.State != 3 {
 		t.Fatalf("copied lookup = position %d, invocation %+v", position, invocation)
 	}

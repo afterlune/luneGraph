@@ -36,7 +36,7 @@ func TestExecutionFailureIsPersisted(t *testing.T) {
 			if !errors.Is(err, graph.ErrRunFailed) || errors.Is(err, boom) || recovered.Status != graph.StatusFailed || recovered.Checkpoint.Revision != 2 || !strings.Contains(err.Error(), boom.Error()) || calls != 1 {
 				t.Fatalf("recovered failure = %+v, %v; calls=%d", recovered, err, calls)
 			}
-			if _, err := runner.Resume(context.Background(), loaded, nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+			if _, err := runner.Resume(context.Background(), loaded, nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunCompleted) {
 				t.Fatalf("resumed terminal failure = %v", err)
 			}
 			withInput, err := runner.Recover(context.Background(), "failed", []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{Store: store})
@@ -146,7 +146,7 @@ func TestJoinExecutionFailureIsPersisted(t *testing.T) {
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
 	failed, err := runner.Start(context.Background(), "join-failure", 0, graph.Options[int]{Store: store, MaxConcurrency: 1})
-	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Checkpoint.Revision != 4 || failed.Checkpoint.Steps != 3 || !failed.Checkpoint.Completed || failed.Checkpoint.Failure == nil || failed.Checkpoint.Failure.Node != "join" {
+	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Checkpoint.Revision != 5 || failed.Checkpoint.Steps != 3 || !failed.Checkpoint.Completed || failed.Checkpoint.Failure == nil || failed.Checkpoint.Failure.Node != "join" {
 		t.Fatalf("join failure = %+v, %v", failed, err)
 	}
 	if _, err := runner.Recover(context.Background(), "join-failure", nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunFailed) {

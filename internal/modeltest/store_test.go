@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/afterlune/luneGraph/internal/testchange"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -69,7 +70,12 @@ func (s *faultStore[S]) reopen(t testing.TB) {
 	s.Store = disk
 }
 
-func (s *faultStore[S]) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[S]) error {
+func (s *faultStore[S]) Commit(ctx context.Context, expected uint64, change graph.Change[S]) error {
+	base, loadErr := s.Store.Load(ctx, change.Header.RunID)
+	if loadErr != nil {
+		return loadErr
+	}
+	next := testchange.Apply(base, change)
 	if err := s.oracle.check(next); err != nil {
 		return err
 	}
@@ -103,7 +109,7 @@ func (s *faultStore[S]) CompareAndSwap(ctx context.Context, expected uint64, nex
 	if fault && mode == 2 {
 		return errStore
 	}
-	if err := s.Store.CompareAndSwap(ctx, expected, next); err != nil {
+	if err := s.Store.Commit(ctx, expected, change); err != nil {
 		return err
 	}
 	s.steps = next.Steps

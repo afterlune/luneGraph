@@ -3,6 +3,7 @@ package executor
 import "github.com/afterlune/luneGraph/internal/model"
 
 type (
+	Change[S any]       = model.Change[S]
 	Action              = model.Action
 	ActivationGroup     = model.ActivationGroup
 	CallInfo            = model.CallInfo
@@ -68,20 +69,6 @@ func validName(name string) bool         { return model.ValidName(name) }
 func validScope(scope FailureScope) bool { return model.ValidScope(scope) }
 func copyCheckpoint[S any](value Checkpoint[S]) Checkpoint[S] {
 	return model.Copy(value)
-}
-func copyCheckpointInto[S any](dst *Checkpoint[S], value Checkpoint[S]) Checkpoint[S] {
-	model.CopyInto(dst, value)
-	return *dst
-}
-func clearCheckpointStateValues[S any](value *Checkpoint[S]) {
-	var zero S
-	for i := range value.Invocations {
-		value.Invocations[i].State = zero
-	}
-	if value.Final != nil {
-		*value.Final = zero
-		value.Final = nil
-	}
 }
 func invocation[S any](value *Checkpoint[S], id string) (int, *Invocation[S]) {
 	return model.FindInvocation(value, id)

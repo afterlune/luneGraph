@@ -64,7 +64,7 @@ func TestStoreMethodsRejectNilAndCanceledContextAndNilReceiver(t *testing.T) {
 	if _, err := nilStore.Load(ctx, "run"); err == nil {
 		t.Fatal("nil store Load succeeded")
 	}
-	if err := nilStore.CompareAndSwap(ctx, 1, next); err == nil {
+	if err := nilStore.Commit(ctx, 1, (next).Change()); err == nil {
 		t.Fatal("nil store CompareAndSwap succeeded")
 	}
 	if err := nilStore.Close(); err == nil {
@@ -79,7 +79,7 @@ func TestStoreMethodsRejectNilAndCanceledContextAndNilReceiver(t *testing.T) {
 	if _, err := store.Load(nilContext, "run"); err == nil {
 		t.Fatal("Load accepted a nil context")
 	}
-	if err := store.CompareAndSwap(nilContext, 1, next); err == nil {
+	if err := store.Commit(nilContext, 1, (next).Change()); err == nil {
 		t.Fatal("CompareAndSwap accepted a nil context")
 	}
 
@@ -91,7 +91,7 @@ func TestStoreMethodsRejectNilAndCanceledContextAndNilReceiver(t *testing.T) {
 	if _, err := store.Load(canceled, "run"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Load = %v", err)
 	}
-	if err := store.CompareAndSwap(canceled, 1, next); !errors.Is(err, context.Canceled) {
+	if err := store.Commit(canceled, 1, (next).Change()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled CompareAndSwap = %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestOpenRejectsIncompatibleSchemaShape(t *testing.T) {
 		_ = db.Close()
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+	if _, err := db.Exec("PRAGMA user_version = 2"); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}

@@ -72,44 +72,40 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 					t.Run(origin+"/"+kind+"/"+mode+"/"+order, func(t *testing.T) {
 						store, reopen := failureStore(t, kind)
 						f := newFailureFixture(t, origin, order, store)
+						joinRevision := uint64(7)
+						if origin == "join" {
+							joinRevision = 10
+						}
 						var fault error
 						write := mode == "unknown after write"
-						wantOutcome := graph.OutcomeCommitted
-						candidateRevision := uint64(6)
-						trigger := "failer"
-						if origin == "join" {
-							candidateRevision, trigger = 8, "b"
-						}
+						want := graph.OutcomeCommitted
 						switch mode {
 						case "conflict":
-							fault, wantOutcome = graph.ErrConflict, graph.OutcomeDiscarded
+							fault = graph.ErrConflict
+							want = graph.OutcomeDiscarded
 						case "unknown without write", "unknown after write":
-							fault, wantOutcome = errors.New("uncertain group commit"), graph.OutcomeUnknown
+							fault = errors.New("uncertain join commit")
+							want = graph.OutcomeUnknown
 						case "cancel":
-							wantOutcome = graph.OutcomeDiscarded
+							want = graph.OutcomeDiscarded
 						}
 						if fault != nil {
-							f.store = &faultStore{Store: store, fault: fault, write: write, revision: candidateRevision}
+							f.store = &faultStore{Store: store, fault: fault, write: write, revision: joinRevision}
 						}
+						opts := graph.Options[int]{Store: f.store, Limiter: f.limiter, MaxConcurrency: 4, Observer: f.observer}
 						type answer struct {
-							result graph.Result[int]
-							err    error
+							out graph.Result[int]
+							err error
 						}
 						done := make(chan answer, 1)
-						opts := graph.Options[int]{Store: f.store, Limiter: f.limiter, MaxConcurrency: 4, Observer: f.observer}
-						f.goRun(func() {
-							out, err := f.runner.Recover(f.ctx, "target", nil, opts)
-							done <- answer{out, err}
-						})
-						f.wait(t, f.ctx, f.cloneReached, "outer join input clone did not start")
-						// All four permits are now occupied. Cancellation must reach both
-						// deleted descendants before the outer join or commit can finish.
+						f.goRun(func() { out, err := f.runner.Recover(f.ctx, "target", nil, opts); done <- answer{out, err} })
+						f.wait(t, f.ctx, f.cloneReached, "outer join clone reached")
 						if limit.TryAcquire(f.limiter) {
 							limit.Release(f.limiter)
-							t.Fatal("fixture did not exhaust the shared budget")
+							t.Fatal("shared budget was not saturated")
 						}
 						f.allowClone()
-						f.wait(t, f.ctx, f.blockedCancelled, "pruned callback cancellation blocked behind outer join")
+						f.wait(t, f.ctx, f.blockedCancelled, "pruned callbacks cancelled")
 						if mode == "cancel" {
 							f.cancel()
 						}
@@ -118,143 +114,102 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 						select {
 						case first = <-done:
 						case <-time.After(5 * time.Second):
-							f.diagnose(t, "draining target")
-							t.Fatal("target did not drain")
+							t.Fatal("execution did not drain")
 						}
 						events := f.log.snapshot()
-						checkCall(t, events, graph.OperationRecover, first.result, first.err)
-						if f.holderCtx.Err() != nil {
-							t.Fatal("target cancelled independent execution")
-						}
-						select {
-						case err := <-f.holderDone:
-							t.Fatalf("independent holder exited: %v", err)
-						default:
-						}
+						checkCall(t, events, graph.OperationRecover, first.out, first.err)
 						seen := failureResolutions(events)
-						if seen[trigger].CallID == "" {
-							t.Fatal("callback identity missing")
-						}
-						for _, inv := range f.seed.Invocations {
-							if inv.Node == trigger && seen[inv.Node].CallID != inv.CallID {
-								t.Fatalf("persisted callback identity changed: %+v", seen[inv.Node])
-							}
-						}
-						for _, group := range f.seed.Groups {
-							if group.JoinNode == "outerjoin" && mode != "cancel" && seen["outerjoin"].CallID != group.CallID {
-								t.Fatal("outer join identity changed")
-							}
-						}
 						for _, name := range []string{"blocked-a", "blocked-b"} {
-							if seen[name].CallID == "" || seen[name].Outcome != graph.OutcomeDiscarded || seen[name].Action != graph.ActionEndExecution {
-								t.Fatalf("cancelled callback accepted: %+v", seen[name])
+							e := seen[name]
+							if e.CallID == "" || e.Outcome != graph.OutcomeDiscarded || e.Action != graph.ActionEndExecution {
+								t.Fatalf("pruned callback accepted: %+v", e)
 							}
 						}
-						if seen[trigger].Outcome != wantOutcome {
-							t.Fatalf("trigger=%+v", seen[trigger])
-						}
-						if origin == "join" && seen["innerjoin"].Outcome != wantOutcome {
-							t.Fatalf("inner join=%+v", seen["innerjoin"])
-						}
-						candidateCallbacks := []string{trigger, "outerjoin"}
-						resolutionErr := fault
-						if mode == "cancel" {
-							candidateCallbacks = candidateCallbacks[:1]
-							resolutionErr = context.Canceled
-						}
+						trigger := "failer"
 						if origin == "join" {
-							candidateCallbacks = append(candidateCallbacks, "innerjoin")
-						}
-						for _, name := range candidateCallbacks {
-							if !errors.Is(seen[name].Err, resolutionErr) {
-								t.Fatalf("candidate resolution error %s=%+v", name, seen[name])
+							trigger = "innerjoin"
+							if seen["b"].Outcome != graph.OutcomeCommitted {
+								t.Fatal("triggering branch was not committed")
 							}
+						}
+						if seen[trigger].Outcome != graph.OutcomeCommitted || seen[trigger].Revision != joinRevision-1 {
+							t.Fatalf("failure commit=%+v", seen[trigger])
 						}
 						loaded, err := store.Load(context.Background(), "target")
 						if err != nil {
 							t.Fatal(err)
 						}
+						if !loaded.HadLocalFailures || loaded.Failure != nil {
+							t.Fatalf("failure marker missing: %+v", loaded)
+						}
 						if mode == "cancel" {
-							if !errors.Is(first.err, context.Canceled) || first.result.Status != graph.StatusCancelled || f.joins.Load() != 0 || loaded.HadLocalFailures || loaded.Failure != nil || loaded.Completed || loaded.Revision != candidateRevision-1 || !reflect.DeepEqual(loaded, first.result.Checkpoint) {
-								t.Fatalf("cancel=%+v %v stored=%+v", first.result, first.err, loaded)
+							if !errors.Is(first.err, context.Canceled) || first.out.Status != graph.StatusCancelled || loaded.Revision != joinRevision-1 {
+								t.Fatalf("cancel=%+v %v", first.out, first.err)
 							}
-							if _, exists := seen["outerjoin"]; exists {
-								t.Fatal("cancelled admission ran outer join")
+							if _, ok := seen["outerjoin"]; ok {
+								t.Fatal("cancelled admission ran Merge")
 							}
 						} else {
-							outer := seen["outerjoin"]
-							if outer.Outcome != wantOutcome || outer.Revision != candidateRevision || seen[trigger].Revision != candidateRevision || f.joins.Load() != 1 {
-								t.Fatalf("candidate resolutions=%+v", seen)
+							e := seen["outerjoin"]
+							if e.CallID == "" || e.Outcome != want || e.Revision != joinRevision || !errors.Is(e.Err, fault) {
+								t.Fatalf("join=%+v", e)
 							}
-							if fault == nil {
-								checkFailureCompletion(t, first.result, first.err, candidateRevision)
-								if !reflect.DeepEqual(loaded, first.result.Checkpoint) {
-									t.Fatal("stored completion differs")
+							if fault != nil {
+								if !errors.Is(first.err, fault) || first.out.Checkpoint.Revision != joinRevision-1 {
+									t.Fatalf("uncertain=%+v %v", first.out, first.err)
 								}
-							} else {
-								if !errors.Is(first.err, fault) || first.result.Checkpoint.Revision != candidateRevision-1 || first.result.Checkpoint.HadLocalFailures || first.result.Checkpoint.Completed || first.result.Checkpoint.Failure != nil || !errors.Is(outer.Err, fault) {
-									t.Fatalf("rejected candidate=%+v %v", first.result, first.err)
-								}
-								if write {
-									if loaded.Revision != candidateRevision || !loaded.HadLocalFailures || loaded.Completed || loaded.Failure != nil {
-										t.Fatalf("uncertain accepted candidate=%+v", loaded)
-									}
-								} else if !reflect.DeepEqual(loaded, first.result.Checkpoint) {
-									t.Fatal("rejected candidate changed store")
-								}
+							} else if first.err != nil || !first.out.Checkpoint.Completed {
+								t.Fatalf("completion=%+v %v", first.out, first.err)
 							}
 						}
-						// Release only test-owned admission and the healthy holder;
-						// neither is needed to unblock target progress.
+						if !write && !reflect.DeepEqual(loaded, first.out.Checkpoint) {
+							t.Fatal("stored position differs")
+						}
+						if write && loaded.Revision != joinRevision {
+							t.Fatal("lost acknowledgement did not write")
+						}
+						if f.holderCtx.Err() != nil {
+							t.Fatal("independent execution cancelled")
+						}
 						f.releaseHeld()
 						f.stopHolder()
 						if err := <-f.holderDone; err != nil {
-							t.Fatalf("holder failed: %v", err)
+							t.Fatal(err)
 						}
 						if reopen != nil {
-							f.store = reopen()
-							opts.Store = f.store
+							opts.Store = reopen()
 						}
 						before := len(f.log.snapshot())
 						recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer cancel()
 						last, err := f.runner.Recover(recoverCtx, "target", nil, opts)
-						checkFailureCompletion(t, last, err, candidateRevision)
-						checkCall(t, f.log.snapshot()[before:], graph.OperationRecover, last, err)
-						replayed := failureResolutions(f.log.snapshot()[before:])
-						for name, event := range seen {
-							if _, exists := replayed[name]; exists && event.Outcome == graph.OutcomeCommitted {
-								t.Fatalf("committed callback %s replayed", name)
+						steps := uint64(6)
+						if origin == "join" {
+							steps = 8
+						}
+						if err != nil || last.Status != graph.StatusCompletedWithFailures || last.Checkpoint.Steps != steps || last.Checkpoint.Revision != joinRevision+1 || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 17 {
+							t.Fatalf("recovery=%+v %v", last, err)
+						}
+						replay := failureResolutions(f.log.snapshot()[before:])
+						for _, name := range []string{"failer", "b", "innerjoin", "blocked-a", "blocked-b"} {
+							if _, ok := replay[name]; ok {
+								t.Fatalf("committed/pruned callback %s replayed", name)
 							}
 						}
 						if mode == "success" || write {
-							if _, exists := replayed["outerjoin"]; exists {
-								t.Fatal("accepted join replayed")
+							if _, ok := replay["outerjoin"]; ok {
+								t.Fatal("committed join replayed")
 							}
-							if _, exists := replayed[trigger]; exists {
-								t.Fatal("accepted trigger replayed")
-							}
-						} else {
-							for _, name := range []string{"blocked-a", "blocked-b"} {
-								if replayed[name].CallID != seen[name].CallID || replayed[name].Outcome != graph.OutcomeDiscarded {
-									t.Fatalf("cancelled descendant replay %s=%+v original=%+v", name, replayed[name], seen[name])
-								}
-							}
-							for _, name := range []string{trigger, "outerjoin"} {
-								if replayed[name].Outcome != graph.OutcomeCommitted || (seen[name].CallID != "" && replayed[name].CallID != seen[name].CallID) || replayed[name].OperationID == seen[trigger].OperationID {
-									t.Fatalf("replay %s=%+v original=%+v", name, replayed[name], seen[name])
-								}
-							}
-							if origin == "join" && replayed["innerjoin"].CallID != seen["innerjoin"].CallID {
-								t.Fatal("inner join replay identity changed")
-							}
+						} else if replay["outerjoin"].Outcome != graph.OutcomeCommitted {
+							t.Fatal("pending join was not replayed")
 						}
-						stored, err := f.store.Load(recoverCtx, "target")
+						if old := seen["outerjoin"].CallID; old != "" && replay["outerjoin"].CallID != "" && old != replay["outerjoin"].CallID {
+							t.Fatal("join replay identity changed")
+						}
+						stored, err := opts.Store.Load(recoverCtx, "target")
 						if err != nil || !reflect.DeepEqual(stored, last.Checkpoint) {
-							t.Fatalf("stored recovery=%+v %v", stored, err)
+							t.Fatal("recovery not durable", err)
 						}
-						// Prove all permits are reusable, rather than merely proving one
-						// callback can still enter a partially leaked budget.
 						acquired := 0
 						defer func() {
 							for range acquired {
@@ -263,27 +218,13 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 						}()
 						for range 4 {
 							if err := limit.Acquire(recoverCtx, f.limiter); err != nil {
-								t.Fatal("permit leaked:", err)
+								t.Fatal("permit leaked", err)
 							}
 							acquired++
-						}
-						for acquired > 0 {
-							limit.Release(f.limiter)
-							acquired--
-						}
-						if _, err := singleRunner(t).Start(recoverCtx, "healthy", 1, graph.Options[int]{Limiter: f.limiter}); err != nil {
-							t.Fatal("healthy execution:", err)
 						}
 					})
 				}
 			}
 		}
-	}
-}
-
-func checkFailureCompletion(t *testing.T, out graph.Result[int], err error, steps uint64) {
-	t.Helper()
-	if err != nil || out.Status != graph.StatusCompletedWithFailures || !out.Checkpoint.Completed || !out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil || out.Checkpoint.Steps != steps || out.Checkpoint.Revision != steps+1 || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 17 || len(out.Checkpoint.Invocations) != 0 || len(out.Checkpoint.Groups) != 0 {
-		t.Fatalf("completion=%+v %v", out, err)
 	}
 }

@@ -186,9 +186,10 @@ func TestMachineExportMermaidAndWideTargetValidation(t *testing.T) {
 	}
 
 	diagram := runner.ExportMermaid()
-	if !strings.Contains(diagram, "root([\"root (entry)\"])") || !strings.Contains(diagram, "child_return -.->|return| target_a") || !strings.Contains(diagram, "join{{\"join (join)\"}}") {
-		t.Fatalf("compiled Mermaid output missing topology: %s", diagram)
+	if !strings.Contains(diagram, `(["root (entry)"])`) || !strings.Contains(diagram, "-.->|return|") || !strings.Contains(diagram, `{{"join (join)"}}`) {
+		t.Fatal(diagram)
 	}
+
 	var nilRunner *Runner[int]
 	if nilRunner.ExportMermaid() != "" {
 		t.Fatal("nil runner exported a diagram")

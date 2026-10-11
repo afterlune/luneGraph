@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/afterlune/luneGraph/internal/diagram"
 	"github.com/afterlune/luneGraph/internal/executor"
 	"github.com/afterlune/luneGraph/internal/model"
 )
@@ -184,43 +185,49 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	return executor.New(definition)
 }
 
-// ExportMermaid generates a Mermaid flowchart representation of the graph definition.
-func (g *Graph[S]) ExportMermaid() string {
+// ExportMermaid renders the builder topology and rejects recursive mounts.
+func (g *Graph[S]) ExportMermaid() (string, error) {
 	if g == nil {
-		return ""
+		return "", errors.New("graph is nil")
 	}
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
-	renderGraphMermaid(&sb, g, "    ")
-	return sb.String()
+	var names diagram.Names
+	if err := renderGraphMermaid(&sb, g, "", "    ", &names, make(map[*Graph[S]]bool)); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
 }
 
-func mermaidID(name string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(name, "/", "_"), "-", "_")
-}
-
-func renderGraphMermaid[S any](sb *strings.Builder, g *Graph[S], indent string) {
+func renderGraphMermaid[S any](sb *strings.Builder, g *Graph[S], path, indent string, names *diagram.Names, active map[*Graph[S]]bool) error {
+	if active[g] {
+		return fmt.Errorf("recursive subgraph reference at %q", path)
+	}
+	active[g] = true
+	defer delete(active, g)
+	id := func(name string) string { return names.ID(fmt.Sprintf("%s%d:%s", path, len(name), name)) }
 	if g.entry != "" {
-		fmt.Fprintf(sb, "%s%s([\"%s (entry)\"])\n", indent, mermaidID(g.entry), g.entry)
+		fmt.Fprintf(sb, "%s%s([\"%s (entry)\"])\n", indent, id(g.entry), diagram.Label(g.entry))
 	}
 	for _, name := range sortedKeys(g.nodes) {
-		if name == g.entry {
-			continue
+		if name != g.entry {
+			fmt.Fprintf(sb, "%s%s[\"%s\"]\n", indent, id(name), diagram.Label(name))
 		}
-		fmt.Fprintf(sb, "%s%s[\"%s\"]\n", indent, mermaidID(name), name)
 	}
 	for _, name := range sortedKeys(g.joins) {
-		fmt.Fprintf(sb, "%s%s{{\"%s (join)\"}}\n", indent, mermaidID(name), name)
+		fmt.Fprintf(sb, "%s%s{{\"%s (join)\"}}\n", indent, id(name), diagram.Label(name))
 	}
 	for _, name := range sortedKeys(g.subgraphs) {
-		sub := g.subgraphs[name]
-		fmt.Fprintf(sb, "%ssubgraph %s [\"%s\"]\n", indent, mermaidID(name), name)
-		renderGraphMermaid(sb, sub, indent+"    ")
+		fmt.Fprintf(sb, "%ssubgraph %s [\"%s\"]\n", indent, id(name), diagram.Label(name))
+		if err := renderGraphMermaid(sb, g.subgraphs[name], fmt.Sprintf("%s%d:%s", path, len(name), name), indent+"    ", names, active); err != nil {
+			return err
+		}
 		fmt.Fprintf(sb, "%send\n", indent)
 	}
 	for _, from := range sortedKeys(g.edges) {
 		for _, to := range sortedKeys(g.edges[from]) {
-			fmt.Fprintf(sb, "%s%s --> %s\n", indent, mermaidID(from), mermaidID(to))
+			fmt.Fprintf(sb, "%s%s --> %s\n", indent, id(from), id(to))
 		}
 	}
+	return nil
 }

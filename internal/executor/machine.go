@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"github.com/afterlune/luneGraph/internal/diagram"
 	"sort"
 	"strings"
 )
@@ -78,34 +79,32 @@ func (r *Runner[S]) ExportMermaid() string {
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
 	indent := "    "
+	var names diagram.Names
+	id := names.ID
 	if r.entry != "" {
-		fmt.Fprintf(&sb, "%s%s([\"%s (entry)\"])\n", indent, mermaidID(r.entry), r.entry)
+		fmt.Fprintf(&sb, "%s%s([\"%s (entry)\"])\n", indent, id(r.entry), diagram.Label(r.entry))
 	}
 	for _, name := range sortedKeys(r.nodes) {
 		if name == r.entry {
 			continue
 		}
-		fmt.Fprintf(&sb, "%s%s[\"%s\"]\n", indent, mermaidID(name), name)
+		fmt.Fprintf(&sb, "%s%s[\"%s\"]\n", indent, id(name), diagram.Label(name))
 	}
 	for _, name := range sortedKeys(r.joins) {
-		fmt.Fprintf(&sb, "%s%s{{\"%s (join)\"}}\n", indent, mermaidID(name), name)
+		fmt.Fprintf(&sb, "%s%s{{\"%s (join)\"}}\n", indent, id(name), diagram.Label(name))
 	}
 	for _, from := range sortedKeys(r.edges) {
 		for _, to := range sortedKeys(r.edges[from]) {
-			fmt.Fprintf(&sb, "%s%s --> %s\n", indent, mermaidID(from), mermaidID(to))
+			fmt.Fprintf(&sb, "%s%s --> %s\n", indent, id(from), id(to))
 		}
 	}
 	for _, from := range sortedKeys(r.returnTargets) {
 		to := r.returnTargets[from]
 		if to != "" {
-			fmt.Fprintf(&sb, "%s%s -.->|return| %s\n", indent, mermaidID(from), mermaidID(to))
+			fmt.Fprintf(&sb, "%s%s -.->|return| %s\n", indent, id(from), id(to))
 		}
 	}
 	return sb.String()
-}
-
-func mermaidID(name string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(name, "/", "_"), "-", "_")
 }
 
 func sortedKeys[V any](items map[string]V) []string {

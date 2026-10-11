@@ -29,7 +29,7 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 				first, err = r.Resume(context.Background(), seed.Checkpoint, inputs, opts)
 				checkCall(t, log.snapshot(), graph.OperationResume, first, err)
 			} else {
-				store.revision = 4
+				store.revision = 5
 				g := graph.New[int]("fork")
 				node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
 					return graph.To(s, "a", "b"), nil

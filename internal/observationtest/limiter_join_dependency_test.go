@@ -2,8 +2,6 @@ package observationtest
 
 import (
 	"context"
-	"errors"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +12,7 @@ import (
 
 // A synchronous Merge must not wait for work that its own scheduler has yet
 // to dispatch. The deadline is only a fuse; cancellation below is explicit.
-func TestLimiterSynchronousJoinDependency(t *testing.T) {
+func TestLimiterIndependentBranchProgressDuringJoin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	store := memoryStore(t)
 	limiter, err := graph.NewLimiter(4)
@@ -85,58 +83,19 @@ func TestLimiterSynchronousJoinDependency(t *testing.T) {
 	f.wait(t, ctx, joinEntered, "join entered; deep not dispatched beyond its gate")
 	releaseDeep()
 	f.wait(t, ctx, deepFinished, "deep finished; result waiting for synchronous join")
-	before, err := store.Load(ctx, "dependency")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deepPending := false
-	for _, invocation := range before.Invocations {
-		if invocation.Node == "descendant" {
-			t.Fatal("deep transition persisted before Merge returned")
-		}
-		if invocation.Node == "deep" && invocation.Status == graph.InvocationReady {
-			deepPending = true
-		}
-	}
-	if !deepPending {
-		t.Fatalf("deep callback no longer pending: %+v", before)
-	}
-	select {
-	case <-descendantStarted:
-		t.Fatal("scheduler dispatched descendant during Merge")
-	default:
-	}
-	select {
-	case <-done:
-		t.Fatal("invocation returned before cancellation")
-	default:
-	}
-	for _, event := range f.log.snapshot() {
-		if event.Node == "deep" && event.Phase == graph.PhaseResolved {
-			t.Fatal("deep result committed during Merge")
-		}
-	}
-	cancel()
-	drainCtx, stopDrain := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stopDrain()
-	f.wait(t, drainCtx, done, "draining cancelled synchronous join")
-	if !errors.Is(runErr, context.Canceled) || result.Status != graph.StatusCancelled || result.Checkpoint.Failure != nil || result.Checkpoint.HadLocalFailures {
+	f.wait(t, ctx, descendantStarted, "independent successor dispatched during Merge")
+	f.wait(t, ctx, done, "asynchronous join completion")
+	if runErr != nil || result.Status != graph.StatusCompleted || !result.Checkpoint.Completed {
 		t.Fatalf("result=%+v err=%v", result, runErr)
 	}
-	after, err := store.Load(context.Background(), "dependency")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(after, result.Checkpoint) {
-		t.Fatalf("uncommitted candidate persisted: before=%+v after=%+v result=%+v", before, after, result)
+	saved, err := store.Load(ctx, "dependency")
+	if err != nil || !saved.Completed {
+		t.Fatalf("saved=%+v err=%v", saved, err)
 	}
 	checkCall(t, f.log.snapshot(), graph.OperationStart, result, runErr)
-	seen := failureResolutions(f.log.snapshot())
-	for _, name := range []string{"deep", "join"} {
-		if seen[name].Outcome != graph.OutcomeDiscarded {
-			t.Fatalf("%s resolution=%+v", name, seen[name])
-		}
-	}
+	drainCtx, stopDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopDrain()
+
 	acquired := 0
 	defer func() {
 		for acquired > 0 {

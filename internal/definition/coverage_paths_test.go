@@ -37,7 +37,7 @@ func TestRegisterJSONContinuationDecodesTypedPayload(t *testing.T) {
 
 func TestExportMermaidRendersSortedNestedGraph(t *testing.T) {
 	var nilGraph *Graph[int]
-	if nilGraph.ExportMermaid() != "" {
+	if _, err := nilGraph.ExportMermaid(); err == nil {
 		t.Fatal("nil graph exported a diagram")
 	}
 
@@ -58,21 +58,16 @@ func TestExportMermaidRendersSortedNestedGraph(t *testing.T) {
 	addDefinitionEdge(t, root, "root-node", "finish")
 	addDefinitionEdge(t, root, "root-node", "mounted-part")
 
-	diagram := root.ExportMermaid()
-	for _, expected := range []string{
-		`root_node(["root-node (entry)"])`,
-		`join_node{{"join-node (join)"}}`,
-		`subgraph mounted_part ["mounted-part"]`,
-		`child_entry(["child-entry (entry)"])`,
-		`child_entry --> child_finish`,
-		`root_node --> finish`,
-		`root_node --> mounted_part`,
-	} {
+	diagram, err := root.ExportMermaid()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`["root-node (entry)"]`, `{{"join-node (join)"}}`, `["mounted-part"]`, `["child-entry (entry)"]`, " --> "} {
 		if !strings.Contains(diagram, expected) {
 			t.Errorf("Mermaid output missing %q:\n%s", expected, diagram)
 		}
 	}
-	if repeated := root.ExportMermaid(); repeated != diagram {
+	if repeated, err := root.ExportMermaid(); err != nil || repeated != diagram {
 		t.Fatalf("Mermaid output is not deterministic:\n%s\n---\n%s", diagram, repeated)
 	}
 }

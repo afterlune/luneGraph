@@ -115,7 +115,7 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 			}
 			expected := saved.Revision
 			saved.Revision++
-			if err := store.CompareAndSwap(ctx, expected, saved); !errors.Is(err, graph.ErrConflict) {
+			if err := store.Commit(ctx, expected, (saved).Change()); !errors.Is(err, graph.ErrConflict) {
 				t.Fatal("deleted CAS resurrected run", err)
 			}
 		}

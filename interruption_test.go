@@ -20,12 +20,12 @@ type interruptionStore struct {
 	fail    error
 }
 
-func (s *interruptionStore) CompareAndSwap(ctx context.Context, revision uint64, cp graph.Checkpoint[int]) error {
+func (s *interruptionStore) Commit(ctx context.Context, revision uint64, change graph.Change[int]) error {
 	s.commits++
 	if s.fail != nil {
 		return s.fail
 	}
-	return s.Store.CompareAndSwap(ctx, revision, cp)
+	return s.Store.Commit(ctx, revision, change)
 }
 
 func TestInterruptError(t *testing.T) {

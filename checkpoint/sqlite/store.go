@@ -3,9 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 
 	graph "github.com/afterlune/luneGraph"
@@ -13,13 +13,21 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-// Create stores revision one. An existing run returns graph.ErrConflict.
+type invocationMetadata struct {
+	ID, CallID, Node      string
+	Status                graph.InvocationStatus
+	GroupID, ChildGroupID string
+	BranchIndex           int
+	Continuation          string
+	Next                  []string
+}
+
+func metadata[S any](v graph.Invocation[S]) invocationMetadata {
+	return invocationMetadata{v.ID, v.CallID, v.Node, v.Status, v.GroupID, v.ChildGroupID, v.BranchIndex, v.Continuation, v.Next}
+}
 func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error {
-	if err := checkContext(ctx); err != nil {
+	if err := s.check(ctx); err != nil {
 		return err
-	}
-	if s == nil || s.db == nil {
-		return errors.New("store is nil")
 	}
 	if err := model.ValidateCheckpointHeader(value); err != nil {
 		return err
@@ -27,119 +35,205 @@ func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error 
 	if value.Revision != 1 {
 		return graph.ErrInvalidCheckpoint
 	}
-	payload, err := s.encodePayload(value)
-	if err != nil {
-		return fmt.Errorf("encode checkpoint: %w", err)
+	if err := model.ValidateChange(0, value.Change()); err != nil {
+		return err
 	}
-	defer s.releasePayloadBuffer(payload)
-	result, err := s.stmtCreate.ExecContext(ctx,
-		value.RunID, value.MachineID, strconv.FormatUint(value.Revision, 10), payload.data)
+	change := value.Change()
+	encoded, err := s.encodeChange(change)
 	if err != nil {
-		return fmt.Errorf("create checkpoint: %w", err)
+		return err
+	}
+	defer s.releaseEncoded(encoded)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "INSERT INTO checkpoints(run_id,machine_id,revision,payload,final) VALUES(?,?,?,?,?) ON CONFLICT(run_id) DO NOTHING", value.RunID, value.MachineID, "1", encoded.header, encoded.final)
+	if err != nil {
+		return err
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("create checkpoint result: %w", err)
+		return err
 	}
 	if changed == 0 {
 		return graph.ErrConflict
 	}
-	return nil
+	if err := s.writeRecords(ctx, tx, change, encoded); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// Load returns an independent checkpoint decoded from the latest stored bytes.
-func (s *Store[S]) Load(ctx context.Context, runID string) (graph.Checkpoint[S], error) {
+func (s *Store[S]) Commit(ctx context.Context, expected uint64, c graph.Change[S]) error {
+	if err := s.check(ctx); err != nil {
+		return err
+	}
+	if err := model.ValidateChange(expected, c); err != nil {
+		return err
+	}
+	encoded, err := s.encodeChange(c)
+	if err != nil {
+		return err
+	}
+	defer s.releaseEncoded(encoded)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var oldPayload []byte
+	err = tx.QueryRowContext(ctx, "SELECT payload FROM checkpoints WHERE run_id=? AND machine_id=? AND revision=?", c.Header.RunID, c.Header.MachineID, strconv.FormatUint(expected, 10)).Scan(&oldPayload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return graph.ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	var old graph.Header
+	if err := json.Unmarshal(oldPayload, &old); err != nil {
+		return fmt.Errorf("header: %w", checkpoint.ErrCorrupt)
+	}
+	if err := model.ValidateAdvance(old, c.Header); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE checkpoints SET revision=?,payload=?,final=? WHERE run_id=? AND machine_id=? AND revision=?", strconv.FormatUint(c.Header.Revision, 10), encoded.header, encoded.final, c.Header.RunID, c.Header.MachineID, strconv.FormatUint(expected, 10))
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return graph.ErrConflict
+	}
+	if err := s.writeRecords(ctx, tx, c, encoded); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], error) {
 	var empty graph.Checkpoint[S]
-	if err := checkContext(ctx); err != nil {
+	if err := s.check(ctx); err != nil {
 		return empty, err
 	}
-	if s == nil || s.db == nil {
-		return empty, errors.New("store is nil")
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return empty, err
 	}
-	var machineID, revisionText string
-	var payload []byte
-	err := s.stmtLoad.QueryRowContext(ctx, runID).Scan(&machineID, &revisionText, &payload)
+	defer tx.Rollback()
+	var machine, revision string
+	var payload, final []byte
+	err = tx.QueryRowContext(ctx, "SELECT machine_id,revision,payload,final FROM checkpoints WHERE run_id=?", id).Scan(&machine, &revision, &payload, &final)
 	if errors.Is(err, sql.ErrNoRows) {
-		return empty, fmt.Errorf("run %q: %w", runID, checkpoint.ErrNotFound)
+		return empty, checkpoint.ErrNotFound
 	}
 	if err != nil {
-		return empty, fmt.Errorf("load checkpoint: %w", err)
+		return empty, err
 	}
-	revision, err := strconv.ParseUint(revisionText, 10, 64)
-	if err != nil || revision == 0 || strconv.FormatUint(revision, 10) != revisionText {
-		return empty, fmt.Errorf("run %q revision: %w", runID, checkpoint.ErrCorrupt)
+	var h graph.Header
+	if err := json.Unmarshal(payload, &h); err != nil {
+		return empty, fmt.Errorf("header: %w", checkpoint.ErrCorrupt)
 	}
-	value, err := s.codec.Unmarshal(payload)
+	if h.RunID != id || h.MachineID != machine || h.Revision == 0 || strconv.FormatUint(h.Revision, 10) != revision || h.FormatVersion != graph.CheckpointFormatVersion {
+		return empty, checkpoint.ErrCorrupt
+	}
+	cp := (graph.Change[S]{Header: h}).Checkpoint()
+	if final != nil {
+		v, err := s.codec.Unmarshal(final)
+		if err != nil {
+			return empty, fmt.Errorf("final: %w: %w", checkpoint.ErrCorrupt, err)
+		}
+		cp.Final = &v
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,metadata,state FROM invocations WHERE run_id=? ORDER BY id", id)
 	if err != nil {
-		return empty, fmt.Errorf("run %q decode: %w: %w", runID, checkpoint.ErrCorrupt, err)
+		return empty, err
 	}
-	if value.RunID != runID || value.MachineID != machineID || value.Revision != revision {
-		return empty, fmt.Errorf("run %q identity: %w", runID, checkpoint.ErrCorrupt)
+	for rows.Next() {
+		var key string
+		var meta, state []byte
+		if err := rows.Scan(&key, &meta, &state); err != nil {
+			rows.Close()
+			return empty, err
+		}
+		var m invocationMetadata
+		if err := json.Unmarshal(meta, &m); err != nil || m.ID != key {
+			rows.Close()
+			return empty, checkpoint.ErrCorrupt
+		}
+		value, err := s.codec.Unmarshal(state)
+		if err != nil {
+			rows.Close()
+			return empty, fmt.Errorf("state: %w: %w", checkpoint.ErrCorrupt, err)
+		}
+		cp.Invocations = append(cp.Invocations, graph.Invocation[S]{ID: m.ID, CallID: m.CallID, Node: m.Node, State: value, Status: m.Status, GroupID: m.GroupID, ChildGroupID: m.ChildGroupID, BranchIndex: m.BranchIndex, Continuation: m.Continuation, Next: m.Next})
 	}
-	return value, nil
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return empty, err
+	}
+	rows, err = tx.QueryContext(ctx, "SELECT id,payload FROM groups WHERE run_id=? ORDER BY id", id)
+	if err != nil {
+		return empty, err
+	}
+	for rows.Next() {
+		var key string
+		var data []byte
+		if err := rows.Scan(&key, &data); err != nil {
+			rows.Close()
+			return empty, err
+		}
+		var g graph.ActivationGroup
+		if err := json.Unmarshal(data, &g); err != nil || g.ID != key {
+			rows.Close()
+			return empty, checkpoint.ErrCorrupt
+		}
+		cp.Groups = append(cp.Groups, g)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return empty, err
+	}
+	if err := tx.Commit(); err != nil {
+		return empty, err
+	}
+	return cp, nil
 }
-
-// CompareAndSwap atomically replaces the latest checkpoint at expected.
-func (s *Store[S]) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[S]) error {
-	if err := checkContext(ctx); err != nil {
+func (s *Store[S]) Delete(ctx context.Context, id string) error {
+	if err := s.check(ctx); err != nil {
 		return err
 	}
-	if s == nil || s.db == nil {
-		return errors.New("store is nil")
+	if !model.ValidName(id) {
+		return errors.New("invalid run ID")
 	}
-	if err := model.ValidateCheckpointHeader(next); err != nil {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM checkpoints WHERE run_id=?", id)
+	if err != nil {
 		return err
 	}
-	if expected == math.MaxUint64 {
-		return graph.ErrExecutionLimit
-	}
-	if next.Revision != expected+1 {
-		return graph.ErrConflict
-	}
-	payload, err := s.encodePayload(next)
+	n, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("encode checkpoint: %w", err)
-	}
-	defer s.releasePayloadBuffer(payload)
-	result, err := s.stmtCAS.ExecContext(ctx,
-		strconv.FormatUint(next.Revision, 10), payload.data, next.RunID, next.MachineID, strconv.FormatUint(expected, 10))
-	if err != nil {
-		return fmt.Errorf("compare and swap checkpoint: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("compare and swap result: %w", err)
-	}
-	if changed == 0 {
-		return graph.ErrConflict
-	}
-	return nil
-}
-
-func (s *Store[S]) Delete(ctx context.Context, runID string) error {
-	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if s == nil || s.db == nil {
-		return errors.New("store is nil")
-	}
-	if !model.ValidName(runID) {
-		return errors.New("run ID must be non-empty and have no surrounding whitespace")
-	}
-	result, err := s.stmtDelete.ExecContext(ctx, runID)
-	if err != nil {
-		return fmt.Errorf("delete checkpoint: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete result: %w", err)
-	}
-	if changed == 0 {
+	if n == 0 {
 		return checkpoint.ErrNotFound
 	}
 	return nil
 }
-
+func (s *Store[S]) check(ctx context.Context) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.db == nil {
+		return errors.New("store is nil")
+	}
+	return nil
+}
 func checkContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context must not be nil")

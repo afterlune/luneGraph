@@ -74,7 +74,7 @@ func BenchmarkDurableFanoutJoin(b *testing.B) {
 						latest, err = runner.Recover(ctx, runID, nil, options)
 						cycles := i + 1
 						expectedProgress := uint64(1 + cycles*stepsPerCall)
-						if err != nil || latest.Status != graph.StatusBudget || latest.Checkpoint.Steps != expectedProgress || latest.Checkpoint.Revision != expectedProgress+1 {
+						if err != nil || latest.Status != graph.StatusBudget || latest.Checkpoint.Steps != expectedProgress || latest.Checkpoint.Revision != expectedProgress+1+uint64(cycles) {
 							b.Fatalf("recover %d = status %s, revision %d, steps %d, groups %d, invocations %d, error %v", i, latest.Status, latest.Checkpoint.Revision, latest.Checkpoint.Steps, len(latest.Checkpoint.Groups), len(latest.Checkpoint.Invocations), err)
 						}
 						assertDurableFanoutCheckpoint(b, latest.Checkpoint, width, cycles)

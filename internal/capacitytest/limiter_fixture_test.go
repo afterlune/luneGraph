@@ -96,7 +96,7 @@ func (p *limiterPopulation) advance(ctx context.Context, i int) (graph.Result[st
 	if stateErr != nil {
 		return out, stateErr
 	}
-	if out.Status != graph.StatusWaiting || v.Owner != s.id || v.Round != int(before.Steps/10)+1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*10) || out.Checkpoint.Revision != uint64(v.Round*11) {
+	if out.Status != graph.StatusWaiting || v.Owner != s.id || v.Round != int(before.Steps/10)+1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*10) || out.Checkpoint.Revision != uint64(v.Round*12) {
 		return out, fmt.Errorf("invalid limited round: %+v", out)
 	}
 	s.remember(out.Checkpoint, true)

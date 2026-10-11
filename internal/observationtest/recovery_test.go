@@ -81,17 +81,18 @@ type faultStore struct {
 	revision uint64
 }
 
-func (s *faultStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[int]) error {
+func (s *faultStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
+	next := change.Checkpoint()
 	if !s.failed && (s.revision == 0 || next.Revision == s.revision) {
 		s.failed = true
 		if s.write {
-			if err := s.Store.CompareAndSwap(ctx, expected, next); err != nil {
+			if err := s.Store.Commit(ctx, expected, change); err != nil {
 				return err
 			}
 		}
 		return s.fault
 	}
-	return s.Store.CompareAndSwap(ctx, expected, next)
+	return s.Store.Commit(ctx, expected, change)
 }
 
 func TestCommitErrorAndNodeReplayEvents(t *testing.T) {
@@ -110,7 +111,7 @@ func TestCommitErrorAndNodeReplayEvents(t *testing.T) {
 			}
 			initial := log.snapshot()
 			checkCall(t, initial, graph.OperationStart, first, err)
-			writes := finished(initial, graph.OperationCompareAndSwap)
+			writes := finished(initial, graph.OperationCommit)
 			if len(writes) != 1 || writes[0].Err != fault || writes[0].Revision != 2 {
 				t.Fatalf("write event: %+v", writes)
 			}
@@ -147,7 +148,7 @@ func TestDecodeErrorAndMissingLoadEvents(t *testing.T) {
 		t.Fatalf("decode outcome = %+v, %v", result, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationResume, result, err)
-	if decodes := finished(log.snapshot(), graph.OperationDecode); len(decodes) != 1 || decodes[0].Err == nil || len(finished(log.snapshot(), graph.OperationApply)) != 0 || len(finished(log.snapshot(), graph.OperationCompareAndSwap)) != 0 {
+	if decodes := finished(log.snapshot(), graph.OperationDecode); len(decodes) != 1 || decodes[0].Err == nil || len(finished(log.snapshot(), graph.OperationApply)) != 0 || len(finished(log.snapshot(), graph.OperationCommit)) != 0 {
 		t.Fatal("decode failure applied or committed input")
 	}
 	log = &recorder{}

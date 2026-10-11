@@ -90,7 +90,7 @@ func interruptionCall(ctx context.Context, r *graph.Runner[state], store graph.S
 		if stateErr != nil {
 			return out, stateErr
 		}
-		if v.Total != v.Round*width || v.Values["sum"] != v.Round*width*(width+1)/2 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*(width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+uint64(v.Round) {
+		if v.Total != v.Round*width || v.Values["sum"] != v.Round*width*(width+1)/2 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*(width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+uint64(2*v.Round) {
 			return out, fmt.Errorf("invalid round boundary: %+v", out.Checkpoint)
 		}
 	}

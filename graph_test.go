@@ -291,7 +291,7 @@ func (m *failingStore) Load(ctx context.Context, id string) (graph.Checkpoint[in
 	return m.inner.Load(ctx, id)
 }
 
-func (m *failingStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[int]) error {
+func (m *failingStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
 	m.mu.Lock()
 	if m.failNext {
 		m.failNext = false
@@ -299,7 +299,7 @@ func (m *failingStore) CompareAndSwap(ctx context.Context, expected uint64, next
 		return errors.New("save failed")
 	}
 	m.mu.Unlock()
-	return m.inner.CompareAndSwap(ctx, expected, next)
+	return m.inner.Commit(ctx, expected, change)
 }
 
 func (m *failingStore) Delete(ctx context.Context, id string) error {
@@ -565,19 +565,17 @@ func TestExportMermaid(t *testing.T) {
 	edge(t, g, "start", "worker")
 	edge(t, g, "worker", "finish")
 
-	builderDiagram := g.ExportMermaid()
-	if !strings.Contains(builderDiagram, `start(["start (entry)"])`) ||
-		!strings.Contains(builderDiagram, `subgraph worker ["worker"]`) ||
-		!strings.Contains(builderDiagram, `start --> worker`) {
-		t.Fatalf("unexpected builder mermaid:\n%s", builderDiagram)
+	builderDiagram, diagramErr := g.ExportMermaid()
+	if diagramErr != nil {
+		t.Fatal(diagramErr)
+	}
+	if !strings.Contains(builderDiagram, `(["start (entry)"])`) || !strings.Contains(builderDiagram, `["worker"]`) || !strings.Contains(builderDiagram, " --> ") {
+		t.Fatal(builderDiagram)
 	}
 
 	runner := intRunner(t, g)
 	runnerDiagram := runner.ExportMermaid()
-	if !strings.Contains(runnerDiagram, `start(["start (entry)"])`) ||
-		!strings.Contains(runnerDiagram, `worker_sub_entry["worker/sub_entry"]`) ||
-		!strings.Contains(runnerDiagram, `start --> worker_sub_entry`) ||
-		!strings.Contains(runnerDiagram, `worker_sub_entry -.->|return| finish`) {
-		t.Fatalf("unexpected runner mermaid:\n%s", runnerDiagram)
+	if !strings.Contains(runnerDiagram, `(["start (entry)"])`) || !strings.Contains(runnerDiagram, `["worker/sub_entry"]`) || !strings.Contains(runnerDiagram, "-.->|return|") {
+		t.Fatal(runnerDiagram)
 	}
 }

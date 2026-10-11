@@ -2,65 +2,55 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 
 	"github.com/afterlune/luneGraph/internal/limit"
+	"github.com/afterlune/luneGraph/internal/model"
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
 type workResult[S any] struct {
-	id         string
+	ref        taskRef
+	callID     string
 	transition Transition[S]
+	state      S
 	err        error
 }
-
 type workerTask[S any] struct {
 	ctx      context.Context
-	id       string
+	ref      taskRef
 	call     CallInfo
 	spec     NodeSpec[S]
+	join     JoinSpec[S]
 	state    S
+	values   []S
 	obs      *observation.Session
 	revision uint64
 }
 
 func hasReady[S any](s Checkpoint[S]) bool {
-	for _, inv := range s.Invocations {
-		if inv.Status == InvocationReady {
+	for _, v := range s.Invocations {
+		if v.Status == InvocationReady {
 			return true
 		}
 	}
 	return false
 }
-
-func availableCommits[S any](s Checkpoint[S]) uint64 {
-	steps := math.MaxUint64 - s.Steps
-	revisions := math.MaxUint64 - s.Revision
-	if steps < revisions {
-		return steps
-	}
-	return revisions
-}
-
-func cancelPrunedInvocations[S any](checkpoint *Checkpoint[S], index *invocationIndex, running map[string]context.CancelFunc) {
-	for id, cancel := range running {
-		_, current := indexedInvocation(index, checkpoint, id)
-		if current == nil || current.Status != InvocationReady {
-			cancel()
-		}
-	}
-}
-
 func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S], obs *observation.Session) (Result[S], error) {
+	return r.driveLive(ctx, newLive(start), opts, obs)
+}
+
+func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], obs *observation.Session) (Result[S], error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	limiter := opts.Limiter
-	workerLimit := limit.Capacity(limiter, opts.MaxConcurrency)
+	workerLimit := limit.Capacity(opts.Limiter, opts.MaxConcurrency)
 	results := make(chan workResult[S], workerLimit)
-	running := make(map[string]context.CancelFunc, workerLimit)
 	tasks := make(chan workerTask[S], workerLimit)
+	running := make(map[taskRef]context.CancelFunc)
+	var prepared map[taskRef]workerTask[S]
 	var workers sync.WaitGroup
 	workerCount := 0
 	startWorker := func() {
@@ -69,21 +59,13 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		go func() {
 			defer workers.Done()
 			for t := range tasks {
-				var transition Transition[S]
-				var err error
-				if t.obs == nil {
-					transition, err = r.runNode(t.ctx, t.call, t.spec, t.state)
-				} else {
-					transition, err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.spec, t.state)
-				}
-				limit.Release(limiter)
-				results <- workResult[S]{id: t.id, transition: transition, err: err}
+				out := r.executeTask(t)
+				limit.Release(opts.Limiter)
+				results <- out
 			}
 		}()
 	}
 	defer func() {
-		// Also cancel on an escaping Store panic before waiting for workers.
-		// Callback permits are released by their workers on every return.
 		stop()
 		for _, cancel := range running {
 			cancel()
@@ -91,196 +73,287 @@ func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options
 		close(tasks)
 		workers.Wait()
 	}()
-	s := start
-	index := newInvocationIndex(s)
-	// Read topology only. A value parameter keeps commit candidates from
-	// escaping through the cancellation callback passed to settleGroups.
-	cancelPruned := func(candidate Checkpoint[S]) {
-		cancelPrunedInvocations(&candidate, &index, running)
-	}
-	var progress groupProgress
-	var spare Checkpoint[S]
-	used := 0
-	cursor := s.ScheduleCursor
 	drain := func() {
 		stop()
 		for _, cancel := range running {
 			cancel()
 		}
-		for len(running) != 0 {
-			finished := <-results
-			delete(running, finished.id)
+		for len(running) > 0 {
+			out := <-results
+			delete(running, out.ref)
 		}
 	}
+	finish := func(status Status, err error) (Result[S], error) {
+		drain()
+		if status == StatusInterrupted && ctx.Err() != nil {
+			status = StatusCancelled
+			err = ctx.Err()
+		}
+		return resultWith(l.snapshot(), status), err
+	}
+	l.failureOverride = opts.FailureOverride
+	used := 0
+	cursor := l.header.ScheduleCursor
 	reserved := false
 	defer func() {
 		if reserved {
-			limit.Release(limiter)
+			limit.Release(opts.Limiter)
 		}
 	}()
 	for {
-		capacityBlocked := false
 		if err := ctx.Err(); err != nil {
-			drain()
-			return resultWith(s, StatusCancelled), err
+			return finish(StatusCancelled, err)
 		}
-		for len(running) < workerLimit && used < opts.MaxSteps {
-			if uint64(len(running)) >= availableCommits(s) {
+		var immediateResult workResult[S]
+		immediate := false
+		blocked := false
+		for len(running) < workerLimit {
+			if uint64(len(running)) >= math.MaxUint64-l.header.Revision && len(running) > 0 {
 				break
 			}
-			next, number := selectReady(s, &index, running, cursor)
-			if next == nil {
+			runningNodes := uint64(0)
+			for ref := range running {
+				if !ref.join {
+					runningNodes++
+				}
+			}
+			ref, ok := l.next(used < opts.MaxSteps && runningNodes < math.MaxUint64-l.header.Steps, running)
+			if !ok {
 				break
 			}
-			if !reserved && !limit.TryAcquire(limiter) {
-				capacityBlocked = true
+			if ref.join && l.groups[ref.id].JoinNode == "" {
+				c, terminalErr, err := r.resultChange(l, workResult[S]{ref: ref})
+				if err != nil {
+					return finish(errorStatus(err), err)
+				}
+				c.Header.ScheduleCursor = cursor
+				if err := r.submit(ctx, l, c, opts.Store, obs); err != nil {
+					return finish(errorStatus(err), err)
+				}
+				if terminalErr != nil {
+					return finish(StatusFailed, terminalErr)
+				}
+				if l.header.Completed {
+					return finish(statusOf(l.header, false), nil)
+				}
+				for pending, cancel := range running {
+					if !l.valid(pending) {
+						cancel()
+					}
+				}
+				continue
+			}
+			if l.header.Revision == math.MaxUint64 || (!ref.join && l.header.Steps == math.MaxUint64) {
+				return finish(StatusFailed, ErrExecutionLimit)
+			}
+			var task workerTask[S]
+			var err error
+			// Ready join inputs cannot change while this activation is pending.
+			// Reuse admission-blocked inputs rather than cloning on every result.
+			if ref.join {
+				var cached bool
+				task, cached = prepared[ref]
+				if !cached {
+					if reserved {
+						limit.Release(opts.Limiter)
+						reserved = false
+					}
+					task, err = r.prepareTask(runCtx, l, ref, obs)
+					if err != nil {
+						return finish(errorStatus(err), err)
+					}
+					if prepared == nil {
+						prepared = make(map[taskRef]workerTask[S])
+					}
+					prepared[ref] = task
+				}
+			}
+			if !reserved && !limit.TryAcquire(opts.Limiter) {
+				l.enqueue(ref)
+				blocked = true
 				break
 			}
 			reserved = false
-			state, err := r.cloneState(next.State, next.ID)
-			if err != nil {
-				limit.Release(limiter)
-				drain()
-				return resultWith(s, StatusFailed), fmt.Errorf("clone node state: %w", err)
+			if !ref.join {
+				task, err = r.prepareTask(runCtx, l, ref, obs)
+				if err != nil {
+					limit.Release(opts.Limiter)
+					return finish(errorStatus(err), err)
+				}
 			}
 			if err := ctx.Err(); err != nil {
-				limit.Release(limiter)
-				drain()
-				return resultWith(s, StatusCancelled), err
+				limit.Release(opts.Limiter)
+				return finish(StatusCancelled, err)
 			}
-			id := next.ID
-			call := CallInfo{RunID: s.RunID, InvocationID: id, CallID: next.CallID, Node: next.Node, Step: s.Steps, BranchIndex: next.BranchIndex}
-			spec := r.nodes[next.Node]
+
 			nodeCtx, cancel := context.WithCancel(runCtx)
-			running[id] = cancel
-			used++
-			cursor = number
+			task.ctx = nodeCtx
+			task.call.Step = l.header.Steps
+			task.revision = l.header.Revision
+			delete(prepared, ref)
+			running[ref] = cancel
+			if !ref.join {
+				used++
+				cursor = invocationNumber(ref.id)
+			}
+			// A lone root path has no other callback to schedule alongside it.
+			// Execute it on the driver to avoid a worker round trip per step.
+			if !ref.join && l.invocationCount() == 1 && len(l.groups) == 0 {
+				immediateResult = r.executeTask(task)
+				limit.Release(opts.Limiter)
+				immediate = true
+				break
+			}
 			if len(running) > workerCount {
 				startWorker()
 			}
-			tasks <- workerTask[S]{
-				ctx:      nodeCtx,
-				id:       id,
-				call:     call,
-				spec:     spec,
-				state:    state,
-				obs:      obs,
-				revision: s.Revision,
-			}
+			tasks <- task
 		}
-		if len(running) == 0 && !capacityBlocked {
-			if hasReady(s) && availableCommits(s) == 0 {
-				return resultWith(s, StatusFailed), fmt.Errorf("schedule next node: %w", ErrExecutionLimit)
+		if len(running) == 0 && !blocked && !immediate {
+			cp := l.snapshot()
+			if hasReady(cp) && (cp.Steps == math.MaxUint64 || cp.Revision == math.MaxUint64) {
+				return resultWith(cp, StatusFailed), ErrExecutionLimit
 			}
-			markCompleted(&s)
-			if !s.Completed {
+			if cp.Completed {
+				return resultWith(cp, statusOf(cp, false)), nil
+			}
+			if !hasReady(cp) && len(cp.Groups) > 0 {
 				waiting := false
-				for _, inv := range s.Invocations {
-					if inv.Status == InvocationWaiting || inv.Status == InvocationReady {
+				for _, v := range cp.Invocations {
+					if v.Status == InvocationWaiting {
 						waiting = true
-						break
 					}
 				}
 				if !waiting {
-					return resultWith(s, StatusFailed), invalidCheckpoint("execution has unresolved groups without runnable or waiting invocations")
+					return resultWith(cp, StatusFailed), invalidCheckpoint("unresolved execution has no runnable work")
 				}
 			}
-			return resultWith(s, statusOf(s, used >= opts.MaxSteps)), nil
+			return resultWith(cp, statusOf(cp, used >= opts.MaxSteps)), nil
 		}
-		var finished workResult[S]
 		var slots chan<- struct{}
-		if capacityBlocked {
-			slots = limit.Slots(limiter)
+		if blocked {
+			slots = limit.Slots(opts.Limiter)
 		}
-		select {
-		case slots <- struct{}{}:
-			reserved = true
-			continue
-		case <-ctx.Done():
-			drain()
-			return resultWith(s, StatusCancelled), ctx.Err()
-		case finished = <-results:
-		}
-		running[finished.id]()
-		delete(running, finished.id)
-		if err := ctx.Err(); err != nil {
-			drain()
-			return resultWith(s, StatusCancelled), err
-		}
-		_, inv := indexedInvocation(&index, &s, finished.id)
-		if inv == nil || inv.Status != InvocationReady {
-			obs.DiscardNode(ctx, finished.id)
-			continue
-		}
-		obs.SelectNode(finished.id)
-		if isCallbackInterruption(finished.err) {
-			drain()
-			return interruptedResult(ctx, s, finished.err)
-		}
-		candidate := copyCheckpointInto(&spare, s)
-		candidate.Steps++
-		var processErr error
-		ended := false
-		if finished.err == nil {
-			ended, processErr = r.applyTransition(&candidate, &index, finished.id, finished.transition)
-			if processErr != nil {
-				drain()
-				return resultWith(s, errorStatus(processErr)), processErr
-			}
+		var out workResult[S]
+		if immediate {
+			out = immediateResult
 		} else {
-			processErr = finished.err
-		}
-		if processErr != nil {
-			candidate = copyCheckpointInto(&spare, s)
-			candidate.Steps++
-			scope := r.scope(r.nodes[inv.Node].OnError, opts)
-			if failureErr := r.recordFailure(&candidate, &index, inv.ID, inv.Node, scope, processErr); failureErr != nil {
-				if candidate.Failure != nil {
-					candidate.ScheduleCursor = cursor
-					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, failureErr, opts.Store, obs)
-					drain()
-					return result, commitErr
-				}
-				drain()
-				return resultWith(s, StatusFailed), failureErr
-			}
-			// Removed callbacks must release their permits before an enclosing
-			// join can wait for admission. Cancellation is invocation-local;
-			// a rejected candidate can still replay from the last checkpoint.
-			if scope == FailGroup {
-				cancelPruned(candidate)
+			select {
+			case slots <- struct{}{}:
+				reserved = true
+				continue
+			case <-ctx.Done():
+				return finish(StatusCancelled, ctx.Err())
+			case out = <-results:
 			}
 		}
-		candidate.ScheduleCursor = cursor
-		if !ended {
-			if err := r.settleGroups(ctx, &candidate, &index, &progress, opts.FailureOverride, opts.Limiter, obs, cancelPruned); err != nil {
-				if isJoinInterruption(err) {
-					drain()
-					return interruptedResult(ctx, s, err)
-				}
-				if candidate.Failure != nil {
-					result, commitErr := r.commitTerminalFailure(ctx, s, candidate, err, opts.Store, obs)
-					drain()
-					return result, commitErr
-				}
-				drain()
-				return resultWith(s, errorStatus(err)), err
-			}
-			markCompleted(&candidate)
+		running[out.ref]()
+		delete(running, out.ref)
+		if err := ctx.Err(); err != nil {
+			return finish(StatusCancelled, err)
 		}
-		previous := s
-		committed, err := r.commit(ctx, s, candidate, opts.Store, obs)
+		callID := out.callID
+		if !l.valid(out.ref) {
+			obs.DiscardCallback(ctx, callID)
+			continue
+		}
+		obs.SelectCallback(callID)
+		if isCallbackInterruption(out.err) {
+			return finish(StatusInterrupted, out.err)
+		}
+		c, terminalErr, err := r.resultChange(l, out)
 		if err != nil {
-			drain()
-			return resultWith(previous, errorStatus(err)), err
+			return finish(errorStatus(err), err)
 		}
-		s = committed
-		spare = previous
-		clearCheckpointStateValues(&spare)
-		cancelPrunedInvocations(&s, &index, running)
-		if ended {
-			drain()
-			return resultWith(s, statusOf(s, false)), nil
+		c.Header.ScheduleCursor = cursor
+		if err := r.submit(ctx, l, c, opts.Store, obs); err != nil {
+			return finish(errorStatus(err), err)
+		}
+		for ref := range prepared {
+			if !l.valid(ref) {
+				delete(prepared, ref)
+			}
+		}
+		for ref, cancel := range running {
+			if !l.valid(ref) {
+				cancel()
+			}
+		}
+		if terminalErr != nil {
+			return finish(StatusFailed, terminalErr)
+		}
+		if l.header.Completed {
+			return finish(statusOf(l.header, false), nil)
 		}
 	}
+}
+
+func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
+	out := workResult[S]{ref: t.ref, callID: t.call.CallID}
+	if t.ref.join {
+		if t.join.Merge != nil {
+			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.values)
+		}
+	} else if t.obs == nil {
+		out.transition, out.err = r.runNode(t.ctx, t.call, t.spec, t.state)
+	} else {
+		out.transition, out.err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.spec, t.state)
+	}
+	return out
+}
+
+func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, obs *observation.Session) (workerTask[S], error) {
+	t := workerTask[S]{ctx: ctx, ref: ref, obs: obs, revision: l.header.Revision}
+	if ref.join {
+		g := l.groups[ref.id]
+		parent, _ := l.invocation(g.ParentID)
+		t.join = r.joins[g.JoinNode]
+		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
+		for _, id := range g.Children {
+			child, _ := l.invocation(id)
+			if child.Status == InvocationJoined {
+				value, err := r.cloneState(child.State, id)
+				if err != nil {
+					return t, fmt.Errorf("clone join input: %w", err)
+				}
+				t.values = append(t.values, value)
+			}
+		}
+	} else {
+		v, _ := l.invocation(ref.id)
+		state, err := r.cloneState(v.State, v.ID)
+		if err != nil {
+			return t, fmt.Errorf("clone node state: %w", err)
+		}
+		t.state = state
+		t.spec = r.nodes[v.Node]
+		t.call = CallInfo{RunID: l.header.RunID, InvocationID: v.ID, CallID: v.CallID, Node: v.Node, Step: l.header.Steps, BranchIndex: v.BranchIndex}
+	}
+	return t, nil
+}
+
+func (r *Runner[S]) submit(ctx context.Context, l *live[S], c Change[S], store Store[S], obs *observation.Session) error {
+	if err := ctx.Err(); err != nil {
+		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
+		return err
+	}
+	if l.header.Revision == math.MaxUint64 {
+		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, ErrExecutionLimit)
+		return ErrExecutionLimit
+	}
+	c.Header.Revision = l.header.Revision + 1
+	l.complete(&c)
+	if store != nil {
+		if err := store.Commit(ctx, l.header.Revision, c); err != nil {
+			outcome := model.OutcomeUnknown
+			if errors.Is(err, ErrConflict) {
+				outcome = model.OutcomeDiscarded
+			}
+			obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+			return err
+		}
+	}
+	l.install(c)
+	obs.ResolveSelected(ctx, model.OutcomeCommitted, c.Header.Revision, nil)
+	return nil
 }

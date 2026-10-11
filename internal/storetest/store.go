@@ -38,8 +38,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		initial.Invocations[0].State.Values["n"] = 99
 		initial.Invocations[0].Next[0] = "changed"
 		initial.Groups[0].Children[0] = "changed"
-		initial.Failure.Message = "changed"
-		initial.Final.Values["n"] = 99
+
 		loaded, err := store.Load(ctx, "run")
 		if err != nil {
 			t.Fatal(err)
@@ -48,8 +47,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		loaded.Invocations[0].State.Values["n"] = 88
 		loaded.Invocations[0].Next[0] = "changed"
 		loaded.Groups[0].Children[0] = "changed"
-		loaded.Failure.Message = "changed"
-		loaded.Final.Values["n"] = 88
+
 		again, err := store.Load(ctx, "run")
 		if err != nil {
 			t.Fatal(err)
@@ -57,7 +55,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		assertFixture(t, again, 1)
 		again.Revision = 2
 		again.Invocations[0].State.Values["n"] = 2
-		if err := store.CompareAndSwap(ctx, 1, again); err != nil {
+		if err := store.Commit(ctx, 1, (again).Change()); err != nil {
 			t.Fatal(err)
 		}
 		again.Invocations[0].State.Values["n"] = 99
@@ -85,11 +83,11 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		next := fixture()
 		next.Revision = 2
 		next.Steps = 1
-		if err := store.CompareAndSwap(ctx, 2, next); !errors.Is(err, graph.ErrConflict) {
+		if err := store.Commit(ctx, 2, (next).Change()); !errors.Is(err, graph.ErrConflict) {
 			t.Fatalf("stale revision = %v", err)
 		}
 		next.MachineID = "other-machine"
-		if err := store.CompareAndSwap(ctx, 1, next); !errors.Is(err, graph.ErrConflict) {
+		if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, graph.ErrConflict) {
 			t.Fatalf("wrong machine = %v", err)
 		}
 		stored, err := store.Load(ctx, "run")
@@ -123,16 +121,16 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		next := fixture()
 		next.Revision = 2
 		next.FormatVersion++
-		if err := store.CompareAndSwap(ctx, 1, next); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+		if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 			t.Fatalf("invalid CAS header = %v", err)
 		}
 		next.FormatVersion = graph.CheckpointFormatVersion
 		next.Revision = 3
-		if err := store.CompareAndSwap(ctx, 1, next); !errors.Is(err, graph.ErrConflict) {
+		if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, graph.ErrConflict) {
 			t.Fatalf("skipped revision = %v", err)
 		}
 		next.Revision = math.MaxUint64
-		if err := store.CompareAndSwap(ctx, math.MaxUint64, next); !errors.Is(err, graph.ErrExecutionLimit) {
+		if err := store.Commit(ctx, math.MaxUint64, (next).Change()); !errors.Is(err, graph.ErrExecutionLimit) {
 			t.Fatalf("exhausted revision = %v", err)
 		}
 		stored, err := store.Load(ctx, "run")
@@ -166,21 +164,20 @@ func fixture() graph.Checkpoint[State] {
 	// Store copy tests populate every reference-bearing field; this is not a
 	// resumable runner checkpoint.
 	return graph.Checkpoint[State]{
-		FormatVersion:    graph.CheckpointFormatVersion,
-		RunID:            "run",
-		MachineID:        "machine-v1",
-		Revision:         1,
-		Final:            &State{Values: map[string]int{"n": 1}},
+		FormatVersion: graph.CheckpointFormatVersion,
+		RunID:         "run",
+		MachineID:     "machine-v1",
+		Revision:      1,
+
 		Invocations:      []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
 		Groups:           []graph.ActivationGroup{{ID: "g1", CallID: "c3", Children: []string{"i1"}}},
 		HadLocalFailures: true,
-		Failure:          &graph.Failure{InvocationID: "i1", Node: "work", Message: "failure"},
 	}
 }
 
 func assertFixture(t *testing.T, value graph.Checkpoint[State], revision uint64) {
 	t.Helper()
-	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || value.Failure == nil || value.Failure.Message != "failure" || !value.HadLocalFailures || value.Final.Values["n"] != 1 {
+	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || !value.HadLocalFailures {
 		t.Fatalf("stored checkpoint was mutated: %+v", value)
 	}
 }

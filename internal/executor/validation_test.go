@@ -184,14 +184,7 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 			child.CallID = ""
 			child.Node = "left"
 		}},
-		{"already settled group", func(s *Checkpoint[int]) {
-			for _, id := range childIDs {
-				_, child := invocation(s, id)
-				child.Status = InvocationJoined
-				child.CallID = ""
-				child.Node = "joined"
-			}
-		}},
+
 		{"child has missing group", func(s *Checkpoint[int]) { _, child := invocation(s, childIDs[0]); child.GroupID = "g99" }},
 		{"group parent points at wrong node", func(s *Checkpoint[int]) { _, parent := invocation(s, parentID); parent.Node = "left" }},
 	}

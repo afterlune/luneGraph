@@ -54,16 +54,16 @@ func TestStoreCopiesAndComparesCheckpoints(t *testing.T) {
 	}
 	again.Revision = 2
 	again.Invocations[0].State.Values["n"] = 2
-	if err := store.CompareAndSwap(ctx, 1, again); err != nil {
+	if err := store.Commit(ctx, 1, (again).Change()); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompareAndSwap(ctx, 1, again); !errors.Is(err, graph.ErrConflict) {
+	if err := store.Commit(ctx, 1, (again).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("stale write = %v", err)
 	}
 	otherMachine := again
 	otherMachine.Revision = 3
 	otherMachine.MachineID = "other"
-	if err := store.CompareAndSwap(ctx, 2, otherMachine); !errors.Is(err, graph.ErrConflict) {
+	if err := store.Commit(ctx, 2, (otherMachine).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("different machine = %v", err)
 	}
 	if err := store.Create(ctx, initial); !errors.Is(err, graph.ErrConflict) {
@@ -93,7 +93,7 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			results <- store.CompareAndSwap(ctx, 1, graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 2, Steps: uint64(value + 1)})
+			results <- store.Commit(ctx, 1, (graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 2, Steps: uint64(value + 1)}).Change())
 		}()
 	}
 	workers.Wait()
@@ -128,7 +128,7 @@ func TestStoreEdgeCases(t *testing.T) {
 	if _, err := nilStore.Load(ctx, "run-nil"); err == nil {
 		t.Fatal("expected error on Load with nil store")
 	}
-	if err := nilStore.CompareAndSwap(ctx, 1, cp); err == nil {
+	if err := nilStore.Commit(ctx, 1, (cp).Change()); err == nil {
 		t.Fatal("expected error on CAS with nil store")
 	}
 	if err := nilStore.Delete(ctx, "run-nil"); err == nil {

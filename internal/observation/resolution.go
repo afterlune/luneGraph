@@ -16,32 +16,7 @@ func executionCallback(op model.EventOperation) bool {
 	return op == model.OperationNode || op == model.OperationJoin || op == model.OperationApply
 }
 
-// SelectNode attaches the returned node outcome to the current candidate.
-func (s *Session) SelectNode(invocationID string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, pending := range s.pending {
-		if pending.event.Operation == model.OperationNode && pending.event.InvocationID == invocationID {
-			pending.selected = true
-			s.pending[id] = pending
-			return
-		}
-	}
-}
-
-func (s *Session) DiscardNode(ctx context.Context, invocationID string) {
-	if s == nil {
-		return
-	}
-	s.SelectNode(invocationID)
-	s.ResolveSelected(ctx, model.OutcomeDiscarded, 0, nil)
-}
-
-// ResolveSelected resolves one candidate, including its triggering callback
-// and every join run while settling that candidate. Revision zero preserves
+// ResolveSelected resolves the selected independent callback. Revision zero preserves
 // each callback's base revision when commit was not entered.
 func (s *Session) ResolveSelected(ctx context.Context, outcome model.CallbackOutcome, revision uint64, err error) {
 	s.resolve(ctx, false, outcome, revision, err)
@@ -78,4 +53,25 @@ func (s *Session) resolve(ctx context.Context, all bool, outcome model.CallbackO
 	}
 	clear(events)
 	s.resolved = events[:0]
+}
+
+// SelectCallback attaches exactly one independently committed callback.
+func (s *Session) SelectCallback(callID string) {
+	if s == nil || callID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.pending[callID]
+	if ok {
+		p.selected = true
+		s.pending[callID] = p
+	}
+}
+func (s *Session) DiscardCallback(ctx context.Context, callID string) {
+	if s == nil || callID == "" {
+		return
+	}
+	s.SelectCallback(callID)
+	s.ResolveSelected(ctx, model.OutcomeDiscarded, 0, nil)
 }

@@ -10,11 +10,12 @@ import (
 
 type casPanicStore struct{ graph.Store[int] }
 
-func (s casPanicStore) CompareAndSwap(ctx context.Context, before uint64, cp graph.Checkpoint[int]) error {
+func (s casPanicStore) Commit(ctx context.Context, before uint64, change graph.Change[int]) error {
+	cp := change.Checkpoint()
 	if cp.Revision == 3 {
 		panic("CAS panic")
 	}
-	return s.Store.CompareAndSwap(ctx, before, cp)
+	return s.Store.Commit(ctx, before, change)
 }
 
 func TestStorePanicDrainsWorkersAndReleasesBudgetWithoutFakeResolution(t *testing.T) {

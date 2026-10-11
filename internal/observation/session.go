@@ -48,7 +48,7 @@ func (s *Session) Begin(ctx context.Context, event model.Event) Span {
 		if s.pending == nil {
 			s.pending = make(map[string]pendingCallback)
 		}
-		s.pending[event.CallID] = pendingCallback{event: event, selected: event.Operation != model.OperationNode}
+		s.pending[event.CallID] = pendingCallback{event: event, selected: event.Operation == model.OperationApply}
 		s.mu.Unlock()
 	}
 	s.deliver(ctx, event)

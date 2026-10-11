@@ -46,7 +46,7 @@ func TestLoopBudgetAndResumeEvents(t *testing.T) {
 		}
 		seen[e.CallID] = true
 	}
-	if len(seen) != 3 || len(finished(log.snapshot(), graph.OperationCompareAndSwap)) != 0 {
+	if len(seen) != 3 || len(finished(log.snapshot(), graph.OperationCommit)) != 0 {
 		t.Fatal("wrong node or store count")
 	}
 }

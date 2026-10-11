@@ -17,7 +17,7 @@ func TestCompletedPopulationRetentionAndRecovery(t *testing.T) {
 			r, store := compile(t, chainGraph(t, 2)), openStore(t, kind)
 			var calls atomic.Int64
 			observer := graph.ObserverFunc(func(_ context.Context, e graph.Event) {
-				if e.Phase == graph.PhaseStarted && (e.Operation == graph.OperationNode || e.Operation == graph.OperationJoin || e.Operation == graph.OperationApply || e.Operation == graph.OperationDecode || e.Operation == graph.OperationCreate || e.Operation == graph.OperationCompareAndSwap) {
+				if e.Phase == graph.PhaseStarted && (e.Operation == graph.OperationNode || e.Operation == graph.OperationJoin || e.Operation == graph.OperationApply || e.Operation == graph.OperationDecode || e.Operation == graph.OperationCreate || e.Operation == graph.OperationCommit) {
 					calls.Add(1)
 				}
 			})

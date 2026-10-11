@@ -43,9 +43,9 @@ func productionPackages(input io.Reader) ([]string, error) {
 		if p.Module == nil || !p.Module.Main || len(p.GoFiles)+len(p.CgoFiles) == 0 {
 			continue
 		}
-		// These two packages provide test and verification infrastructure;
+		// These packages provide test and verification infrastructure;
 		// all other source-bearing packages, including examples, participate.
-		if p.ImportPath == p.Module.Path+"/internal/storetest" || p.ImportPath == p.Module.Path+"/internal/coveragecheck" {
+		if p.ImportPath == p.Module.Path+"/internal/storetest" || p.ImportPath == p.Module.Path+"/internal/coveragecheck" || p.ImportPath == p.Module.Path+"/internal/testchange" {
 			continue
 		}
 		if p.ImportPath == "" || p.Module.Path == "" {

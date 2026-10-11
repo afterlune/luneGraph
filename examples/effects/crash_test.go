@@ -22,7 +22,10 @@ func TestEffectCrashHelper(t *testing.T) {
 	if os.Getenv("LUNE_EFFECT_CRASH_HELPER") != "1" {
 		t.Skip("subprocess helper")
 	}
-	ctx := context.Background()
+	// Keep a timer alive until the parent kills this blocked helper. Otherwise
+	// Go may terminate it with deadlock detection before the kill/recovery check.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
 	store, err := sqlite.Open(ctx, os.Getenv("LUNE_EFFECT_CHECKPOINTS"), checkpoint.JSON[state]{})
 	check(t, err)
 	defer store.Close()

@@ -107,8 +107,9 @@ type notifyingStore struct {
 	committed chan graph.Checkpoint[int]
 }
 
-func (n *notifyingStore) CompareAndSwap(ctx context.Context, expected uint64, next graph.Checkpoint[int]) error {
-	if err := n.Store.CompareAndSwap(ctx, expected, next); err != nil {
+func (n *notifyingStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
+	next := change.Checkpoint()
+	if err := n.Store.Commit(ctx, expected, change); err != nil {
 		return err
 	}
 	if next.Steps == 2 {

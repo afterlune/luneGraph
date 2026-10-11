@@ -14,8 +14,8 @@ func TestResolutionLedgerRetainsOnlyPendingMetadata(t *testing.T) {
 	for range 100 {
 		span := s.Begin(ctx, model.Event{Operation: model.OperationNode, CallID: "c2", InvocationID: "i1", Revision: 3})
 		span.End(ctx, model.Event{Revision: 3, Action: model.ActionEndExecution})
-		s.SelectNode("missing")
-		s.SelectNode("i1")
+		s.SelectCallback("missing")
+		s.SelectCallback("c2")
 		s.ResolveSelected(ctx, model.OutcomeCommitted, 4, nil)
 		if len(s.pending) != 0 {
 			t.Fatal("retained callback history")
@@ -36,7 +36,7 @@ func TestResolutionLedgerRetainsOnlyPendingMetadata(t *testing.T) {
 	if len(s.pending) != 1 {
 		t.Fatal("unselected node resolved with another candidate")
 	}
-	s.DiscardNode(ctx, "i2")
+	s.DiscardCallback(ctx, "c3")
 	if len(s.pending) != 0 || events[len(events)-1].Outcome != model.OutcomeDiscarded || events[len(events)-1].Revision != 4 {
 		t.Fatal("discard did not retain base revision")
 	}
@@ -47,8 +47,8 @@ func TestResolutionLedgerRetainsOnlyPendingMetadata(t *testing.T) {
 		t.Fatal("pending join not discarded")
 	}
 	var disabled *Session
-	disabled.SelectNode("i1")
-	disabled.DiscardNode(ctx, "i1")
+	disabled.SelectCallback("c2")
+	disabled.DiscardCallback(ctx, "c2")
 	disabled.ResolveSelected(ctx, model.OutcomeUnknown, 3, nil)
 	disabled.DiscardPending(ctx, nil)
 }

@@ -18,7 +18,7 @@ func checkLimitedBoundary(cp graph.Checkpoint[state], id string) error {
 	if err != nil {
 		return err
 	}
-	if v.Owner != id || v.Round < 1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || cp.Steps != uint64(v.Round*10) || cp.Revision != uint64(v.Round*11) || cp.Completed || cp.HadLocalFailures || cp.Failure != nil || len(cp.Groups) != 0 || len(cp.Invocations) != 1 || cp.Invocations[0].Status != graph.InvocationWaiting {
+	if v.Owner != id || v.Round < 1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || cp.Steps != uint64(v.Round*10) || cp.Revision != uint64(v.Round*12) || cp.Completed || cp.HadLocalFailures || cp.Failure != nil || len(cp.Groups) != 0 || len(cp.Invocations) != 1 || cp.Invocations[0].Status != graph.InvocationWaiting {
 		return fmt.Errorf("invalid limited boundary %s: %+v", id, cp)
 	}
 	return nil
@@ -126,7 +126,7 @@ func TestCapacitySharedLimiterCancellationRecovery(t *testing.T) {
 				if err != nil || recovery.RecoverySteps == 0 {
 					t.Fatalf("recovery=%+v %v", recovery, err)
 				}
-				if p.slots[0].checkpoint.Steps != 20 || p.slots[0].checkpoint.Revision != 22 {
+				if p.slots[0].checkpoint.Steps != 20 || p.slots[0].checkpoint.Revision != 24 {
 					t.Fatal("continuation replayed or round skipped")
 				}
 				if _, err := p.advance(fresh, 1); err != nil {

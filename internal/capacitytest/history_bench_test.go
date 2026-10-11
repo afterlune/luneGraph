@@ -34,7 +34,7 @@ func BenchmarkCapacityHistory(b *testing.B) {
 							b.Fatal(err)
 						}
 					}
-					payload, err := (checkpoint.JSON[state]{}).Append(nil, cp)
+					payload, err := (checkpoint.JSON[graph.Checkpoint[state]]{}).Append(nil, cp)
 					if err != nil {
 						b.Fatal(err)
 					}

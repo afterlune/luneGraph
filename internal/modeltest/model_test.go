@@ -145,9 +145,16 @@ func (m model) check(cp graph.Checkpoint[state]) error {
 		if err := m.checkState(*boundary); err != nil {
 			return err
 		}
-		if boundary.Branch != -1 || boundary.Inputs != boundary.Round-1 || cp.Steps != uint64(boundary.Round*m.roundSteps()) || cp.Revision != 1+cp.Steps+uint64(boundary.Inputs) {
+		if boundary.Branch != -1 || boundary.Inputs != boundary.Round-1 || cp.Steps != uint64(boundary.Round*m.roundSteps()) || cp.Revision != 1+cp.Steps+uint64(boundary.Inputs)+uint64(m.roundJoins()*boundary.Round) {
 			return fmt.Errorf("boundary differs from model: %+v", cp)
 		}
 	}
 	return nil
+}
+
+func (m model) roundJoins() int {
+	if m.width > 0 {
+		return 1
+	}
+	return 0
 }

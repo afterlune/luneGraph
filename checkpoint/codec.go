@@ -4,8 +4,6 @@ package checkpoint
 import (
 	"encoding/json"
 	"errors"
-
-	graph "github.com/afterlune/luneGraph"
 )
 
 // ErrNotFound reports that a run has no stored checkpoint.
@@ -15,22 +13,21 @@ var ErrNotFound = errors.New("checkpoint not found")
 // match its database identity.
 var ErrCorrupt = errors.New("corrupt checkpoint")
 
-// Codec appends a complete checkpoint encoding to a caller-owned buffer and
-// decodes a checkpoint from bytes. Append must not retain dst or the returned
-// slice. Implementations must preserve all fields needed by Runner.Resume,
-// including callback IDs required to keep recovery deduplication stable.
-type Codec[S any] interface {
-	Append(dst []byte, value graph.Checkpoint[S]) ([]byte, error)
-	Unmarshal([]byte) (graph.Checkpoint[S], error)
+// StateCodec encodes application state and must support concurrent calls.
+// Append must append to, and not retain, dst or its returned slice. Unmarshal
+// returns an independent state. SQLite owns execution metadata and callback IDs.
+type StateCodec[S any] interface {
+	Append(dst []byte, value S) ([]byte, error)
+	Unmarshal([]byte) (S, error)
 }
 
 // JSON uses encoding/json. S must survive a JSON round trip without losing
 // state required by node, merge, or continuation callbacks.
 type JSON[S any] struct{}
 
-// Append writes the checkpoint's compact JSON representation to dst without
+// Append writes the value's compact JSON representation to dst without
 // the trailing newline added by json.Encoder.Encode.
-func (JSON[S]) Append(dst []byte, value graph.Checkpoint[S]) ([]byte, error) {
+func (JSON[S]) Append(dst []byte, value S) ([]byte, error) {
 	writer := appendWriter{dst: dst}
 	if err := json.NewEncoder(&writer).Encode(value); err != nil {
 		return writer.dst, err
@@ -41,8 +38,8 @@ func (JSON[S]) Append(dst []byte, value graph.Checkpoint[S]) ([]byte, error) {
 	return writer.dst, nil
 }
 
-func (JSON[S]) Unmarshal(data []byte) (graph.Checkpoint[S], error) {
-	var value graph.Checkpoint[S]
+func (JSON[S]) Unmarshal(data []byte) (S, error) {
+	var value S
 	err := json.Unmarshal(data, &value)
 	return value, err
 }

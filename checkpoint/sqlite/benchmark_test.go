@@ -60,7 +60,7 @@ func BenchmarkCheckpointCAS(b *testing.B) {
 				next.Invocations = append([]graph.Invocation[benchmarkState](nil), current.Invocations...)
 				next.Invocations[0].State = cloneBenchmarkStateValue(current.Invocations[0].State)
 				next.Invocations[0].State.Values["value-0"]++
-				if err := store.CompareAndSwap(context.Background(), current.Revision, next); err != nil {
+				if err := store.Commit(context.Background(), current.Revision, (next).Change()); err != nil {
 					b.Fatal(err)
 				}
 				if next.Revision != current.Revision+1 || len(next.Invocations[0].State.Values) != benchmarkStateSize {

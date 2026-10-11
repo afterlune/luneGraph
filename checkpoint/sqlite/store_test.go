@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"math"
 	"path/filepath"
@@ -71,10 +72,10 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	}
 	again.Revision = 2
 	again.Invocations[0].State.Values["n"] = 2
-	if err := store.CompareAndSwap(ctx, 1, again); err != nil {
+	if err := store.Commit(ctx, 1, (again).Change()); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompareAndSwap(ctx, 1, again); !errors.Is(err, graph.ErrConflict) {
+	if err := store.Commit(ctx, 1, (again).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("stale CAS = %v", err)
 	}
 	if err := store.Create(ctx, first); !errors.Is(err, graph.ErrConflict) {
@@ -86,18 +87,18 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	otherMachine := again
 	otherMachine.Revision = 3
 	otherMachine.MachineID = "other"
-	if err := store.CompareAndSwap(ctx, 2, otherMachine); !errors.Is(err, graph.ErrConflict) {
+	if err := store.Commit(ctx, 2, (otherMachine).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("different machine = %v", err)
 	}
 }
 
 type failingCodec struct{ failure error }
 
-func (c failingCodec) Append(dst []byte, _ graph.Checkpoint[state]) ([]byte, error) {
+func (c failingCodec) Append(dst []byte, _ state) ([]byte, error) {
 	return append(dst, "partial"...), c.failure
 }
-func (c failingCodec) Unmarshal([]byte) (graph.Checkpoint[state], error) {
-	return graph.Checkpoint[state]{}, c.failure
+func (c failingCodec) Unmarshal([]byte) (state, error) {
+	return state{}, c.failure
 }
 
 func TestCodecFailuresAndCorruptData(t *testing.T) {
@@ -108,7 +109,7 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1}
+	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{}}}}
 	if err := broken.Create(ctx, initial); !errors.Is(err, boom) {
 		t.Fatalf("encode error = %v", err)
 	}
@@ -134,7 +135,7 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	}
 	next := initial
 	next.Revision = 2
-	if err := broken.CompareAndSwap(ctx, 1, next); !errors.Is(err, boom) {
+	if err := broken.Commit(ctx, 1, (next).Change()); !errors.Is(err, boom) {
 		t.Fatalf("CAS encode error = %v", err)
 	}
 	if err := broken.Close(); err != nil {
@@ -156,7 +157,7 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	if err := good.Close(); err != nil {
 		t.Fatal(err)
 	}
-	validPayload, err := (checkpoint.JSON[state]{}).Append(nil, initial)
+	validPayload, err := json.Marshal(initial.Header())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestStoreReportsSQLiteStatementFailures(t *testing.T) {
 	setup(`CREATE TRIGGER reject_update BEFORE UPDATE ON checkpoints BEGIN SELECT RAISE(ABORT,'update failure'); END`)
 	next := value
 	next.Revision = 2
-	if err := store.CompareAndSwap(ctx, 1, next); err == nil {
+	if err := store.Commit(ctx, 1, (next).Change()); err == nil {
 		t.Fatal("CompareAndSwap ignored a SQLite statement failure")
 	}
 	setup("DROP TRIGGER reject_update")
@@ -281,7 +282,7 @@ func TestConcurrentCreateAndCompareAndSwap(t *testing.T) {
 			}
 			next := initial
 			next.Revision = 2
-			if err := store.CompareAndSwap(ctx, 1, next); err != nil {
+			if err := store.Commit(ctx, 1, (next).Change()); err != nil {
 				errorsByRun <- err
 				return
 			}
@@ -317,7 +318,7 @@ func TestRevisionUsesFullUint64Range(t *testing.T) {
 	}
 	wide := initial
 	wide.Revision = math.MaxUint64
-	payload, err := (checkpoint.JSON[state]{}).Append(nil, wide)
+	payload, err := json.Marshal(wide.Header())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +328,7 @@ func TestRevisionUsesFullUint64Range(t *testing.T) {
 	if err != nil || loaded.Revision != math.MaxUint64 {
 		t.Fatalf("wide revision = %+v, %v", loaded, err)
 	}
-	if err := store.CompareAndSwap(ctx, math.MaxUint64, wide); !errors.Is(err, graph.ErrExecutionLimit) {
+	if err := store.Commit(ctx, math.MaxUint64, (wide).Change()); !errors.Is(err, graph.ErrExecutionLimit) {
 		t.Fatalf("revision overflow = %v", err)
 	}
 }
@@ -355,7 +356,7 @@ func TestStoreDeleteEdgeCases(t *testing.T) {
 	if _, err := nilStore.Load(ctx, "nil-run"); err == nil {
 		t.Fatal("expected error on Load with nil store")
 	}
-	if err := nilStore.CompareAndSwap(ctx, 1, cp); err == nil {
+	if err := nilStore.Commit(ctx, 1, (cp).Change()); err == nil {
 		t.Fatal("expected error on CAS with nil store")
 	}
 	if err := nilStore.Delete(ctx, "nil-run"); err == nil {

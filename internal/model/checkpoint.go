@@ -11,7 +11,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 3
+const CheckpointFormatVersion uint32 = 4
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -97,16 +97,16 @@ type ResumeInput struct {
 }
 
 // Store provides optional checkpoint persistence. Create accepts revision one
-// and rejects an existing RunID. CompareAndSwap accepts the next revision for
-// the same run and machine, and rejects stale revisions or machine IDs. Both
-// writes reject malformed checkpoint headers with ErrInvalidCheckpoint.
-// Load returns an independent copy and reports a missing run with
-// checkpoint.ErrNotFound. ErrConflict guarantees no write. Other storage errors
-// may leave commit outcome unknown; callers should Load before retrying.
+// and rejects an existing RunID. Commit atomically applies a Change at expected+1,
+// rejecting stale revisions/machine IDs with ErrConflict (which guarantees no
+// write), terminal runs with ErrRunCompleted, and malformed changes with
+// ErrInvalidCheckpoint. Other Store errors can leave commit outcomes unknown;
+// callers must Load before retrying. Writes own copies; Load returns an independent
+// complete checkpoint and reports missing runs with checkpoint.ErrNotFound.
 type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)
-	CompareAndSwap(context.Context, uint64, Checkpoint[S]) error
+	Commit(context.Context, uint64, Change[S]) error
 	Delete(context.Context, string) error
 	// DeleteMany atomically removes the named runs. Missing and duplicate IDs
 	// are harmless. Invalid IDs reject the whole batch. An empty batch is a
@@ -115,7 +115,7 @@ type Store[S any] interface {
 	DeleteMany(context.Context, []string) error
 }
 
-// Options controls one call's budget, concurrency, storage, and failure scope.
+// Options controls one call's node-start budget, node/join concurrency, storage, and failure scope.
 type Options[S any] struct {
 	// Observer optionally receives transient execution events. Nil disables
 	// observation without allocating a session or reading clocks.

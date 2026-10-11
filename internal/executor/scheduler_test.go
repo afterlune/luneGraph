@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"errors"
-	"math"
 	"reflect"
 	"runtime"
 	"testing"
@@ -47,32 +46,8 @@ func TestSchedulerHelpers(t *testing.T) {
 		t.Fatal("waiting checkpoint status incorrect")
 	}
 
-	for _, checkpoint := range []Checkpoint[int]{
-		{},
-		{Invocations: []Invocation[int]{{Status: InvocationEnded}}},
-	} {
-		markCompleted(&checkpoint)
-		if !checkpoint.Completed {
-			t.Fatalf("terminal checkpoint was not completed: %+v", checkpoint)
-		}
-	}
-	for _, checkpoint := range []Checkpoint[int]{
-		{Groups: []ActivationGroup{{ID: "g1"}}},
-		{Invocations: []Invocation[int]{{Status: InvocationReady}}},
-		{Invocations: []Invocation[int]{{Status: InvocationWaiting}}},
-		{Invocations: []Invocation[int]{{Status: InvocationGroup}}},
-	} {
-		markCompleted(&checkpoint)
-		if checkpoint.Completed {
-			t.Fatalf("active checkpoint completed: %+v", checkpoint)
-		}
-	}
-
-	if invocationNumber("i12") != 12 || invocationNumber("bad") != 0 || availableCommits(Checkpoint[int]{Steps: 2, Revision: 10}) != math.MaxUint64-10 {
-		t.Fatal("counter helper returned an incorrect value")
-	}
-	if availableCommits(Checkpoint[int]{Steps: math.MaxUint64 - 1, Revision: 1}) != 1 {
-		t.Fatal("availableCommits did not select the smaller limit")
+	if invocationNumber("i12") != 12 || invocationNumber("bad") != 0 {
+		t.Fatal("invalid numeric ID")
 	}
 	items := Checkpoint[int]{Invocations: []Invocation[int]{
 		{ID: "i9", Status: InvocationReady},
@@ -221,7 +196,16 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 func scopePointer(scope FailureScope) *FailureScope { return &scope }
 
 func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) *Invocation[S] {
-	index := newInvocationIndex(s)
-	inv, _ := selectReady(s, &index, running, cursor)
-	return inv
+	s.ScheduleCursor = cursor
+	l := newLive(s)
+	active := make(map[taskRef]context.CancelFunc)
+	for id, cancel := range running {
+		active[taskRef{id: id}] = cancel
+	}
+	ref, ok := l.next(true, active)
+	if !ok {
+		return nil
+	}
+	v, _ := l.invocation(ref.id)
+	return &v
 }

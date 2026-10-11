@@ -49,7 +49,7 @@ func TestJSONCheckpointRoundTripPreservesRecoveryFields(t *testing.T) {
 		Failure: &graph.Failure{InvocationID: "i1", Node: "work", Message: "failed", PanicStack: "stack"},
 	}
 
-	codec := checkpoint.JSON[codecState]{}
+	codec := checkpoint.JSON[graph.Checkpoint[codecState]]{}
 	data, err := codec.Append(nil, want)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestJSONAppendMatchesMarshalAndKeepsPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	const prefix = "existing:"
-	got, err := (checkpoint.JSON[codecState]{}).Append([]byte(prefix), want)
+	got, err := (checkpoint.JSON[graph.Checkpoint[codecState]]{}).Append([]byte(prefix), want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestJSONAppendMatchesMarshalForCustomMarshaler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := (checkpoint.JSON[customMarshalerState]{}).Append(nil, want)
+	got, err := (checkpoint.JSON[graph.Checkpoint[customMarshalerState]]{}).Append(nil, want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,12 +120,12 @@ func TestJSONAppendMatchesMarshalForCustomMarshaler(t *testing.T) {
 }
 
 func TestJSONRejectsMalformedAndUnsupportedData(t *testing.T) {
-	codec := checkpoint.JSON[codecState]{}
+	codec := checkpoint.JSON[graph.Checkpoint[codecState]]{}
 	if _, err := codec.Unmarshal([]byte("{")); err == nil {
 		t.Fatal("Unmarshal accepted malformed JSON")
 	}
 
-	unsupported := checkpoint.JSON[unsupportedState]{}
+	unsupported := checkpoint.JSON[graph.Checkpoint[unsupportedState]]{}
 	state := unsupportedState{Callback: func() {}}
 	if _, err := unsupported.Append(nil, graph.Checkpoint[unsupportedState]{RunID: "run", Final: &state}); err == nil {
 		t.Fatal("Marshal accepted a function in state")
