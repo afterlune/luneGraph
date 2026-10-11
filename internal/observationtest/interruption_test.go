@@ -36,8 +36,8 @@ func TestInterruptionDrainsWorkersBeforePublicFinish(t *testing.T) {
 	edge(t, g, "fork", "stop")
 	log := &recorder{}
 	store := memoryStore(t)
-	result, err := compile(t, g).Start(ctx, "interruption", 0, graph.Options[int]{Store: store, Observer: log, MaxConcurrency: 2})
-	if result.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || result.Checkpoint.Completed || result.Checkpoint.Revision != 2 || result.Checkpoint.Steps != 1 || result.Checkpoint.Final != nil {
+	_, result, err := compile(t, g).Start(ctx, "interruption", 0, store, graph.Options{Observer: log, MaxConcurrency: 2})
+	if result.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || result.Header.Completed || result.Header.Revision != 2 || result.Header.Steps != 1 || result.Final != nil {
 		t.Fatalf("result=%+v %v", result, err)
 	}
 	select {

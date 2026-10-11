@@ -96,17 +96,19 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 			addEdge(t, g, "join", "done")
 			r := compile(t, g)
 			store := &revisionConflictStore{Store: openStore(t, kind), revision: 18}
-			opts := graph.Options[state]{Store: store, MaxSteps: 1, MaxConcurrency: 1}
-			out, err := r.Start(context.Background(), "nested", initial("nested"), opts)
+			opts := graph.Options{MaxSteps: 1, MaxConcurrency: 1}
+			optsStore := store
+			_, out, err := r.Start(context.Background(), "nested", initial("nested"), optsStore, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			conflicts := 0
-			for attempt := 0; !out.Checkpoint.Completed && attempt < 20; attempt++ {
-				out, err = r.Recover(context.Background(), "nested", nil, opts)
+			for attempt := 0; !out.Header.Completed && attempt < 20; attempt++ {
+				_, out, err = r.Recover(context.Background(), "nested", nil, optsStore, opts)
 				if errors.Is(err, graph.ErrConflict) {
 					conflicts++
-					if out.Checkpoint.Revision != 18 || out.Checkpoint.Steps != 17 || len(out.Checkpoint.Invocations) != 27 || len(out.Checkpoint.Groups) != 2 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
+					checkpoint, loadErr := store.Load(context.Background(), "nested")
+					if loadErr != nil || out.Header.Revision != 18 || out.Header.Steps != 17 || len(checkpoint.Invocations) != 27 || len(checkpoint.Groups) != 2 || (out.Header.Failure != nil || out.Header.HadLocalFailures) {
 						t.Fatalf("candidate compaction changed the last commit: %+v", out)
 					}
 					continue
@@ -115,7 +117,7 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if out.Status != graph.StatusCompletedWithFailures || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 15 || out.Checkpoint.Steps != 19 || (!out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil) || conflicts != 1 {
+			if out.Status != graph.StatusCompletedWithFailures || out.Final == nil || out.Final.Total != 15 || out.Header.Steps != 19 || (!out.Header.HadLocalFailures || out.Header.Failure != nil) || conflicts != 1 {
 				t.Fatalf("nested failure recovery: %+v conflicts=%d", out, conflicts)
 			}
 			if len(nodeCalls) != 2 || nodeCalls[0] == "" || nodeCalls[0] != nodeCalls[1] || len(joinCalls) != 1 || joinCalls[0] == "" {

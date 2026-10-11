@@ -20,9 +20,12 @@ func BenchmarkCapacityHistory(b *testing.B) {
 				b.Run(fmt.Sprintf("store=%s/mode=%s/rounds=%d", kind, mode, rounds), func(b *testing.B) {
 					r, store := historyRunner(b, mode), openStore(b, kind)
 					before := resources(true)
-					opts := graph.Options[state]{Store: store, MaxSteps: historyStepsPerRound, MaxConcurrency: 8}
-					cp := seedHistory(b, r, opts, mode, rounds)
 					// Persisted measurements retain only the Store's copy.
+					opts := graph.Options{MaxSteps: historyStepsPerRound, MaxConcurrency: 8}
+					optsStore := store
+
+					cp := seedHistory(b, r, store, opts, mode, rounds)
+
 					if store != nil {
 						cp = graph.Checkpoint[state]{}
 					}
@@ -41,20 +44,21 @@ func BenchmarkCapacityHistory(b *testing.B) {
 					encodedBytes := len(payload)
 					payload = nil
 					var last graph.Result[state]
+					var lastExecution *graph.Execution[state]
 					b.ReportAllocs()
 					b.ResetTimer()
 					for range b.N {
 						if store == nil {
-							last, err = r.Resume(context.Background(), cp, nil, opts)
+							lastExecution, last, err = r.Resume(context.Background(), cp, nil, optsStore, opts)
 						} else {
-							last, err = r.Recover(context.Background(), cp.RunID, nil, opts)
+							lastExecution, last, err = r.Recover(context.Background(), cp.RunID, nil, optsStore, opts)
 						}
-						if err != nil || last.Status != graph.StatusWaiting || last.Checkpoint.Revision != cp.Revision || last.Checkpoint.Failure != nil || last.Checkpoint.HadLocalFailures != cp.HadLocalFailures {
+						if err != nil || last.Status != graph.StatusWaiting || last.Header.Revision != cp.Revision || last.Header.Failure != nil || last.Header.HadLocalFailures != cp.HadLocalFailures {
 							b.Fatalf("history inspection changed position: %v", err)
 						}
 					}
 					b.StopTimer()
-					if !reflect.DeepEqual(last.Checkpoint, cp) {
+					if !reflect.DeepEqual(mustCheckpoint(lastExecution), cp) {
 						b.Fatal("history inspection changed checkpoint")
 					}
 					b.ReportMetric(float64(encodedBytes), "checkpoint-B")

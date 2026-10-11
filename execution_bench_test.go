@@ -20,12 +20,12 @@ func BenchmarkSequentialExecution(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				result, err := runner.Start(context.Background(), "sequential", 0, graph.Options[int]{MaxSteps: steps + 1})
+				_, result, err := runner.Start(context.Background(), "sequential", 0, nil, graph.Options{MaxSteps: steps + 1})
 				if err != nil {
 					b.Fatal(err)
 				}
-				if result.Status != graph.StatusCompleted || result.Checkpoint.Final == nil || *result.Checkpoint.Final != steps || result.Checkpoint.Steps != uint64(steps) {
-					b.Fatalf("unexpected result: status=%s final=%v steps=%d", result.Status, result.Checkpoint.Final, result.Checkpoint.Steps)
+				if result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != steps || result.Header.Steps != uint64(steps) {
+					b.Fatalf("unexpected result: status=%s final=%v steps=%d", result.Status, result.Final, result.Header.Steps)
 				}
 			}
 		})
@@ -40,16 +40,17 @@ func BenchmarkFanoutJoin(b *testing.B) {
 		}{{"serial", 1}, {"default", 0}} {
 			b.Run("width="+strconv.Itoa(width)+"/concurrency="+concurrency.name, func(b *testing.B) {
 				runner := benchmarkFanoutRunner(b, width)
-				options := graph.Options[int]{MaxSteps: width + 8, MaxConcurrency: concurrency.value}
+				options := graph.Options{MaxSteps: width + 8, MaxConcurrency: concurrency.value}
+				optionsStore := graph.Store[int](nil)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
-					result, err := runner.Start(context.Background(), "fanout", 0, options)
+					_, result, err := runner.Start(context.Background(), "fanout", 0, optionsStore, options)
 					if err != nil {
 						b.Fatal(err)
 					}
-					if result.Status != graph.StatusCompleted || result.Checkpoint.Final == nil || *result.Checkpoint.Final != width {
-						b.Fatalf("unexpected result: status=%s final=%v", result.Status, result.Checkpoint.Final)
+					if result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != width {
+						b.Fatalf("unexpected result: status=%s final=%v", result.Status, result.Final)
 					}
 				}
 			})
@@ -88,7 +89,9 @@ func BenchmarkConcurrentRuns(b *testing.B) {
 
 			var runNumber atomic.Uint64
 			var firstFailure atomic.Pointer[benchmarkFailure]
-			options := graph.Options[int]{Store: store}
+			options := graph.Options{}
+			optionsStore := store
+
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -97,12 +100,12 @@ func BenchmarkConcurrentRuns(b *testing.B) {
 						return
 					}
 					runID := strconv.FormatUint(runNumber.Add(1), 10)
-					result, err := runner.Start(context.Background(), runID, 0, options)
+					_, result, err := runner.Start(context.Background(), runID, 0, optionsStore, options)
 					if err != nil {
 						firstFailure.CompareAndSwap(nil, &benchmarkFailure{err: err})
 						return
 					}
-					if result.Status != graph.StatusCompleted || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 1 {
+					if result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != 1 {
 						firstFailure.CompareAndSwap(nil, &benchmarkFailure{message: "unexpected completed run result"})
 						return
 					}

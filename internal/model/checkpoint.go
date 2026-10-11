@@ -83,37 +83,48 @@ type Checkpoint[S any] struct {
 	Failure *Failure
 }
 
-// Result is the outcome of one call to Start, Resume, or Recover.
+// Result describes one public execution call without materializing its full
+// checkpoint. Use Execution.Checkpoint when a full independent snapshot is needed.
 type Result[S any] struct {
-	Status     Status
-	Checkpoint Checkpoint[S]
+	Status Status
+	Header Header
+	Final  *S
 }
 
-// ResumeInput addresses exactly one waiting invocation. A continuation
-// decodes Payload before applying it to the invocation's state.
+// PendingInvocation identifies one waiting continuation without exposing its state.
+type PendingInvocation struct {
+	InvocationID string
+	CallID       string
+	Node         string
+	Continuation string
+}
+
+// ResumeInput addresses exactly one waiting invocation. A continuation decodes
+// Payload before applying it to the invocation's state.
 type ResumeInput struct {
 	InvocationID string
 	Payload      []byte
 }
 
-// Store provides optional checkpoint persistence. Create accepts revision one
-// and rejects an existing RunID. Commit atomically applies a Change at expected+1,
-// rejecting stale revisions/machine IDs with ErrConflict (which guarantees no
-// write), terminal runs with ErrRunCompleted, and malformed changes with
-// ErrInvalidCheckpoint. Other Store errors can leave commit outcomes unknown;
-// callers must Load before retrying. Writes own copies; Load returns an independent
-// complete checkpoint and reports missing runs with checkpoint.ErrNotFound.
-// Load sorts Invocations and Groups by ascending lexicographic ID. It preserves
-// ActivationGroup.Children order because that slice records fan-out target order.
+// Store persists execution checkpoints. Create accepts revision one and rejects
+// an existing RunID. Load returns an independent full checkpoint with invocations
+// and groups sorted by ID; group children preserve fan-out target order.
+// LoadHeader returns copied metadata without loading invocation states. Commit
+// atomically applies a Change at expected+1. ErrConflict guarantees no write;
+// other Store errors can leave the outcome uncertain, so callers must reload
+// before retrying. Writes own independent copies.
 type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)
+
+	LoadHeader(context.Context, string) (Header, error)
 	Commit(context.Context, uint64, Change[S]) error
 	Delete(context.Context, string) error
 }
 
-// Options controls one call's node-start budget, node/join concurrency, storage, and failure scope.
-type Options[S any] struct {
+// Options configures one execution call. Persistence is passed separately to
+// Runner methods so it is explicit at the point where a run is opened or created.
+type Options struct {
 	// Observer optionally receives transient execution events. Nil disables
 	// observation without allocating a session or reading clocks.
 	Observer Observer
@@ -122,7 +133,6 @@ type Options[S any] struct {
 	Limiter         *limit.Limiter
 	MaxSteps        int
 	MaxConcurrency  int
-	Store           Store[S]
 	FailureOverride *FailureScope
 }
 

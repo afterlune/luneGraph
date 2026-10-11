@@ -26,6 +26,8 @@ type live[S any] struct {
 	remaining                 map[string]int
 	ready                     []taskRef
 	readyHead                 int
+	readyNodes                int
+	waitingInvocations        int
 }
 
 func newLive[S any](cp Checkpoint[S]) *live[S] {
@@ -57,6 +59,9 @@ func newLive[S any](cp Checkpoint[S]) *live[S] {
 	for _, inv := range cp.Invocations {
 		if inv.Status == InvocationReady {
 			l.ready = append(l.ready, taskRef{id: inv.ID})
+			l.readyNodes++
+		} else if inv.Status == InvocationWaiting {
+			l.waitingInvocations++
 		}
 	}
 	slices.SortFunc(l.ready, func(a, b taskRef) int { return cmp.Compare(invocationNumber(a.id), invocationNumber(b.id)) })
@@ -162,6 +167,24 @@ func (l *live[S]) invocationCount() int {
 	return 0
 }
 
+func (l *live[S]) hasReadyNode() bool { return l.readyNodes > 0 }
+
+func (l *live[S]) pending() []PendingInvocation {
+	pending := make([]PendingInvocation, 0, l.waitingInvocations)
+	if l.inv != nil {
+		for _, inv := range l.inv {
+			if inv.Status == InvocationWaiting {
+				pending = append(pending, PendingInvocation{InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Continuation: inv.Continuation})
+			}
+		}
+	} else if l.hasSingle && l.single.Status == InvocationWaiting {
+		inv := l.single
+		pending = append(pending, PendingInvocation{InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Continuation: inv.Continuation})
+	}
+	slices.SortFunc(pending, func(a, b PendingInvocation) int { return cmp.Compare(a.InvocationID, b.InvocationID) })
+	return pending
+}
+
 func (l *live[S]) valid(ref taskRef) bool {
 	if ref.join {
 		_, ok := l.groups[ref.id]
@@ -218,6 +241,8 @@ func (l *live[S]) install(c Change[S]) {
 		clear(l.ready)
 		l.ready = nil
 		l.readyHead = 0
+		l.readyNodes = 0
+		l.waitingInvocations = 0
 		return
 	}
 	if len(c.UpsertGroups)+len(c.DeleteGroups) > 0 && l.groups == nil {
@@ -226,6 +251,11 @@ func (l *live[S]) install(c Change[S]) {
 	}
 	for _, id := range c.DeleteInvocations {
 		old, _ := l.invocation(id)
+		if old.Status == InvocationReady {
+			l.readyNodes--
+		} else if old.Status == InvocationWaiting {
+			l.waitingInvocations--
+		}
 		if old.GroupID != "" && !resolved(old.Status) {
 			l.remaining[old.GroupID]--
 		}
@@ -237,6 +267,11 @@ func (l *live[S]) install(c Change[S]) {
 		oldGroup := ""
 		if exists {
 			oldGroup = old.GroupID
+			if old.Status == InvocationReady {
+				l.readyNodes--
+			} else if old.Status == InvocationWaiting {
+				l.waitingInvocations--
+			}
 		}
 		if exists && old.GroupID != "" && !resolved(old.Status) {
 			l.remaining[old.GroupID]--
@@ -247,6 +282,9 @@ func (l *live[S]) install(c Change[S]) {
 		}
 		if v.Status == InvocationReady {
 			l.enqueue(taskRef{id: v.ID})
+			l.readyNodes++
+		} else if v.Status == InvocationWaiting {
+			l.waitingInvocations++
 		}
 		l.enqueueJoinIfReady(oldGroup)
 		if v.GroupID != oldGroup {

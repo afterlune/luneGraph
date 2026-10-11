@@ -55,34 +55,41 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 		return err
 	}
 	defer func() { err = errors.Join(err, store.Close()) }()
-	opts := graph.Options[state]{Store: store}
+	opts := graph.Options{}
 	if *observed {
 		opts.Observer = observe.NewSlog(slog.New(slog.NewJSONHandler(diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
 	var result graph.Result[state]
 	if command == "start" {
-		result, err = runner.Start(ctx, *runID, state{}, opts)
+		_, result, err = runner.Start(ctx, *runID, state{}, store, opts)
 	} else {
-		saved, loadErr := store.Load(ctx, *runID)
-		if loadErr != nil {
-			return loadErr
+		var execution *graph.Execution[state]
+		execution, result, err = runner.Recover(ctx, *runID, nil, store, opts)
+		if err != nil {
+			return err
 		}
-		id, waitingErr := waitingInvocation(saved)
-		if waitingErr != nil {
-			return waitingErr
+		if result.Header.Completed {
+			return graph.ErrRunCompleted
 		}
-		result, err = runner.Recover(ctx, *runID, []graph.ResumeInput{{
-			InvocationID: id,
-			Payload:      []byte(strconv.Itoa(value)),
-		}}, opts)
+		var id string
+		for _, waiting := range execution.Pending() {
+			if waiting.Continuation == "value" {
+				id = waiting.InvocationID
+				break
+			}
+		}
+		if id == "" {
+			return fmt.Errorf("run %q has no waiting value invocation", *runID)
+		}
+		result, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: id, Payload: []byte(strconv.Itoa(value))}}, opts)
 	}
 	if err != nil {
 		return err
 	}
-	if result.Checkpoint.Final != nil {
-		_, err = fmt.Fprintf(output, "status=%s run=%s value=%d\n", result.Status, result.Checkpoint.RunID, result.Checkpoint.Final.Value)
+	if result.Final != nil {
+		_, err = fmt.Fprintf(output, "status=%s run=%s value=%d\n", result.Status, result.Header.RunID, result.Final.Value)
 	} else {
-		_, err = fmt.Fprintf(output, "status=%s run=%s\n", result.Status, result.Checkpoint.RunID)
+		_, err = fmt.Fprintf(output, "status=%s run=%s\n", result.Status, result.Header.RunID)
 	}
 	return err
 }

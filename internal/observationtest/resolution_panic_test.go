@@ -49,7 +49,7 @@ func TestStorePanicDrainsWorkersAndReleasesBudgetWithoutFakeResolution(t *testin
 				t.Fatalf("panic=%v", got)
 			}
 		}()
-		_, _ = r.Start(ctx, "panic", 1, graph.Options[int]{Store: casPanicStore{memoryStore(t)}, Observer: log, Limiter: l, MaxConcurrency: 2})
+		_, _, _ = r.Start(ctx, "panic", 1, casPanicStore{memoryStore(t)}, graph.Options{Observer: log, Limiter: l, MaxConcurrency: 2})
 	}()
 	seen := resolved(log.snapshot(), graph.OperationNode)
 	if len(seen) != 1 || seen[0].Node != "fork" || seen[0].Outcome != graph.OutcomeCommitted {
@@ -58,7 +58,7 @@ func TestStorePanicDrainsWorkersAndReleasesBudgetWithoutFakeResolution(t *testin
 	if len(finished(log.snapshot(), graph.OperationNode)) != 3 || len(finished(log.snapshot(), graph.OperationStart)) != 0 {
 		t.Fatal("panic did not drain, or public completion was fabricated")
 	}
-	if _, err := singleRunner(t).Start(ctx, "reuse", 1, graph.Options[int]{Limiter: l}); err != nil {
+	if _, _, err := singleRunner(t).Start(ctx, "reuse", 1, nil, graph.Options{Limiter: l}); err != nil {
 		t.Fatal("panic leaked budget:", err)
 	}
 }

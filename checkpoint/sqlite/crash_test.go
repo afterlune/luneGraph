@@ -73,7 +73,7 @@ func TestCrashProcessHelper(t *testing.T) {
 	}
 	defer store.Close()
 	runner := crashRunner(t, os.Getenv("LUNE_CHECKPOINT_CRASH_MARKER"), true, nil)
-	if _, err := runner.Start(ctx, "crash-run", 0, graph.Options[int]{Store: store}); err != nil {
+	if _, _, err := runner.Start(ctx, "crash-run", 0, store, graph.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Fatal("blocked node returned before process termination")
@@ -141,8 +141,8 @@ func TestCrashRecoveryReplaysUncommittedNode(t *testing.T) {
 	}
 	replayedCalls := make(chan graph.CallInfo, 1)
 	runner := crashRunner(t, marker, false, replayedCalls)
-	result, err := runner.Recover(ctx, "crash-run", nil, graph.Options[int]{Store: store})
-	if err != nil || result.Status != graph.StatusCompleted || result.Checkpoint.Revision != 2 || result.Checkpoint.Steps != 1 || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 1 {
+	_, result, err := runner.Recover(ctx, "crash-run", nil, store, graph.Options{})
+	if err != nil || result.Status != graph.StatusCompleted || result.Header.Revision != 2 || result.Header.Steps != 1 || result.Final == nil || *result.Final != 1 {
 		t.Fatalf("recovery result = %+v, %v", result, err)
 	}
 	var replayedCall graph.CallInfo

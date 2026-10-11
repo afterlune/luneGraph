@@ -4,6 +4,31 @@ The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
 codecs and Stores must satisfy their documented concurrency contracts.
 
+## Live execution handles
+
+`Start`, `Resume`, `Recover` and `Fork` return an `Execution` handle, the result
+of the initial call, and an error. `Result` contains the call status, a metadata
+`Header`, and an optional copied `Final` state; it does not contain the full
+invocation topology or states. Call `Execution.Checkpoint()` when an independent
+full checkpoint is needed. That operation copies all live invocation states
+with Clone. `Execution.Pending()` returns sorted waiting-invocation identities
+and continuation names without exposing or copying their state.
+
+`Execution.Advance(ctx, inputs, opts)` continues the same in-memory scheduler
+state. A handle is single-caller: do not call its methods concurrently. With a
+Store, each Advance reads `LoadHeader` and checks the current revision before
+running callbacks; this avoids loading or cloning unrelated invocation states.
+It is a conflict check, not a lease. Another Runner or handle can commit after
+the check, so callbacks may still replay and effects remain at-least-once.
+
+Recover is the cold-open path: it loads the full checkpoint once and returns a
+new live handle. Resume opens its supplied checkpoint as a new handle and, when
+a Store is supplied, loads authoritative state and rejects a stale revision.
+Use the returned handle for repeated in-process advances. After an uncertain
+Store error, the handle retains its last locally accepted position; the next
+Advance detects a committed remote revision through `LoadHeader` and returns
+`ErrConflict`. Reload with Recover and reconcile inputs before continuing.
+
 ## State and composition
 
 - Clone is required before nodes, continuation Apply and Merge inputs. Copy every
@@ -128,24 +153,25 @@ Status describes this call, not necessarily the execution's lifetime:
 | --- | --- | --- |
 | Completed, nil error | Terminal; Final may be nil | Consume/clean up |
 | CompletedWithFailures, nil error | Terminal with local failures | Apply application policy |
-| Waiting | Active paths need input | Persist input externally; Resume/Recover |
-| Budget | Ready work remains | Resume/Recover without new input |
+| Waiting | Active paths need input | Persist input externally; Advance, Resume or Recover |
+| Budget | Ready work remains | Advance the handle or cold-open with Resume/Recover |
 | Interrupted, ErrInterrupted | Callback result discarded | Reconcile; retry pending identity |
 | Cancelled, context error | Call stopped; run may remain active | Reload durable state before retry |
-| Failed with checkpoint.Failure | Acknowledged failed terminal | Inspect; do not continue |
+| Failed with Result.Header.Failure | Acknowledged failed terminal | Inspect; do not continue |
 | Failed without terminal Failure | Call failed; run may remain active | Inspect error; fix/reload |
-| ErrConflict | This commit did not write | Load authoritative position |
+| ErrConflict | The handle is stale or the commit lost its revision check | Load authoritative position |
 | Other Store error | Commit may have happened | Load before replay |
 
 Checking only error misses local failures. Checking only StatusFailed does not
-identify a durable terminal. After uncertain writes the returned checkpoint can
-be older than the authoritative one.
+identify a durable terminal. After uncertain writes `Result.Header` can be older
+than the authoritative position. Reload before continuing.
 
 ## Recovery, forks and effects
 
-Recover loads and drives the latest checkpoint. A terminal run returns without
-callbacks or another revision; failed terminals return ErrRunFailed. Inputs to
-terminal runs return ErrRunCompleted. Resume rejects any valid terminal position
+Recover loads the latest full checkpoint and advances it, returning a live
+handle. A terminal run returns without callbacks or another revision; failed
+terminals return ErrRunFailed. Inputs to terminal runs return ErrRunCompleted.
+Resume rejects any valid terminal position
 with ErrRunCompleted; malformed positions use ErrInvalidCheckpoint. With a Store,
 Resume treats its supplied checkpoint as an identity/version/revision reference,
 loads authoritative state and rejects stale references with ErrConflict.
@@ -169,7 +195,9 @@ checkpoints does not delete external data or receipts.
 
 ## Store and codec contracts
 
-Store has Create, Load, Commit and single-run Delete. Commit takes expected
+Store has Create, Load, LoadHeader, Commit and single-run Delete. `LoadHeader`
+returns copied metadata without loading invocation or group records;
+implementations should make it a cheap revision check. Commit takes expected
 revision and a Change: authoritative Header/Final and listed invocation/group
 upserts/deletions. Omitted records stay unchanged. IDs cannot repeat or be both
 upserted/deleted. Missing deletion IDs are harmless. Completed changes contain

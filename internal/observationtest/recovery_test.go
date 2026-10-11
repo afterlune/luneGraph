@@ -35,8 +35,9 @@ func mountedRunner(t *testing.T) *graph.Runner[int] {
 
 func TestMountedContinuationAndTerminalRecoveryEvents(t *testing.T) {
 	r, store, log := mountedRunner(t), memoryStore(t), &recorder{}
-	opts := graph.Options[int]{Store: store, Observer: log}
-	first, err := r.Start(context.Background(), "mounted", 0, opts)
+	opts := graph.Options{Observer: log}
+	optsStore := store
+	firstExecution, first, err := r.Start(context.Background(), "mounted", 0, optsStore, opts)
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
@@ -46,9 +47,9 @@ func TestMountedContinuationAndTerminalRecoveryEvents(t *testing.T) {
 	if len(waitNode) != 1 || waitNode[0].Node != "worker/wait" || waitNode[0].Action != graph.ActionWait {
 		t.Fatalf("wait node = %+v", waitNode)
 	}
-	inputs := []graph.ResumeInput{{InvocationID: first.Checkpoint.Invocations[0].ID, Payload: []byte("3")}}
-	result, err := r.Recover(context.Background(), "mounted", inputs, opts)
-	if err != nil || result.Status != graph.StatusCompleted || *result.Checkpoint.Final != 3 {
+	inputs := []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, Payload: []byte("3")}}
+	_, result, err := r.Recover(context.Background(), "mounted", inputs, optsStore, opts)
+	if err != nil || result.Status != graph.StatusCompleted || *result.Final != 3 {
 		t.Fatalf("recover = %+v, %v", result, err)
 	}
 	events := log.snapshot()[len(initial):]
@@ -57,15 +58,15 @@ func TestMountedContinuationAndTerminalRecoveryEvents(t *testing.T) {
 	if len(decodes) != 1 || decodes[0].Continuation != "worker/value" || decodes[0].CallID != "" {
 		t.Fatalf("decode = %+v", decodes)
 	}
-	if len(applies) != 1 || applies[0].Continuation != "worker/value" || applies[0].CallID != first.Checkpoint.Invocations[0].CallID {
+	if len(applies) != 1 || applies[0].Continuation != "worker/value" || applies[0].CallID != mustCheckpoint(firstExecution).Invocations[0].CallID {
 		t.Fatalf("apply = %+v", applies)
 	}
 	loads := finished(events, graph.OperationLoad)
-	if len(loads) != 1 || loads[0].Revision != first.Checkpoint.Revision || len(finished(events, graph.OperationResume)) != 0 {
+	if len(loads) != 1 || loads[0].Revision != first.Header.Revision || len(finished(events, graph.OperationResume)) != 0 {
 		t.Fatalf("nested recovery/load = %+v", events)
 	}
 	before := len(log.snapshot())
-	result, err = r.Recover(context.Background(), "mounted", nil, opts)
+	_, result, err = r.Recover(context.Background(), "mounted", nil, optsStore, opts)
 	events = log.snapshot()[before:]
 	checkCall(t, events, graph.OperationRecover, result, err)
 	if len(events) != 4 || len(finished(events, graph.OperationNode)) != 0 {
@@ -104,9 +105,10 @@ func TestCommitErrorAndNodeReplayEvents(t *testing.T) {
 			}
 			store := &faultStore{Store: memoryStore(t), fault: fault, write: acknowledged}
 			r, log := singleRunner(t), &recorder{}
-			opts := graph.Options[int]{Store: store, Observer: log}
-			first, err := r.Start(context.Background(), "commit", 0, opts)
-			if !errors.Is(err, fault) || first.Checkpoint.Revision != 1 {
+			opts := graph.Options{Observer: log}
+			optsStore := store
+			_, first, err := r.Start(context.Background(), "commit", 0, optsStore, opts)
+			if !errors.Is(err, fault) || first.Header.Revision != 1 {
 				t.Fatalf("start: %+v, %v", first, err)
 			}
 			initial := log.snapshot()
@@ -119,7 +121,7 @@ func TestCommitErrorAndNodeReplayEvents(t *testing.T) {
 			if firstNode.Err != nil {
 				t.Fatal("callback failed instead of Store")
 			}
-			result, err := r.Recover(context.Background(), "commit", nil, opts)
+			_, result, err := r.Recover(context.Background(), "commit", nil, optsStore, opts)
 			if err != nil || result.Status != graph.StatusCompleted {
 				t.Fatalf("recover: %+v, %v", result, err)
 			}
@@ -139,12 +141,12 @@ func TestCommitErrorAndNodeReplayEvents(t *testing.T) {
 
 func TestDecodeErrorAndMissingLoadEvents(t *testing.T) {
 	r, log, store := mountedRunner(t), &recorder{}, memoryStore(t)
-	first, err := r.Start(context.Background(), "decode", 0, graph.Options[int]{Store: store})
+	firstExecution, first, err := r.Start(context.Background(), "decode", 0, store, graph.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := r.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: first.Checkpoint.Invocations[0].ID, Payload: []byte("invalid")}}, graph.Options[int]{Store: store, Observer: log})
-	if err == nil || result.Status != graph.StatusWaiting || result.Checkpoint.Revision != first.Checkpoint.Revision {
+	_, result, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, Payload: []byte("invalid")}}, store, graph.Options{Observer: log})
+	if err == nil || result.Status != graph.StatusWaiting || result.Header.Revision != first.Header.Revision {
 		t.Fatalf("decode outcome = %+v, %v", result, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationResume, result, err)
@@ -152,7 +154,7 @@ func TestDecodeErrorAndMissingLoadEvents(t *testing.T) {
 		t.Fatal("decode failure applied or committed input")
 	}
 	log = &recorder{}
-	result, err = r.Recover(context.Background(), "missing", nil, graph.Options[int]{Store: store, Observer: log})
+	_, result, err = r.Recover(context.Background(), "missing", nil, store, graph.Options{Observer: log})
 	if !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatal(err)
 	}

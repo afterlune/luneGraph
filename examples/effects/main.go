@@ -71,19 +71,19 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	if err != nil {
 		return err
 	}
-	options := graph.Options[state]{Store: store}
+	options := graph.Options{}
 	var result graph.Result[state]
 	if args[0] == "start" {
-		result, err = runner.Start(ctx, *runID, state{Delta: delta}, options)
+		_, result, err = runner.Start(ctx, *runID, state{Delta: delta}, store, options)
 	} else {
-		result, err = runner.Recover(ctx, *runID, nil, options)
+		_, result, err = runner.Recover(ctx, *runID, nil, store, options)
 	}
 	if err != nil {
 		return err
 	}
-	if result.Checkpoint.Final == nil {
+	if result.Final == nil {
 		return errors.New("execution has no final value")
 	}
-	_, err = fmt.Fprintf(output, "status=%s run=%s value=%d\n", result.Status, *runID, result.Checkpoint.Final.Value)
+	_, err = fmt.Fprintf(output, "status=%s run=%s value=%d\n", result.Status, *runID, result.Final.Value)
 	return err
 }

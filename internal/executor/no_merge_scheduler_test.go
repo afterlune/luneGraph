@@ -31,7 +31,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() {
-		_, err := holder.Start(holderCtx, "holder", 0, graph.Options[int]{MaxConcurrency: 1, Limiter: limiter})
+		_, _, err := holder.Start(holderCtx, "holder", 0, nil, graph.Options{MaxConcurrency: 1, Limiter: limiter})
 		holderDone <- err
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -77,7 +77,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 		err error
 	}, 1)
 	go func() {
-		out, err := runner.Start(ctx, "no-merge", 0, graph.Options[int]{MaxConcurrency: 2, Limiter: limiter})
+		_, out, err := runner.Start(ctx, "no-merge", 0, nil, graph.Options{MaxConcurrency: 2, Limiter: limiter})
 		done <- struct {
 			out graph.Result[int]
 			err error
@@ -90,7 +90,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 	}
 	select {
 	case got := <-done:
-		if got.err != nil || got.out.Status != graph.StatusCompleted || !got.out.Checkpoint.Completed || got.out.Checkpoint.Final != nil {
+		if got.err != nil || got.out.Status != graph.StatusCompleted || !got.out.Header.Completed || got.out.Final != nil {
 			t.Fatalf("result=%+v err=%v", got.out, got.err)
 		}
 	case <-ctx.Done():

@@ -97,7 +97,7 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 				workers.Add(1)
 				go func() {
 					defer workers.Done()
-					result, err := runner.Start(ctx, runID, initial, graph.Options[concurrentRunState]{Store: store})
+					_, result, err := runner.Start(ctx, runID, initial, store, graph.Options{})
 					outcomes <- runOutcome{runID: runID, result: result, err: err}
 				}()
 			}
@@ -128,7 +128,7 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 					if outcome.err != nil {
 						t.Fatalf("run %q failed: %v", outcome.runID, outcome.err)
 					}
-					if outcome.result.Status != graph.StatusCompleted || outcome.result.Checkpoint.Final == nil || outcome.result.Checkpoint.Revision != 2 || outcome.result.Checkpoint.Steps != 1 {
+					if outcome.result.Status != graph.StatusCompleted || outcome.result.Final == nil || outcome.result.Header.Revision != 2 || outcome.result.Header.Steps != 1 {
 						t.Fatalf("run %q result = %+v", outcome.runID, outcome.result)
 					}
 					resultsByRun[outcome.runID] = outcome.result
@@ -143,8 +143,8 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 				if !exists {
 					t.Fatalf("missing result for %q", runID)
 				}
-				if result.Checkpoint.RunID != runID || result.Checkpoint.Final.Values["run"] != i || result.Checkpoint.Final.Values["value"] != i+1 {
-					t.Fatalf("run %q state was mixed: %+v", runID, *result.Checkpoint.Final)
+				if result.Header.RunID != runID || result.Final.Values["run"] != i || result.Final.Values["value"] != i+1 {
+					t.Fatalf("run %q state was mixed: %+v", runID, *result.Final)
 				}
 				if store == nil {
 					continue
@@ -153,7 +153,7 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 				if err != nil {
 					t.Fatalf("load run %q: %v", runID, err)
 				}
-				if stored.RunID != runID || stored.MachineID != "concurrent-runs-v1" || stored.Revision != 2 || stored.Revision != result.Checkpoint.Revision || !stored.Completed || stored.Final == nil || stored.Final.Values["run"] != i || stored.Final.Values["value"] != i+1 {
+				if stored.RunID != runID || stored.MachineID != "concurrent-runs-v1" || stored.Revision != 2 || stored.Revision != result.Header.Revision || !stored.Completed || stored.Final == nil || stored.Final.Values["run"] != i || stored.Final.Values["value"] != i+1 {
 					t.Fatalf("stored run %q checkpoint = %+v", runID, stored)
 				}
 			}

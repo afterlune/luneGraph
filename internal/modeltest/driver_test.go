@@ -59,12 +59,13 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 	}
 	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
-	opts := graph.Options[state]{Store: store, Observer: c, Limiter: limiter, MaxConcurrency: concurrency, MaxSteps: 8}
-	out, err := r.Start(ctx, "model-run", state{Owner: "model-run", Branch: -1, Values: map[string]int{"sum": 0}}, opts)
+	opts := graph.Options{Observer: c, Limiter: limiter, MaxConcurrency: concurrency, MaxSteps: 8}
+	optsStore := store
+	outExecution, out, err := r.Start(ctx, "model-run", state{Owner: "model-run", Branch: -1, Values: map[string]int{"sum": 0}}, optsStore, opts)
 	if err != nil || out.Status != graph.StatusWaiting {
 		t.Fatalf("seed: %+v %v", out, err)
 	}
-	cp := out.Checkpoint
+	cp := mustCheckpoint(outExecution)
 	fired := false
 	call := func(i instruction) {
 		t.Helper()
@@ -79,14 +80,14 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 				inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("1")})
 			}
 		}
-		got, callErr := r.Recover(callCtx, "model-run", inputs, opts)
+		gotExecution, got, callErr := r.Recover(callCtx, "model-run", inputs, optsStore, opts)
 		if callErr != nil && !errors.Is(callErr, graph.ErrConflict) && !errors.Is(callErr, errStore) && !errors.Is(callErr, graph.ErrInterrupted) && !errors.Is(callErr, context.Canceled) {
 			t.Fatalf("operation %+v: %+v %v", i, got, callErr)
 		}
 		if err := c.check(capacity); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.check(got.Checkpoint); err != nil {
+		if err := m.check(mustCheckpoint(gotExecution)); err != nil {
 			t.Fatalf("returned checkpoint: %v", err)
 		}
 		wantStatus := graph.StatusFailed
@@ -110,7 +111,7 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 		if loaded.Revision < before.Revision || loaded.Steps < before.Steps {
 			t.Fatal("authoritative counters regressed")
 		}
-		if got.Checkpoint.Revision > loaded.Revision || got.Checkpoint.Steps > loaded.Steps {
+		if got.Header.Revision > loaded.Revision || got.Header.Steps > loaded.Steps {
 			t.Fatal("returned position ahead of authoritative Store")
 		}
 		if err := m.check(loaded); err != nil {
@@ -120,7 +121,7 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 			t.Fatal("Store differs from confirmed write model")
 		}
 		// Clone normalizes nil versus empty public collections in both Stores.
-		returned, cloneErr := got.Checkpoint.Clone(clone)
+		returned, cloneErr := mustCheckpoint(gotExecution).Clone(clone)
 		if cloneErr != nil {
 			t.Fatal(cloneErr)
 		}
@@ -129,7 +130,7 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 			t.Fatal(cloneErr)
 		}
 		if callErr == nil && !reflect.DeepEqual(storedCopy, returned) {
-			t.Fatalf("acknowledged result differs from Store: returned=%+v stored=%+v", got.Checkpoint, loaded)
+			t.Fatalf("acknowledged result differs from Store: returned=%+v stored=%+v", mustCheckpoint(gotExecution), loaded)
 		}
 		c.mu.Lock()
 		didFire := c.fired

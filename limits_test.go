@@ -18,7 +18,7 @@ func TestSchedulerCountersDoNotWrap(t *testing.T) {
 	})
 	edge(t, g, "loop", "loop")
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "counters", 0, graph.Options[int]{MaxSteps: 1})
+	firstExecution, first, err := r.Start(context.Background(), "counters", 0, nil, graph.Options{MaxSteps: 1})
 	if err != nil || called != 1 {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
@@ -26,16 +26,16 @@ func TestSchedulerCountersDoNotWrap(t *testing.T) {
 		func(s *graph.Checkpoint[int]) { s.Revision = math.MaxUint64 },
 		func(s *graph.Checkpoint[int]) { s.Steps = math.MaxUint64 },
 	} {
-		limited := first.Checkpoint
+		limited := mustCheckpoint(firstExecution)
 		mutate(&limited)
-		out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{MaxConcurrency: 2})
-		if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.Steps != limited.Steps || called != 1 {
+		_, out, err := r.Resume(context.Background(), limited, nil, nil, graph.Options{MaxConcurrency: 2})
+		if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Header.Revision != limited.Revision || out.Header.Steps != limited.Steps || called != 1 {
 			t.Fatalf("counter limit = %+v, %v", out, err)
 		}
 	}
-	badCursor := first.Checkpoint
+	badCursor := mustCheckpoint(firstExecution)
 	badCursor.ScheduleCursor = badCursor.NextID
-	if _, err := r.Resume(context.Background(), badCursor, nil, graph.Options[int]{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+	if _, _, err := r.Resume(context.Background(), badCursor, nil, nil, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("invalid cursor error = %v", err)
 	}
 }
@@ -55,14 +55,14 @@ func TestFanoutIDReservationDoesNotWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "id-limit", 0, graph.Options[int]{})
+	firstExecution, first, err := r.Start(context.Background(), "id-limit", 0, nil, graph.Options{})
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	limited := first.Checkpoint
+	limited := mustCheckpoint(firstExecution)
 	limited.NextID = math.MaxUint64 - 1
-	out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{})
-	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.NextID != limited.NextID {
+	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, nil, graph.Options{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Header.Revision != limited.Revision || out.Header.NextID != limited.NextID {
 		t.Fatalf("ID limit = %+v, %v", out, err)
 	}
 }
@@ -84,14 +84,14 @@ func TestWaitCallIDReservationDoesNotWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "wait-id-limit", 0, graph.Options[int]{MaxSteps: 1})
+	firstExecution, first, err := r.Start(context.Background(), "wait-id-limit", 0, nil, graph.Options{MaxSteps: 1})
 	if err != nil || first.Status != graph.StatusBudget {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	limited := first.Checkpoint
+	limited := mustCheckpoint(firstExecution)
 	limited.NextID = math.MaxUint64
-	out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{})
-	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.NextID != limited.NextID {
+	_, out, err := r.Resume(context.Background(), limited, nil, nil, graph.Options{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Header.Revision != limited.Revision || out.Header.NextID != limited.NextID {
 		t.Fatalf("wait call ID limit = %+v, %v", out, err)
 	}
 }
@@ -110,14 +110,14 @@ func TestNodeCallIDReservationDoesNotWrap(t *testing.T) {
 	edge(t, g, "seed", "next")
 	edge(t, g, "next", "done")
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "node-id-limit", 0, graph.Options[int]{MaxSteps: 1})
+	firstExecution, first, err := r.Start(context.Background(), "node-id-limit", 0, nil, graph.Options{MaxSteps: 1})
 	if err != nil || first.Status != graph.StatusBudget {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	limited := first.Checkpoint
+	limited := mustCheckpoint(firstExecution)
 	limited.NextID = math.MaxUint64
-	out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{})
-	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Checkpoint.Revision != limited.Revision || out.Checkpoint.NextID != limited.NextID {
+	_, out, err := r.Resume(context.Background(), limited, nil, nil, graph.Options{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Header.Revision != limited.Revision || out.Header.NextID != limited.NextID {
 		t.Fatalf("node call ID limit = %+v, %v", out, err)
 	}
 }
@@ -139,14 +139,14 @@ func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "revision-limit", 0, graph.Options[int]{})
+	firstExecution, _, err := r.Start(context.Background(), "revision-limit", 0, nil, graph.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	limited := first.Checkpoint
+	limited := mustCheckpoint(firstExecution)
 	limited.Revision = math.MaxUint64
-	out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{})
-	if !errors.Is(err, graph.ErrExecutionLimit) || decoded != 0 || out.Checkpoint.Revision != limited.Revision {
+	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, nil, graph.Options{})
+	if !errors.Is(err, graph.ErrExecutionLimit) || decoded != 0 || out.Header.Revision != limited.Revision {
 		t.Fatalf("revision limit = %+v, %v", out, err)
 	}
 }
@@ -165,15 +165,15 @@ func TestConcurrentLaunchesReserveCommitCapacity(t *testing.T) {
 		edge(t, g, "fork", name)
 	}
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "capacity", 0, graph.Options[int]{MaxSteps: 1})
+	firstExecution, _, err := r.Start(context.Background(), "capacity", 0, nil, graph.Options{MaxSteps: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	limited := first.Checkpoint
+	limited := mustCheckpoint(firstExecution)
 	limited.Revision = math.MaxUint64 - 1
 	limited.Steps = math.MaxUint64 - 1
-	out, err := r.Resume(context.Background(), limited, nil, graph.Options[int]{MaxConcurrency: 2})
-	if !errors.Is(err, graph.ErrExecutionLimit) || called != 1 || out.Checkpoint.Revision != math.MaxUint64 || out.Checkpoint.Steps != math.MaxUint64 {
+	_, out, err := r.Resume(context.Background(), limited, nil, nil, graph.Options{MaxConcurrency: 2})
+	if !errors.Is(err, graph.ErrExecutionLimit) || called != 1 || out.Header.Revision != math.MaxUint64 || out.Header.Steps != math.MaxUint64 {
 		t.Fatalf("reserved capacity = %+v, %v, called=%d", out, err, called)
 	}
 }

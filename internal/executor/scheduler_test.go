@@ -12,37 +12,37 @@ import (
 )
 
 func TestSchedulerHelpers(t *testing.T) {
-	options, err := normalizeOptions(Options[int]{})
+	options, err := normalizeOptions(Options{})
 	if err != nil || options.MaxSteps != defaultMaxSteps || options.MaxConcurrency != runtime.GOMAXPROCS(0) {
 		t.Fatalf("normalized defaults = %+v, %v", options, err)
 	}
-	for _, invalid := range []Options[int]{{MaxSteps: -1}, {MaxConcurrency: -1}, {FailureOverride: scopePointer(FailureScope(99))}} {
+	for _, invalid := range []Options{{MaxSteps: -1}, {MaxConcurrency: -1}, {FailureOverride: scopePointer(FailureScope(99))}} {
 		if _, err := normalizeOptions(invalid); err == nil {
 			t.Fatalf("invalid options accepted: %+v", invalid)
 		}
 	}
-	if _, err := normalizeOptions(Options[int]{FailureOverride: scopePointer(FailExecution)}); err != nil {
+	if _, err := normalizeOptions(Options{FailureOverride: scopePointer(FailExecution)}); err != nil {
 		t.Fatalf("valid failure override rejected: %v", err)
 	}
 
 	if errorStatus(context.Canceled) != StatusCancelled || errorStatus(context.DeadlineExceeded) != StatusCancelled || errorStatus(errors.New("failed")) != StatusFailed {
 		t.Fatal("errorStatus returned an incorrect status")
 	}
-	if statusOf(Checkpoint[int]{Completed: true, Failure: &Failure{}}, false) != StatusFailed {
+	if statusOf(Checkpoint[int]{Completed: true, Failure: &Failure{}}.Header(), 0, false) != StatusFailed {
 		t.Fatal("terminal execution failure was not reported")
 	}
-	if statusOf(Checkpoint[int]{Completed: true, HadLocalFailures: true}, false) != StatusCompletedWithFailures {
+	if statusOf(Checkpoint[int]{Completed: true, HadLocalFailures: true}.Header(), 0, false) != StatusCompletedWithFailures {
 		t.Fatal("local failure was not reported")
 	}
-	if statusOf(Checkpoint[int]{Completed: true}, false) != StatusCompleted {
+	if statusOf(Checkpoint[int]{Completed: true}.Header(), 0, false) != StatusCompleted {
 		t.Fatal("completed checkpoint status incorrect")
 	}
 	ready := Checkpoint[int]{Invocations: []Invocation[int]{{Status: InvocationReady}}}
-	if statusOf(ready, true) != StatusBudget || statusOf(ready, false) != StatusWaiting {
+	if statusOf(ready.Header(), 1, true) != StatusBudget || statusOf(ready.Header(), 1, false) != StatusWaiting {
 		t.Fatal("ready checkpoint status incorrect")
 	}
 	waiting := Checkpoint[int]{Invocations: []Invocation[int]{{Status: InvocationWaiting}}}
-	if statusOf(waiting, true) != StatusWaiting {
+	if statusOf(waiting.Header(), 0, true) != StatusWaiting {
 		t.Fatal("waiting checkpoint status incorrect")
 	}
 
@@ -65,7 +65,16 @@ func TestSchedulerHelpers(t *testing.T) {
 	if next := nextReady(items, running, 9); next == nil || next.ID != "i9" {
 		t.Fatalf("running invocation selected: %+v", next)
 	}
-	if hasReady(items) != true || hasReady(Checkpoint[int]{}) {
+	readyCount := func(cp Checkpoint[int]) int {
+		count := 0
+		for _, inv := range cp.Invocations {
+			if inv.Status == InvocationReady {
+				count++
+			}
+		}
+		return count
+	}
+	if readyCount(items) != 2 || readyCount(Checkpoint[int]{}) != 0 {
 		t.Fatal("hasReady returned an incorrect result")
 	}
 	if !reflect.DeepEqual([]string{nextReady(items, nil, 2).ID}, []string{"i9"}) {
@@ -80,30 +89,30 @@ func TestRunnerStartBudgetAndInputErrors(t *testing.T) {
 		}
 		return model.To(value+1, "loop"), nil
 	}, FailInvocation)}, nil, map[string][]string{"loop": {"loop"}}, nil, nil)
-	first, err := runner.Start(context.Background(), "budget", 0, Options[int]{MaxSteps: 1})
-	if err != nil || first.Status != StatusBudget || first.Checkpoint.Steps != 1 || first.Checkpoint.Invocations[0].State != 1 {
+	firstExecution, first, err := runner.Start(context.Background(), "budget", 0, nil, Options{MaxSteps: 1})
+	if err != nil || first.Status != StatusBudget || first.Header.Steps != 1 || mustCheckpoint(firstExecution).Invocations[0].State != 1 {
 		t.Fatalf("budget start = %+v, %v", first, err)
 	}
-	last, err := runner.Resume(context.Background(), first.Checkpoint, nil, Options[int]{})
-	if err != nil || last.Status != StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 2 {
+	_, last, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, Options{})
+	if err != nil || last.Status != StatusCompleted || last.Final == nil || *last.Final != 2 {
 		t.Fatalf("resumed run = %+v, %v", last, err)
 	}
 
-	if _, err := runner.Start(nil, "bad", 0, Options[int]{}); err == nil {
+	if _, _, err := runner.Start(nil, "bad", 0, nil, Options{}); err == nil {
 		t.Fatal("Start accepted nil context")
 	}
-	if _, err := runner.Start(context.Background(), " padded", 0, Options[int]{}); err == nil {
+	if _, _, err := runner.Start(context.Background(), " padded", 0, nil, Options{}); err == nil {
 		t.Fatal("Start accepted invalid run ID")
 	}
-	if _, err := runner.Start(context.Background(), "negative", 0, Options[int]{MaxSteps: -1}); err == nil {
+	if _, _, err := runner.Start(context.Background(), "negative", 0, nil, Options{MaxSteps: -1}); err == nil {
 		t.Fatal("Start accepted negative step limit")
 	}
-	if _, err := (*Runner[int])(nil).Start(context.Background(), "nil-runner", 0, Options[int]{}); err == nil {
+	if _, _, err := (*Runner[int])(nil).Start(context.Background(), "nil-runner", 0, nil, Options{}); err == nil {
 		t.Fatal("Start accepted nil runner")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if result, err := runner.Start(ctx, "cancelled", 0, Options[int]{}); !errors.Is(err, context.Canceled) || result.Status != StatusCancelled {
+	if _, result, err := runner.Start(ctx, "cancelled", 0, nil, Options{}); !errors.Is(err, context.Canceled) || result.Status != StatusCancelled {
 		t.Fatalf("cancelled start = %+v, %v", result, err)
 	}
 
@@ -111,12 +120,12 @@ func TestRunnerStartBudgetAndInputErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := cloneFailure.Start(context.Background(), "clone-failure", 0, Options[int]{}); err == nil || result.Checkpoint.Revision != 0 {
+	if _, result, err := cloneFailure.Start(context.Background(), "clone-failure", 0, nil, Options{}); err == nil || result.Header.Revision != 0 {
 		t.Fatalf("clone failure = %+v, %v", result, err)
 	}
 	store := newExecutorTestStore()
 	store.createErr = errors.New("create failed")
-	if result, err := runner.Start(context.Background(), "create-failure", 0, Options[int]{Store: store}); err == nil || result.Status != StatusFailed {
+	if _, result, err := runner.Start(context.Background(), "create-failure", 0, store, Options{}); err == nil || result.Status != StatusFailed {
 		t.Fatalf("store create failure = %+v, %v", result, err)
 	}
 }
@@ -145,10 +154,14 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 	runner := executorTestRunner(t, "fork", nodes, nil, edges, nil, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	finished := make(chan Result[int], 1)
+	type outcome struct {
+		execution *Execution[int]
+		result    Result[int]
+	}
+	finished := make(chan outcome, 1)
 	go func() {
-		result, _ := runner.Start(ctx, "parallel", 0, Options[int]{MaxConcurrency: 2})
-		finished <- result
+		execution, result, _ := runner.Start(ctx, "parallel", 0, nil, Options{MaxConcurrency: 2})
+		finished <- outcome{execution: execution, result: result}
 	}()
 	for range 2 {
 		select {
@@ -159,8 +172,8 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 		}
 	}
 	close(release)
-	if result := <-finished; result.Status != StatusCompleted || len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
-		t.Fatalf("parallel result = %+v", result)
+	if got := <-finished; got.result.Status != StatusCompleted || len(mustCheckpoint(got.execution).Invocations) != 0 || got.result.Final != nil {
+		t.Fatalf("parallel result = %+v", got.result)
 	}
 
 	startedCancel := make(chan struct{})
@@ -175,7 +188,7 @@ func TestRunnerSchedulesParallelCallbacksAndDrainsCancellation(t *testing.T) {
 		err    error
 	}, 1)
 	go func() {
-		result, err := cancelRunner.Start(cancelCtx, "cancel-drain", 0, Options[int]{})
+		_, result, err := cancelRunner.Start(cancelCtx, "cancel-drain", 0, nil, Options{})
 		resultChannel <- struct {
 			result Result[int]
 			err    error

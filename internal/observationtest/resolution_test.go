@@ -34,9 +34,10 @@ func TestResolvedStoreOutcomes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, log := singleRunner(t), &recorder{}
 			store := &faultStore{Store: memoryStore(t), fault: tc.fault, write: tc.write, revision: 2}
-			opts := graph.Options[int]{Observer: log, Store: store}
-			first, err := r.Start(context.Background(), "resolution", 1, opts)
-			if !errors.Is(err, tc.fault) || first.Checkpoint.Revision != 1 {
+			opts := graph.Options{Observer: log}
+			optsStore := store
+			_, first, err := r.Start(context.Background(), "resolution", 1, optsStore, opts)
+			if !errors.Is(err, tc.fault) || first.Header.Revision != 1 {
 				t.Fatalf("first=%+v %v", first, err)
 			}
 			checkCall(t, log.snapshot(), graph.OperationStart, first, err)
@@ -45,8 +46,8 @@ func TestResolvedStoreOutcomes(t *testing.T) {
 				t.Fatalf("resolution=%+v", seen)
 			}
 			before := len(log.snapshot())
-			out, err := r.Recover(context.Background(), "resolution", nil, opts)
-			if err != nil || !out.Checkpoint.Completed {
+			_, out, err := r.Recover(context.Background(), "resolution", nil, optsStore, opts)
+			if err != nil || !out.Header.Completed {
 				t.Fatalf("recover=%+v %v", out, err)
 			}
 			checkCall(t, log.snapshot()[before:], graph.OperationRecover, out, err)
@@ -96,7 +97,7 @@ func TestResolvedCallbackDecisions(t *testing.T) {
 				t.Fatal(err)
 			}
 			log := &recorder{}
-			out, err := compile(t, g).Start(ctx, "decision", 1, graph.Options[int]{Observer: log})
+			_, out, err := compile(t, g).Start(ctx, "decision", 1, nil, graph.Options{Observer: log})
 			checkCall(t, log.snapshot(), graph.OperationStart, out, err)
 			seen := resolved(log.snapshot(), graph.OperationNode)
 			want, rev := graph.OutcomeCommitted, uint64(2)
@@ -144,7 +145,7 @@ func TestResolvedJoinBatch(t *testing.T) {
 				store.failed = true
 			}
 			log := &recorder{}
-			out, err := compile(t, g).Start(context.Background(), "batch", 1, graph.Options[int]{Observer: log, Store: store, MaxConcurrency: 1})
+			_, out, err := compile(t, g).Start(context.Background(), "batch", 1, store, graph.Options{Observer: log, MaxConcurrency: 1})
 			checkCall(t, log.snapshot(), graph.OperationStart, out, err)
 			joins, nodes := resolved(log.snapshot(), graph.OperationJoin), resolved(log.snapshot(), graph.OperationNode)
 			if len(joins) != 1 || len(nodes) != 3 {

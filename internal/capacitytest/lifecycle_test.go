@@ -43,8 +43,8 @@ func (c *callbackTracker) Observe(_ context.Context, e graph.Event) {
 func TestWideFanoutStateIsolation(t *testing.T) {
 	r := fanoutRunner(t, 128, 1, 0)
 	tracker := &callbackTracker{seen: map[string]bool{}}
-	out, err := r.Start(context.Background(), "wide", initial("wide"), graph.Options[state]{MaxSteps: 130, MaxConcurrency: 8, Observer: tracker})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 128 || out.Checkpoint.Final.Values["sum"] != 8256 || tracker.err != nil || tracker.active != 0 || tracker.peak > 8 {
+	_, out, err := r.Start(context.Background(), "wide", initial("wide"), nil, graph.Options{MaxSteps: 130, MaxConcurrency: 8, Observer: tracker})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Total != 128 || out.Final.Values["sum"] != 8256 || tracker.err != nil || tracker.active != 0 || tracker.peak > 8 {
 		t.Fatalf("fan-out result: %+v, %v, tracker=%+v", out, err, tracker)
 	}
 }
@@ -58,12 +58,13 @@ func TestRepeatedBudgetWaitAndRecovery(t *testing.T) {
 			ctx := context.Background()
 			r, store := fanoutRunner(t, profile.width, 0, 4), openStore(t, profile.kind)
 			tracker := &callbackTracker{seen: map[string]bool{}}
-			opts := graph.Options[state]{Store: store, MaxSteps: 1, MaxConcurrency: 8, Observer: tracker}
-			out, err := r.Start(ctx, "loop", initial("loop"), opts)
-			if err != nil || out.Status != graph.StatusBudget || len(out.Checkpoint.Invocations) != profile.width+1 || len(out.Checkpoint.Groups) != 1 {
+			opts := graph.Options{MaxSteps: 1, MaxConcurrency: 8, Observer: tracker}
+			optsStore := store
+			outExecution, out, err := r.Start(ctx, "loop", initial("loop"), optsStore, opts)
+			if err != nil || out.Status != graph.StatusBudget || len(mustCheckpoint(outExecution).Invocations) != profile.width+1 || len(mustCheckpoint(outExecution).Groups) != 1 {
 				t.Fatalf("fork checkpoint: %+v, %v", out, err)
 			}
-			previousRevision, previousID := out.Checkpoint.Revision, out.Checkpoint.NextID
+			previousRevision, previousID := out.Header.Revision, out.Header.NextID
 			inputs := 0
 			for round := 1; round <= profile.rounds; round++ {
 				opts.MaxSteps = profile.width + 2
@@ -75,22 +76,22 @@ func TestRepeatedBudgetWaitAndRecovery(t *testing.T) {
 					payloads = []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}
 					inputs++
 				}
-				out, err = r.Recover(ctx, "loop", payloads, opts)
-				s, stateErr := rootState(out.Checkpoint)
+				outExecution, out, err = r.Recover(ctx, "loop", payloads, optsStore, opts)
+				s, stateErr := rootState(mustCheckpoint(outExecution))
 				wantStatus := graph.StatusBudget
 				if round%4 == 0 {
 					wantStatus = graph.StatusWaiting
 				}
-				if err != nil || stateErr != nil || out.Status != wantStatus || s.Round != round || s.Total != round*profile.width || s.Values["sum"] != round*profile.width*(profile.width+1)/2 || s.Values["inputs"] != inputs || out.Checkpoint.Steps != uint64(round*(profile.width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+1+uint64(inputs)+uint64(round) || out.Checkpoint.Revision <= previousRevision || out.Checkpoint.NextID <= previousID || len(out.Checkpoint.Invocations) != 1 || len(out.Checkpoint.Groups) != 0 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
+				if err != nil || stateErr != nil || out.Status != wantStatus || s.Round != round || s.Total != round*profile.width || s.Values["sum"] != round*profile.width*(profile.width+1)/2 || s.Values["inputs"] != inputs || out.Header.Steps != uint64(round*(profile.width+2)) || out.Header.Revision != out.Header.Steps+1+uint64(inputs)+uint64(round) || out.Header.Revision <= previousRevision || out.Header.NextID <= previousID || len(mustCheckpoint(outExecution).Invocations) != 1 || len(mustCheckpoint(outExecution).Groups) != 0 || (out.Header.Failure != nil || out.Header.HadLocalFailures) {
 					t.Fatalf("round %d = %+v, %v, %v", round, out, err, stateErr)
 				}
-				previousRevision, previousID = out.Checkpoint.Revision, out.Checkpoint.NextID
+				previousRevision, previousID = out.Header.Revision, out.Header.NextID
 			}
 			if tracker.err != nil || tracker.active != 0 || tracker.peak > 8 {
 				t.Fatalf("callback tracker: %+v", tracker)
 			}
 			saved, err := store.Load(ctx, "loop")
-			if err != nil || saved.Revision != out.Checkpoint.Revision || saved.Steps != out.Checkpoint.Steps {
+			if err != nil || saved.Revision != out.Header.Revision || saved.Steps != out.Header.Steps {
 				t.Fatalf("saved checkpoint: %+v, %v", saved, err)
 			}
 		})

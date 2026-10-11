@@ -33,10 +33,11 @@ func ExampleLimiter() {
 	if err != nil {
 		panic(err)
 	}
-	result, err := runner.Start(context.Background(), "dependency", 0, graph.Options[int]{Limiter: limiter})
+	_, result, err := runner.Start(context.Background(), "dependency", 0, nil, graph.Options{Limiter: limiter})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(*result.Checkpoint.Final)
 	// Output: 2
+	fmt.Println(*result.Final)
+
 }

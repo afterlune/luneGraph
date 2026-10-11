@@ -20,7 +20,7 @@ func BenchmarkObservation(b *testing.B) {
 		for _, mode := range []string{"disabled", "noop", "slog"} {
 			b.Run(workload+"/observer="+mode, func(b *testing.B) {
 				ctx := context.Background()
-				opts := graph.Options[int]{MaxSteps: 64}
+				opts := graph.Options{MaxSteps: 64}
 				switch mode {
 				case "noop":
 					opts.Observer = graph.ObserverFunc(func(context.Context, graph.Event) {})
@@ -29,6 +29,7 @@ func BenchmarkObservation(b *testing.B) {
 				}
 				durable := workload == "memory" || workload == "sqlite"
 				limit := 16
+				var store graph.Store[int]
 				if durable {
 					limit = 0
 					opts.MaxSteps = 16
@@ -39,7 +40,7 @@ func BenchmarkObservation(b *testing.B) {
 				}
 				switch workload {
 				case "memory":
-					opts.Store = memoryStore(b)
+					store = memoryStore(b)
 				case "sqlite":
 					store, err := sqlite.Open(ctx, filepath.Join(b.TempDir(), "runs.db"), checkpoint.JSON[int]{})
 					if err != nil {
@@ -50,10 +51,9 @@ func BenchmarkObservation(b *testing.B) {
 							b.Error(err)
 						}
 					})
-					opts.Store = store
 				}
 				if durable {
-					seed, err := r.Start(ctx, "bench", 0, graph.Options[int]{Store: opts.Store, MaxSteps: 1})
+					_, seed, err := r.Start(ctx, "bench", 0, store, graph.Options{MaxSteps: 1})
 					if err != nil || seed.Status != graph.StatusBudget {
 						b.Fatalf("seed = %+v, %v", seed, err)
 					}
@@ -61,35 +61,36 @@ func BenchmarkObservation(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				var result graph.Result[int]
+				var resultExecution *graph.Execution[int]
 				for i := range b.N {
 					var err error
 					if durable {
-						result, err = r.Recover(ctx, "bench", nil, opts)
+						resultExecution, result, err = r.Recover(ctx, "bench", nil, store, opts)
 					} else {
-						result, err = r.Start(ctx, "bench", 0, opts)
+						resultExecution, result, err = r.Start(ctx, "bench", 0, nil, opts)
 					}
 					if err != nil {
 						b.Fatal(err)
 					}
 					if durable {
 						progress := 1 + 16*(i+1)
-						if result.Status != graph.StatusBudget || result.Checkpoint.Steps != uint64(progress) || result.Checkpoint.Revision != uint64(progress+1) || len(result.Checkpoint.Invocations) != 1 || result.Checkpoint.Invocations[0].State != progress {
+						if result.Status != graph.StatusBudget || result.Header.Steps != uint64(progress) || result.Header.Revision != uint64(progress+1) || len(mustCheckpoint(resultExecution).Invocations) != 1 || mustCheckpoint(resultExecution).Invocations[0].State != progress {
 							b.Fatalf("recovery = %+v", result)
 						}
 					} else if result.Status != graph.StatusCompleted {
 						b.Fatalf("result = %+v", result)
 					} else if workload == "fanout" {
-						if len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
+						if len(mustCheckpoint(resultExecution).Invocations) != 0 || result.Final != nil {
 							b.Fatal("invalid merge")
 						}
-					} else if result.Checkpoint.Final == nil || *result.Checkpoint.Final != 16 {
+					} else if result.Final == nil || *result.Final != 16 {
 						b.Fatal("invalid final state")
 					}
 				}
 				b.StopTimer()
 				if durable {
-					saved, err := opts.Store.Load(ctx, "bench")
-					if err != nil || saved.Revision != result.Checkpoint.Revision || saved.Steps != result.Checkpoint.Steps || len(saved.Invocations) != 1 || saved.Invocations[0].State != result.Checkpoint.Invocations[0].State {
+					saved, err := store.Load(ctx, "bench")
+					if err != nil || saved.Revision != result.Header.Revision || saved.Steps != result.Header.Steps || len(saved.Invocations) != 1 || saved.Invocations[0].State != mustCheckpoint(resultExecution).Invocations[0].State {
 						b.Fatalf("stored checkpoint = %+v, %v", saved, err)
 					}
 				}

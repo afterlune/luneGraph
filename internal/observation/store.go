@@ -37,6 +37,13 @@ func (s *observedStore[S]) Load(ctx context.Context, runID string) (model.Checkp
 	return checkpoint, err
 }
 
+func (s *observedStore[S]) LoadHeader(ctx context.Context, runID string) (model.Header, error) {
+	span := s.session.Begin(ctx, model.Event{Operation: model.OperationLoad})
+	header, err := s.store.LoadHeader(ctx, runID)
+	span.End(ctx, model.Event{Revision: header.Revision, Err: err})
+	return header, err
+}
+
 func (s *observedStore[S]) Commit(ctx context.Context, expected uint64, change model.Change[S]) error {
 	checkpoint := change.Checkpoint()
 	span := s.session.Begin(ctx, model.Event{Operation: model.OperationCommit, Revision: checkpoint.Revision})

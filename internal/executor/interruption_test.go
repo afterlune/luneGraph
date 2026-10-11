@@ -23,7 +23,7 @@ func TestCallbackInterruptionClassification(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result, err := interruptedResult(ctx, Checkpoint[int]{Revision: 7}, marker)
-	if result.Status != StatusCancelled || result.Checkpoint.Revision != 7 || !errors.Is(err, context.Canceled) {
+	if result.Status != StatusCancelled || result.Header.Revision != 7 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled=%+v %v", result, err)
 	}
 }

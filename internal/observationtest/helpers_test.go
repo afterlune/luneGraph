@@ -133,7 +133,7 @@ func checkCall(t *testing.T, events []graph.Event, operation graph.EventOperatio
 		t.Fatalf("first event: %+v", events)
 	}
 	last := events[len(events)-1]
-	if last.Operation != operation || last.Phase != graph.PhaseFinished || last.Status != result.Status || last.Revision != result.Checkpoint.Revision || last.Err != err {
+	if last.Operation != operation || last.Phase != graph.PhaseFinished || last.Status != result.Status || last.Revision != result.Header.Revision || last.Err != err {
 		t.Fatalf("last event = %+v, result = %+v, err = %v", last, result, err)
 	}
 	for _, e := range events {

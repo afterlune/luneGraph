@@ -31,19 +31,7 @@ type workerTask[S any] struct {
 	revision uint64
 }
 
-func hasReady[S any](s Checkpoint[S]) bool {
-	for _, v := range s.Invocations {
-		if v.Status == InvocationReady {
-			return true
-		}
-	}
-	return false
-}
-func (r *Runner[S]) drive(ctx context.Context, start Checkpoint[S], opts Options[S], obs *observation.Session) (Result[S], error) {
-	return r.driveLive(ctx, newLive(start), opts, obs)
-}
-
-func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], obs *observation.Session) (Result[S], error) {
+func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs *observation.Session, store Store[S]) (Result[S], error) {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	workerLimit := limit.Capacity(opts.Limiter, opts.MaxConcurrency)
@@ -81,6 +69,9 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 		for len(running) > 0 {
 			out := <-results
 			delete(running, out.ref)
+			if l.valid(out.ref) {
+				l.enqueue(out.ref)
+			}
 		}
 	}
 	finish := func(status Status, err error) (Result[S], error) {
@@ -89,7 +80,11 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 			status = StatusCancelled
 			err = ctx.Err()
 		}
-		return resultWith(l.snapshot(), status), err
+		result, copyErr := r.resultFromLive(l, status)
+		if err == nil {
+			err = copyErr
+		}
+		return result, err
 	}
 	l.failureOverride = opts.FailureOverride
 	used := 0
@@ -124,17 +119,19 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 			if ref.join && l.groups[ref.id].JoinNode == "" {
 				c, terminalErr, err := r.resultChange(l, workResult[S]{ref: ref})
 				if err != nil {
+					l.enqueue(ref)
 					return finish(errorStatus(err), err)
 				}
 				c.Header.ScheduleCursor = cursor
-				if err := r.submit(ctx, l, c, opts.Store, obs); err != nil {
+				if err := r.submit(ctx, l, c, store, obs); err != nil {
+					l.enqueue(ref)
 					return finish(errorStatus(err), err)
 				}
 				if terminalErr != nil {
 					return finish(StatusFailed, terminalErr)
 				}
 				if l.header.Completed {
-					return finish(statusOf(l.header, false), nil)
+					return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
 				}
 				for pending, cancel := range running {
 					if !l.valid(pending) {
@@ -160,6 +157,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 					}
 					task, err = r.prepareTask(runCtx, l, ref, obs)
 					if err != nil {
+						l.enqueue(ref)
 						return finish(errorStatus(err), err)
 					}
 					if prepared == nil {
@@ -178,11 +176,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 				task, err = r.prepareTask(runCtx, l, ref, obs)
 				if err != nil {
 					limit.Release(opts.Limiter)
+					l.enqueue(ref)
 					return finish(errorStatus(err), err)
 				}
 			}
 			if err := ctx.Err(); err != nil {
 				limit.Release(opts.Limiter)
+				l.enqueue(ref)
 				return finish(StatusCancelled, err)
 			}
 
@@ -210,25 +210,16 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 			tasks <- task
 		}
 		if len(running) == 0 && !blocked && !immediate {
-			cp := l.snapshot()
-			if hasReady(cp) && (cp.Steps == math.MaxUint64 || cp.Revision == math.MaxUint64) {
-				return resultWith(cp, StatusFailed), ErrExecutionLimit
+			if l.hasReadyNode() && (l.header.Steps == math.MaxUint64 || l.header.Revision == math.MaxUint64) {
+				return finish(StatusFailed, ErrExecutionLimit)
 			}
-			if cp.Completed {
-				return resultWith(cp, statusOf(cp, false)), nil
+			if l.header.Completed {
+				return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
 			}
-			if !hasReady(cp) && len(cp.Groups) > 0 {
-				waiting := false
-				for _, v := range cp.Invocations {
-					if v.Status == InvocationWaiting {
-						waiting = true
-					}
-				}
-				if !waiting {
-					return resultWith(cp, StatusFailed), invalidCheckpoint("unresolved execution has no runnable work")
-				}
+			if !l.hasReadyNode() && len(l.groups) > 0 && l.waitingInvocations == 0 {
+				return finish(StatusFailed, invalidCheckpoint("unresolved execution has no runnable work"))
 			}
-			return resultWith(cp, statusOf(cp, used >= opts.MaxSteps)), nil
+			return finish(statusOf(l.header.Header(), l.readyNodes, used >= opts.MaxSteps), nil)
 		}
 		var slots chan<- struct{}
 		if blocked {
@@ -250,6 +241,9 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 		running[out.ref]()
 		delete(running, out.ref)
 		if err := ctx.Err(); err != nil {
+			if l.valid(out.ref) {
+				l.enqueue(out.ref)
+			}
 			return finish(StatusCancelled, err)
 		}
 		callID := out.callID
@@ -259,14 +253,17 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 		}
 		obs.SelectCallback(callID)
 		if isCallbackInterruption(out.err) {
+			l.enqueue(out.ref)
 			return finish(StatusInterrupted, out.err)
 		}
 		c, terminalErr, err := r.resultChange(l, out)
 		if err != nil {
+			l.enqueue(out.ref)
 			return finish(errorStatus(err), err)
 		}
 		c.Header.ScheduleCursor = cursor
-		if err := r.submit(ctx, l, c, opts.Store, obs); err != nil {
+		if err := r.submit(ctx, l, c, store, obs); err != nil {
+			l.enqueue(out.ref)
 			return finish(errorStatus(err), err)
 		}
 		for ref := range prepared {
@@ -283,7 +280,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options[S], 
 			return finish(StatusFailed, terminalErr)
 		}
 		if l.header.Completed {
-			return finish(statusOf(l.header, false), nil)
+			return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
 		}
 	}
 }

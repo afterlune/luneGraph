@@ -27,9 +27,8 @@ func TestSubgraphEnterAndReturn(t *testing.T) {
 	}
 	edge(t, parent, "start", "normalize")
 	edge(t, parent, "normalize", "after")
-
-	out, err := intRunner(t, parent).Start(context.Background(), "subgraph", 4, graph.Options[int]{})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 7 {
+	_, out, err := intRunner(t, parent).Start(context.Background(), "subgraph", 4, nil, graph.Options{})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 7 {
 		t.Fatalf("subgraph result = %+v, %v", out, err)
 	}
 }
@@ -44,12 +43,12 @@ func TestSubgraphCanBeEntryAndReturnWithoutOutputEndsBranch(t *testing.T) {
 	if err := parent.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	out, err := intRunner(t, parent).Start(context.Background(), "subgraph-entry", 8, graph.Options[int]{})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final != nil {
+	outExecution, out, err := intRunner(t, parent).Start(context.Background(), "subgraph-entry", 8, nil, graph.Options{})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final != nil {
 		t.Fatalf("subgraph entry result = %+v, %v", out, err)
 	}
-	if len(out.Checkpoint.Invocations) != 0 || out.Checkpoint.Final != nil {
-		t.Fatalf("terminals = %+v", out.Checkpoint.Invocations)
+	if len(mustCheckpoint(outExecution).Invocations) != 0 || out.Final != nil {
+		t.Fatalf("terminals = %+v", mustCheckpoint(outExecution).Invocations)
 	}
 }
 
@@ -74,15 +73,15 @@ func TestSubgraphTerminalActionsKeepTheirExecutionSemantics(t *testing.T) {
 				return graph.EndExecution(state), nil
 			})
 			edge(t, root, "worker", "after")
-			out, err := intRunner(t, root).Start(context.Background(), "terminal-"+action, 4, graph.Options[int]{})
+			outExecution, out, err := intRunner(t, root).Start(context.Background(), "terminal-"+action, 4, nil, graph.Options{})
 			if err != nil || afterCalls != 0 {
 				t.Fatalf("result = %+v, after calls=%d, err=%v", out, afterCalls, err)
 			}
 			if action == "branch" {
-				if out.Status != graph.StatusCompleted || out.Checkpoint.Final != nil || len(out.Checkpoint.Invocations) != 0 {
+				if out.Status != graph.StatusCompleted || out.Final != nil || len(mustCheckpoint(outExecution).Invocations) != 0 {
 					t.Fatalf("branch result = %+v", out)
 				}
-			} else if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 5 {
+			} else if out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 5 {
 				t.Fatalf("execution result = %+v", out)
 			}
 		})
@@ -111,17 +110,16 @@ func TestNestedAndRepeatedSubgraphsHaveIndependentNames(t *testing.T) {
 	edge(t, repeated, "first", "second")
 	edge(t, repeated, "second", "done")
 	runner := intRunner(t, repeated)
-
-	first, err := runner.Start(context.Background(), "repeated", 0, graph.Options[int]{MaxSteps: 1})
-	if err != nil || first.Status != graph.StatusBudget || first.Checkpoint.Invocations[0].Node != "first/increment" {
+	firstExecution, first, err := runner.Start(context.Background(), "repeated", 0, nil, graph.Options{MaxSteps: 1})
+	if err != nil || first.Status != graph.StatusBudget || mustCheckpoint(firstExecution).Invocations[0].Node != "first/increment" {
 		t.Fatalf("first mount = %+v, %v", first, err)
 	}
-	second, err := runner.Resume(context.Background(), first.Checkpoint, nil, graph.Options[int]{MaxSteps: 1})
-	if err != nil || second.Status != graph.StatusBudget || second.Checkpoint.Invocations[0].Node != "second/increment" {
+	secondExecution, second, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, graph.Options{MaxSteps: 1})
+	if err != nil || second.Status != graph.StatusBudget || mustCheckpoint(secondExecution).Invocations[0].Node != "second/increment" {
 		t.Fatalf("second mount = %+v, %v", second, err)
 	}
-	last, err := runner.Resume(context.Background(), second.Checkpoint, nil, graph.Options[int]{})
-	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 2 {
+	_, last, err := runner.Resume(context.Background(), mustCheckpoint(secondExecution), nil, nil, graph.Options{})
+	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 2 {
 		t.Fatalf("repeated result = %+v, %v", last, err)
 	}
 
@@ -150,8 +148,8 @@ func TestNestedAndRepeatedSubgraphsHaveIndependentNames(t *testing.T) {
 		return graph.EndExecution(state), nil
 	})
 	edge(t, root, "outer", "done")
-	nested, err := intRunner(t, root).Start(context.Background(), "nested-subgraph", 0, graph.Options[int]{})
-	if err != nil || nested.Status != graph.StatusCompleted || nested.Checkpoint.Final == nil || *nested.Checkpoint.Final != 5 {
+	_, nested, err := intRunner(t, root).Start(context.Background(), "nested-subgraph", 0, nil, graph.Options{})
+	if err != nil || nested.Status != graph.StatusCompleted || nested.Final == nil || *nested.Final != 5 {
 		t.Fatalf("nested result = %+v, %v", nested, err)
 	}
 }
@@ -186,8 +184,8 @@ func TestSubgraphReturnCanReachFanoutJoin(t *testing.T) {
 	for _, pair := range [][2]string{{"fork", "worker"}, {"fork", "sibling"}, {"worker", "joined"}, {"sibling", "joined"}, {"joined", "done"}} {
 		edge(t, root, pair[0], pair[1])
 	}
-	out, err := intRunner(t, root).Start(context.Background(), "subgraph-join", 0, graph.Options[int]{MaxConcurrency: 2})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 3 {
+	_, out, err := intRunner(t, root).Start(context.Background(), "subgraph-join", 0, nil, graph.Options{MaxConcurrency: 2})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 3 {
 		t.Fatalf("join result = %+v, %v", out, err)
 	}
 }
@@ -223,8 +221,8 @@ func TestSubgraphCanContainFanoutAndJoin(t *testing.T) {
 		return graph.EndExecution(state), nil
 	})
 	edge(t, root, "worker", "after")
-	out, err := intRunner(t, root).Start(context.Background(), "subgraph-internal-join", 0, graph.Options[int]{MaxConcurrency: 2})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 3 {
+	_, out, err := intRunner(t, root).Start(context.Background(), "subgraph-internal-join", 0, nil, graph.Options{MaxConcurrency: 2})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 3 {
 		t.Fatalf("subgraph join result = %+v, %v", out, err)
 	}
 }
@@ -265,21 +263,21 @@ func TestSubgraphContinuationRecovers(t *testing.T) {
 	edge(t, root, "start", "worker")
 	edge(t, root, "worker", "after")
 	runner := intRunner(t, root)
-	paused, err := runner.Start(context.Background(), "subgraph-wait", 4, graph.Options[int]{Store: store})
+	pausedExecution, paused, err := runner.Start(context.Background(), "subgraph-wait", 4, store, graph.Options{})
 	if err != nil || paused.Status != graph.StatusWaiting {
 		t.Fatalf("paused = %+v, %v", paused, err)
 	}
-	invocation := paused.Checkpoint.Invocations[0]
+	invocation := mustCheckpoint(pausedExecution).Invocations[0]
 	if invocation.Node != "worker/ask" || invocation.Continuation != "worker/add" || len(invocation.Next) != 1 || invocation.Next[0] != "worker/return" {
 		t.Fatalf("waiting invocation = %+v", invocation)
 	}
 
 	inputs := []graph.ResumeInput{{InvocationID: invocation.ID, Payload: []byte("6")}}
-	if _, err := runner.Resume(context.Background(), paused.Checkpoint, inputs, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
+	if _, _, err := runner.Resume(context.Background(), mustCheckpoint(pausedExecution), inputs, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("first resume error = %v", err)
 	}
-	completed, err := runner.Recover(context.Background(), "subgraph-wait", inputs, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 10 {
+	_, completed, err := runner.Recover(context.Background(), "subgraph-wait", inputs, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 10 {
 		t.Fatalf("recovered = %+v, %v", completed, err)
 	}
 	if len(applied) != 2 || applied[0] != applied[1] || applied[0].RunID != "subgraph-wait" || applied[0].CallID == "" {
@@ -361,9 +359,9 @@ func TestReturnOutsideSubgraphIsTransitionError(t *testing.T) {
 	node(t, root, "return", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Return(state), nil
 	})
-	out, err := intRunner(t, root).Start(context.Background(), "return-root", 0, graph.Options[int]{})
+	_, out, err := intRunner(t, root).Start(context.Background(), "return-root", 0, nil, graph.Options{})
 	var transitionErr *graph.TransitionError
-	if !errors.As(err, &transitionErr) || out.Checkpoint.Completed {
+	if !errors.As(err, &transitionErr) || out.Header.Completed {
 		t.Fatalf("result = %+v, error = %v", out, err)
 	}
 }
@@ -382,9 +380,9 @@ func TestSubgraphCannotSelectQualifiedTargetFromAnotherScope(t *testing.T) {
 	if err := root.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	out, err := intRunner(t, root).Start(context.Background(), "qualified-target", 0, graph.Options[int]{})
+	_, out, err := intRunner(t, root).Start(context.Background(), "qualified-target", 0, nil, graph.Options{})
 	var transitionErr *graph.TransitionError
-	if !errors.As(err, &transitionErr) || out.Checkpoint.Completed {
+	if !errors.As(err, &transitionErr) || out.Header.Completed {
 		t.Fatalf("result = %+v, error = %v", out, err)
 	}
 }
@@ -412,10 +410,9 @@ func TestCompiledSubgraphIsIndependentOfLaterBuilderChanges(t *testing.T) {
 		return graph.EndExecution(state), nil
 	})
 	edge(t, child, "work", "late")
-
-	out, err := runner.Start(context.Background(), "compiled-subgraph", 1, graph.Options[int]{})
+	_, out, err := runner.Start(context.Background(), "compiled-subgraph", 1, nil, graph.Options{})
 	var transitionErr *graph.TransitionError
-	if !errors.As(err, &transitionErr) || out.Checkpoint.Completed {
+	if !errors.As(err, &transitionErr) || out.Header.Completed {
 		t.Fatalf("result = %+v, error = %v", out, err)
 	}
 }

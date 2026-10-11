@@ -55,21 +55,23 @@ func TestNodeInterruptionPoliciesAndRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 				r := intRunner(t, g)
-				opts := graph.Options[int]{Store: store}
+				opts := graph.Options{}
+				optsStore := store
+
 				forced := graph.FailExecution
 				if override {
 					opts.FailureOverride = &forced
 				}
-				first, err := r.Start(context.Background(), "interrupt", 7, opts)
-				if first.Status != graph.StatusInterrupted || !errors.Is(err, cause) || !errors.Is(err, graph.ErrInterrupted) || first.Checkpoint.Completed || first.Checkpoint.Failure != nil || first.Checkpoint.HadLocalFailures || first.Checkpoint.Revision != 1 || first.Checkpoint.Steps != 0 || store.commits != 0 {
+				firstExecution, first, err := r.Start(context.Background(), "interrupt", 7, optsStore, opts)
+				if first.Status != graph.StatusInterrupted || !errors.Is(err, cause) || !errors.Is(err, graph.ErrInterrupted) || first.Header.Completed || first.Header.Failure != nil || first.Header.HadLocalFailures || first.Header.Revision != 1 || first.Header.Steps != 0 || store.commits != 0 {
 					t.Fatalf("first=%+v err=%v commits=%d", first, err, store.commits)
 				}
 				saved, err := store.Load(context.Background(), "interrupt")
-				if err != nil || !reflect.DeepEqual(saved, first.Checkpoint) {
+				if err != nil || !reflect.DeepEqual(saved, mustCheckpoint(firstExecution)) {
 					t.Fatalf("saved=%+v err=%v", saved, err)
 				}
-				out, err := r.Recover(context.Background(), "interrupt", nil, opts)
-				if err != nil || out.Status != graph.StatusCompleted || *out.Checkpoint.Final != 8 || len(calls) != 2 || calls[0] != calls[1] || store.commits != 1 {
+				_, out, err := r.Recover(context.Background(), "interrupt", nil, optsStore, opts)
+				if err != nil || out.Status != graph.StatusCompleted || *out.Final != 8 || len(calls) != 2 || calls[0] != calls[1] || store.commits != 1 {
 					t.Fatalf("out=%+v calls=%+v err=%v", out, calls, err)
 				}
 			})
@@ -94,7 +96,7 @@ func TestInterruptionSQLiteReopen(t *testing.T) {
 		return graph.EndExecution(s), nil
 	})
 	r := intRunner(t, g)
-	first, err := r.Start(ctx, "reopen", 3, graph.Options[int]{Store: store})
+	_, first, err := r.Start(ctx, "reopen", 3, store, graph.Options{})
 	if first.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) {
 		t.Fatalf("first=%+v %v", first, err)
 	}
@@ -106,7 +108,7 @@ func TestInterruptionSQLiteReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	out, err := r.Recover(ctx, "reopen", nil, graph.Options[int]{Store: store})
+	_, out, err := r.Recover(ctx, "reopen", nil, store, graph.Options{})
 	if err != nil || out.Status != graph.StatusCompleted || calls[0] != calls[1] {
 		t.Fatalf("out=%+v calls=%+v %v", out, calls, err)
 	}
@@ -158,7 +160,7 @@ func TestInterruptionDoesNotChangeOtherErrorBoundaries(t *testing.T) {
 			if kind == "store-marker" {
 				store.fail = graph.Interrupt(nil)
 			}
-			out, err := r.Start(ctx, "boundary", 0, graph.Options[int]{Store: store})
+			outExecution, out, err := r.Start(ctx, "boundary", 0, store, graph.Options{})
 			want := graph.StatusFailed
 			if kind == "cancel" {
 				want = graph.StatusCancelled
@@ -170,7 +172,7 @@ func TestInterruptionDoesNotChangeOtherErrorBoundaries(t *testing.T) {
 				want = graph.StatusInterrupted
 			}
 			if kind == "decode" {
-				out, err = r.Resume(ctx, out.Checkpoint, []graph.ResumeInput{{InvocationID: out.Checkpoint.Invocations[0].ID}}, graph.Options[int]{Store: store})
+				out, err = outExecution.Advance(ctx, []graph.ResumeInput{{InvocationID: mustCheckpoint(outExecution).Invocations[0].ID}}, graph.Options{})
 				want = graph.StatusWaiting
 			}
 			if err == nil || out.Status != want {
@@ -178,7 +180,7 @@ func TestInterruptionDoesNotChangeOtherErrorBoundaries(t *testing.T) {
 			}
 			if kind == "panic" {
 				var pe *graph.PanicError
-				if !errors.As(err, &pe) || !out.Checkpoint.Completed || out.Checkpoint.Failure == nil {
+				if !errors.As(err, &pe) || !out.Header.Completed || out.Header.Failure == nil {
 					t.Fatalf("panic swallowed: %+v %v", out, err)
 				}
 			}
@@ -229,24 +231,23 @@ func TestCloneInterruptionMarkerAtResumeAndJoin(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := graph.Options[int]{MaxConcurrency: 1, Store: newMemoryStore(t)}
-			out, err := r.Start(context.Background(), "clone-boundary", 0, opts)
+			opts := graph.Options{MaxConcurrency: 1}
+			optsStore := newMemoryStore(t)
+			outExecution, out, err := r.Start(context.Background(), "clone-boundary", 0, optsStore, opts)
 			if kind == "resume" {
 				if err != nil || out.Status != graph.StatusWaiting {
 					t.Fatalf("start=%+v %v", out, err)
 				}
-				armed.Store(true)
 				var input graph.ResumeInput
-				for _, inv := range out.Checkpoint.Invocations {
-					if inv.Status == graph.InvocationWaiting {
-						input.InvocationID = inv.ID
-						input.Payload = []byte("1")
-						break
-					}
+				pending := outExecution.Pending()
+				if len(pending) != 2 {
+					t.Fatalf("waiting invocations=%+v", pending)
 				}
-				out, err = r.Resume(context.Background(), out.Checkpoint, []graph.ResumeInput{input}, opts)
+				input = graph.ResumeInput{InvocationID: pending[0].InvocationID, Payload: []byte("1")}
+				armed.Store(true)
+				out, err = outExecution.Advance(context.Background(), []graph.ResumeInput{input}, opts)
 			}
-			if out.Status != graph.StatusFailed || !errors.Is(err, graph.ErrInterrupted) || out.Checkpoint.Completed || out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil {
+			if out.Status != graph.StatusFailed || !errors.Is(err, graph.ErrInterrupted) || out.Header.Completed || out.Header.HadLocalFailures || out.Header.Failure != nil {
 				t.Fatalf("out=%+v %v", out, err)
 			}
 		})
@@ -264,12 +265,12 @@ func TestInterruptionResumeWithoutStore(t *testing.T) {
 		return graph.EndExecution(s), nil
 	})
 	r := intRunner(t, g)
-	out, err := r.Start(context.Background(), "in-memory", 4, graph.Options[int]{})
+	outExecution, out, err := r.Start(context.Background(), "in-memory", 4, nil, graph.Options{})
 	if !errors.Is(err, graph.ErrInterrupted) {
 		t.Fatal(err)
 	}
-	out, err = r.Resume(context.Background(), out.Checkpoint, nil, graph.Options[int]{})
-	if err != nil || out.Status != graph.StatusCompleted || *out.Checkpoint.Final != 4 || len(calls) != 2 || calls[0] != calls[1] {
+	out, err = outExecution.Advance(context.Background(), nil, graph.Options{})
+	if err != nil || out.Status != graph.StatusCompleted || *out.Final != 4 || len(calls) != 2 || calls[0] != calls[1] {
 		t.Fatalf("out=%+v calls=%+v %v", out, calls, err)
 	}
 }

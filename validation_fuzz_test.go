@@ -28,12 +28,12 @@ func FuzzCheckpointValidation(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	base, err := r.Start(context.Background(), "fuzz-run", 0, graph.Options[int]{})
+	baseExecution, _, err := r.Start(context.Background(), "fuzz-run", 0, nil, graph.Options{})
 	if err != nil {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		s := base.Checkpoint
+		s := mustCheckpoint(baseExecution)
 		s.Invocations = append([]graph.Invocation[int](nil), s.Invocations...)
 		if len(data) > 0 {
 			s.FormatVersion = uint32(data[0])
@@ -50,6 +50,6 @@ func FuzzCheckpointValidation(f *testing.F) {
 		if len(data) > 4 {
 			s.ScheduleCursor = uint64(data[4])
 		}
-		_, _ = r.Resume(context.Background(), s, nil, graph.Options[int]{MaxSteps: 1})
+		_, _, _ = r.Resume(context.Background(), s, nil, nil, graph.Options{MaxSteps: 1})
 	})
 }

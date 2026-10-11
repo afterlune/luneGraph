@@ -23,13 +23,14 @@ func TestInterruptionAfterEffectCommit(t *testing.T) {
 				return value, err
 			})
 			ctx := context.Background()
-			opts := graph.Options[state]{Store: store, MaxConcurrency: 1}
-			first, err := r.Start(ctx, "interrupted-effect", state{Delta: 3}, opts)
+			opts := graph.Options{MaxConcurrency: 1}
+			optsStore := store
+			firstExecution, first, err := r.Start(ctx, "interrupted-effect", state{Delta: 3}, optsStore, opts)
 			if kind == "continuation" {
 				check(t, err)
-				first, err = r.Resume(ctx, first.Checkpoint, inputsFor(first.Checkpoint), opts)
+				first, err = firstExecution.Advance(ctx, inputsFor(mustCheckpoint(firstExecution)), opts)
 			}
-			if first.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || first.Checkpoint.Completed || first.Checkpoint.Failure != nil {
+			if first.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || first.Header.Completed || first.Header.Failure != nil {
 				t.Fatalf("first=%+v %v", first, err)
 			}
 			assertEffects(t, path, 3, 1)
@@ -37,11 +38,11 @@ func TestInterruptionAfterEffectCommit(t *testing.T) {
 			// original receipt result rather than the counter's latest value.
 			other, err := newRunner(add)
 			check(t, err)
-			_, err = other.Start(ctx, "other-effect", state{Delta: 4}, graph.Options[state]{Store: store})
+			_, _, err = other.Start(ctx, "other-effect", state{Delta: 4}, store, graph.Options{})
 			check(t, err)
-			out, err := r.Recover(ctx, "interrupted-effect", inputsFor(first.Checkpoint), opts)
+			_, out, err := r.Recover(ctx, "interrupted-effect", inputsFor(mustCheckpoint(firstExecution)), optsStore, opts)
 			check(t, err)
-			if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Value != 3 || len(calls) != 2 || calls[0] != calls[1] {
+			if out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Value != 3 || len(calls) != 2 || calls[0] != calls[1] {
 				t.Fatalf("out=%+v calls=%+v", out, calls)
 			}
 			assertEffects(t, path, 7, 2)
@@ -62,19 +63,19 @@ func TestInterruptionCancellationAndPanicBoundaries(t *testing.T) {
 					cancel()
 					return 0, graph.Interrupt(nil)
 				})
-				opts := graph.Options[state]{MaxConcurrency: 1}
-				out, err := r.Start(ctx, "boundary", state{Delta: 3}, opts)
+				opts := graph.Options{MaxConcurrency: 1}
+				outExecution, out, err := r.Start(ctx, "boundary", state{Delta: 3}, nil, opts)
 				if kind == "continuation" {
 					check(t, err)
-					out, err = r.Resume(ctx, out.Checkpoint, inputsFor(out.Checkpoint), opts)
+					out, err = outExecution.Advance(ctx, inputsFor(mustCheckpoint(outExecution)), opts)
 				}
 				if mode == "cancel" {
-					if out.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) || out.Checkpoint.Completed {
+					if out.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) || out.Header.Completed {
 						t.Fatalf("cancel=%+v %v", out, err)
 					}
 				} else {
 					var pe *graph.PanicError
-					if out.Status != graph.StatusFailed || !errors.As(err, &pe) || !out.Checkpoint.Completed || out.Checkpoint.Failure == nil {
+					if out.Status != graph.StatusFailed || !errors.As(err, &pe) || !out.Header.Completed || out.Header.Failure == nil {
 						t.Fatalf("panic=%+v %v", out, err)
 					}
 				}

@@ -11,19 +11,19 @@ import (
 
 func seedInterrupted(t testing.TB, r *graph.Runner[state], store graph.Store[state], c *interruptionController, id string, width, concurrency int) interruptionSlot {
 	t.Helper()
-	out, err := r.Start(context.Background(), id, initial(id), graph.Options[state]{Store: store, MaxConcurrency: concurrency})
-	if out.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || out.Checkpoint.Revision != 1 || out.Checkpoint.Steps != 0 {
+	outExecution, out, err := r.Start(context.Background(), id, initial(id), store, graph.Options{MaxConcurrency: concurrency})
+	if out.Status != graph.StatusInterrupted || !errors.Is(err, graph.ErrInterrupted) || out.Header.Revision != 1 || out.Header.Steps != 0 {
 		t.Fatalf("seed=%+v %v", out, err)
 	}
-	if err := checkInterruptionCheckpoint(out.Checkpoint, width); err != nil {
+	if err := checkInterruptionCheckpoint(mustCheckpoint(outExecution), width); err != nil {
 		t.Fatal(err)
 	}
 	if !c.quiescent(id) {
 		t.Fatal("callbacks outlived Start")
 	}
-	c.reconcile(out.Checkpoint)
+	c.reconcile(mustCheckpoint(outExecution))
 	s := interruptionSlot{id: id}
-	s.remember(out.Checkpoint, store != nil)
+	s.remember(mustCheckpoint(outExecution), store != nil)
 	return s
 }
 

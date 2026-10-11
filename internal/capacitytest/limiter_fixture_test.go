@@ -60,7 +60,7 @@ func (m *limiterTracker) Observe(_ context.Context, e graph.Event) {
 type limiterPopulation struct {
 	runner  *graph.Runner[state]
 	store   graph.Store[state]
-	opts    graph.Options[state]
+	opts    graph.Options
 	slots   []interruptionSlot
 	tracker limiterTracker
 }
@@ -72,15 +72,15 @@ func newLimiterPopulation(t testing.TB, kind string, capacity int) *limiterPopul
 		t.Fatal(err)
 	}
 	p := &limiterPopulation{runner: fanoutRunner(t, 8, 0, 1), store: openStore(t, kind), slots: make([]interruptionSlot, 64)}
-	p.opts = graph.Options[state]{Store: p.store, Limiter: l, MaxConcurrency: 8, MaxSteps: 10, Observer: &p.tracker}
+	p.opts = graph.Options{Limiter: l, MaxConcurrency: 8, MaxSteps: 10, Observer: &p.tracker}
 	for i := range p.slots {
 		id := fmt.Sprintf("limited-%d", i)
-		out, err := p.runner.Start(context.Background(), id, initial(id), p.opts)
+		outExecution, out, err := p.runner.Start(context.Background(), id, initial(id), p.store, p.opts)
 		if err != nil || out.Status != graph.StatusWaiting {
 			t.Fatalf("seed=%+v %v", out, err)
 		}
 		p.slots[i].id = id
-		p.slots[i].remember(out.Checkpoint, true)
+		p.slots[i].remember(mustCheckpoint(outExecution), true)
 	}
 	return p
 }
@@ -88,18 +88,18 @@ func newLimiterPopulation(t testing.TB, kind string, capacity int) *limiterPopul
 func (p *limiterPopulation) advance(ctx context.Context, i int) (graph.Result[state], error) {
 	s := &p.slots[i]
 	before := s.checkpoint
-	out, err := p.runner.Recover(ctx, s.id, interruptionInputs(before), p.opts)
+	outExecution, out, err := p.runner.Recover(ctx, s.id, interruptionInputs(before), p.store, p.opts)
 	if err != nil {
 		return out, err
 	}
-	v, stateErr := rootState(out.Checkpoint)
+	v, stateErr := rootState(mustCheckpoint(outExecution))
 	if stateErr != nil {
 		return out, stateErr
 	}
-	if out.Status != graph.StatusWaiting || v.Owner != s.id || v.Round != int(before.Steps/10)+1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*10) || out.Checkpoint.Revision != uint64(v.Round*12) {
+	if out.Status != graph.StatusWaiting || v.Owner != s.id || v.Round != int(before.Steps/10)+1 || v.Total != v.Round*8 || v.Values["sum"] != v.Round*36 || v.Values["inputs"] != v.Round-1 || out.Header.Steps != uint64(v.Round*10) || out.Header.Revision != uint64(v.Round*12) {
 		return out, fmt.Errorf("invalid limited round: %+v", out)
 	}
-	s.remember(out.Checkpoint, true)
+	s.remember(mustCheckpoint(outExecution), true)
 	return out, nil
 }
 

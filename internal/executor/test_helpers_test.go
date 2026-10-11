@@ -107,6 +107,11 @@ func (s *executorTestStore) Load(ctx context.Context, runID string) (Checkpoint[
 	return copyCheckpoint(checkpoint), nil
 }
 
+func (s *executorTestStore) LoadHeader(ctx context.Context, runID string) (Header, error) {
+	checkpoint, err := s.Load(ctx, runID)
+	return checkpoint.Header(), err
+}
+
 func (s *executorTestStore) Commit(ctx context.Context, expected uint64, change Change[int]) error {
 	next := change.Checkpoint()
 	if ctx == nil {

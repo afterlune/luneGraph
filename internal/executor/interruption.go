@@ -17,7 +17,7 @@ func isCallbackInterruption(err error) bool {
 
 func interruptedResult[S any](ctx context.Context, checkpoint Checkpoint[S], err error) (Result[S], error) {
 	if cancelled := ctx.Err(); cancelled != nil {
-		return resultWith(checkpoint, StatusCancelled), cancelled
+		return Result[S]{Status: StatusCancelled, Header: checkpoint.Header(), Final: checkpoint.Final}, cancelled
 	}
-	return resultWith(checkpoint, StatusInterrupted), err
+	return Result[S]{Status: StatusInterrupted, Header: checkpoint.Header(), Final: checkpoint.Final}, err
 }

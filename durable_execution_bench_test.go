@@ -24,24 +24,27 @@ func BenchmarkDurableSequentialExecution(b *testing.B) {
 				store := durableBenchmarkStore(b, persistence)
 				runner := durableSequentialRunner(b)
 				const runID = "durable-sequential"
-				seed, err := runner.Start(ctx, runID, newDurableBenchmarkState(), graph.Options[durableBenchmarkState]{Store: store, MaxSteps: 1})
-				if err != nil || seed.Status != graph.StatusBudget || seed.Checkpoint.Revision != 2 || seed.Checkpoint.Steps != 1 {
-					b.Fatalf("seed run = status %s, revision %d, steps %d, error %v", seed.Status, seed.Checkpoint.Revision, seed.Checkpoint.Steps, err)
+				_, seed, err := runner.Start(ctx, runID, newDurableBenchmarkState(), store, graph.Options{MaxSteps: 1})
+				if err != nil || seed.Status != graph.StatusBudget || seed.Header.Revision != 2 || seed.Header.Steps != 1 {
+					b.Fatalf("seed run = status %s, revision %d, steps %d, error %v", seed.Status, seed.Header.Revision, seed.Header.Steps, err)
 				}
 
-				options := graph.Options[durableBenchmarkState]{Store: store, MaxSteps: stepsPerCall}
+				options := graph.Options{MaxSteps: stepsPerCall}
+				optionsStore := store
+
 				b.ReportAllocs()
 				b.ResetTimer()
 				var latest graph.Result[durableBenchmarkState]
+				var latestExecution *graph.Execution[durableBenchmarkState]
 				for i := 0; i < b.N; i++ {
-					latest, err = runner.Recover(ctx, runID, nil, options)
+					latestExecution, latest, err = runner.Recover(ctx, runID, nil, optionsStore, options)
 					expectedProgress := uint64(1 + (i+1)*stepsPerCall)
-					if err != nil || latest.Status != graph.StatusBudget || latest.Checkpoint.Steps != expectedProgress || latest.Checkpoint.Revision != expectedProgress+1 || len(latest.Checkpoint.Invocations) != 1 || latest.Checkpoint.Invocations[0].Status != graph.InvocationReady || len(latest.Checkpoint.Invocations[0].State.Values) != 16 || latest.Checkpoint.Invocations[0].State.Values["value-0"] != int(expectedProgress) {
-						b.Fatalf("recover %d = status %s, revision %d, steps %d, error %v", i, latest.Status, latest.Checkpoint.Revision, latest.Checkpoint.Steps, err)
+					if err != nil || latest.Status != graph.StatusBudget || latest.Header.Steps != expectedProgress || latest.Header.Revision != expectedProgress+1 || len(mustCheckpoint(latestExecution).Invocations) != 1 || mustCheckpoint(latestExecution).Invocations[0].Status != graph.InvocationReady || len(mustCheckpoint(latestExecution).Invocations[0].State.Values) != 16 || mustCheckpoint(latestExecution).Invocations[0].State.Values["value-0"] != int(expectedProgress) {
+						b.Fatalf("recover %d = status %s, revision %d, steps %d, error %v", i, latest.Status, latest.Header.Revision, latest.Header.Steps, err)
 					}
 				}
 				b.StopTimer()
-				assertDurableBenchmarkStored(b, store, latest.Checkpoint, 1)
+				assertDurableBenchmarkStored(b, store, mustCheckpoint(latestExecution), 1)
 			})
 		}
 	}
@@ -59,28 +62,31 @@ func BenchmarkDurableFanoutJoin(b *testing.B) {
 					store := durableBenchmarkStore(b, persistence)
 					runner := durableFanoutRunner(b, width)
 					const runID = "durable-fanout"
-					seed, err := runner.Start(ctx, runID, newDurableBenchmarkState(), graph.Options[durableBenchmarkState]{Store: store, MaxSteps: 1, MaxConcurrency: concurrency.value})
-					if err != nil || seed.Status != graph.StatusBudget || seed.Checkpoint.Revision != 2 || seed.Checkpoint.Steps != 1 || len(seed.Checkpoint.Groups) != 1 || len(seed.Checkpoint.Invocations) != width+1 {
-						b.Fatalf("seed run = status %s, revision %d, steps %d, groups %d, invocations %d, error %v", seed.Status, seed.Checkpoint.Revision, seed.Checkpoint.Steps, len(seed.Checkpoint.Groups), len(seed.Checkpoint.Invocations), err)
+					seedExecution, seed, err := runner.Start(ctx, runID, newDurableBenchmarkState(), store, graph.Options{MaxSteps: 1, MaxConcurrency: concurrency.value})
+					if err != nil || seed.Status != graph.StatusBudget || seed.Header.Revision != 2 || seed.Header.Steps != 1 || len(mustCheckpoint(seedExecution).Groups) != 1 || len(mustCheckpoint(seedExecution).Invocations) != width+1 {
+						b.Fatalf("seed run = status %s, revision %d, steps %d, groups %d, invocations %d, error %v", seed.Status, seed.Header.Revision, seed.Header.Steps, len(mustCheckpoint(seedExecution).Groups), len(mustCheckpoint(seedExecution).Invocations), err)
 					}
-					assertDurableFanoutCheckpoint(b, seed.Checkpoint, width, 0)
+					assertDurableFanoutCheckpoint(b, mustCheckpoint(seedExecution), width, 0)
 
 					stepsPerCall := width + 2
-					options := graph.Options[durableBenchmarkState]{Store: store, MaxSteps: stepsPerCall, MaxConcurrency: concurrency.value}
+					options := graph.Options{MaxSteps: stepsPerCall, MaxConcurrency: concurrency.value}
+					optionsStore := store
+
 					b.ReportAllocs()
 					b.ResetTimer()
 					var latest graph.Result[durableBenchmarkState]
+					var latestExecution *graph.Execution[durableBenchmarkState]
 					for i := 0; i < b.N; i++ {
-						latest, err = runner.Recover(ctx, runID, nil, options)
+						latestExecution, latest, err = runner.Recover(ctx, runID, nil, optionsStore, options)
 						cycles := i + 1
 						expectedProgress := uint64(1 + cycles*stepsPerCall)
-						if err != nil || latest.Status != graph.StatusBudget || latest.Checkpoint.Steps != expectedProgress || latest.Checkpoint.Revision != expectedProgress+1+uint64(cycles) {
-							b.Fatalf("recover %d = status %s, revision %d, steps %d, groups %d, invocations %d, error %v", i, latest.Status, latest.Checkpoint.Revision, latest.Checkpoint.Steps, len(latest.Checkpoint.Groups), len(latest.Checkpoint.Invocations), err)
+						if err != nil || latest.Status != graph.StatusBudget || latest.Header.Steps != expectedProgress || latest.Header.Revision != expectedProgress+1+uint64(cycles) {
+							b.Fatalf("recover %d = status %s, revision %d, steps %d, groups %d, invocations %d, error %v", i, latest.Status, latest.Header.Revision, latest.Header.Steps, len(mustCheckpoint(latestExecution).Groups), len(mustCheckpoint(latestExecution).Invocations), err)
 						}
-						assertDurableFanoutCheckpoint(b, latest.Checkpoint, width, cycles)
+						assertDurableFanoutCheckpoint(b, mustCheckpoint(latestExecution), width, cycles)
 					}
 					b.StopTimer()
-					assertDurableBenchmarkStored(b, store, latest.Checkpoint, width+1)
+					assertDurableBenchmarkStored(b, store, mustCheckpoint(latestExecution), width+1)
 				})
 			}
 		}

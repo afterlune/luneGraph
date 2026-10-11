@@ -13,12 +13,12 @@ func BenchmarkCapacityFanout(b *testing.B) {
 		for _, concurrency := range []int{1, 8} {
 			b.Run(fmt.Sprintf("width=%d/concurrency=%d", width, concurrency), func(b *testing.B) {
 				r := fanoutRunner(b, width, 1, 0)
-				opts := graph.Options[state]{MaxSteps: width + 2, MaxConcurrency: concurrency}
+				opts := graph.Options{MaxSteps: width + 2, MaxConcurrency: concurrency}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
-					out, err := r.Start(context.Background(), "fanout", initial("fanout"), opts)
-					if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Round != 1 || out.Checkpoint.Final.Total != width || out.Checkpoint.Final.Values["sum"] != width*(width+1)/2 || out.Checkpoint.Steps != uint64(width+2) {
+					_, out, err := r.Start(context.Background(), "fanout", initial("fanout"), nil, opts)
+					if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Round != 1 || out.Final.Total != width || out.Final.Values["sum"] != width*(width+1)/2 || out.Header.Steps != uint64(width+2) {
 						b.Fatalf("invalid fan-out: %+v, %v", out, err)
 					}
 				}

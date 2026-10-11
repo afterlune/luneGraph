@@ -17,16 +17,18 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 			var inputs []graph.ResumeInput
 			var first graph.Result[int]
 			var err error
-			opts := graph.Options[int]{Store: store, Observer: log, MaxConcurrency: 1}
+			opts := graph.Options{Observer: log, MaxConcurrency: 1}
+			optsStore := store
+
 			if operation == graph.OperationApply {
 				store.revision = 3
 				r = mountedRunner(t)
-				seed, seedErr := r.Start(context.Background(), "replay", 0, graph.Options[int]{Store: store})
+				seedExecution, _, seedErr := r.Start(context.Background(), "replay", 0, store, graph.Options{})
 				if seedErr != nil {
 					t.Fatal(seedErr)
 				}
-				inputs = []graph.ResumeInput{{InvocationID: seed.Checkpoint.Invocations[0].ID, Payload: []byte("3")}}
-				first, err = r.Resume(context.Background(), seed.Checkpoint, inputs, opts)
+				inputs = []graph.ResumeInput{{InvocationID: mustCheckpoint(seedExecution).Invocations[0].ID, Payload: []byte("3")}}
+				_, first, err = r.Resume(context.Background(), mustCheckpoint(seedExecution), inputs, optsStore, opts)
 				checkCall(t, log.snapshot(), graph.OperationResume, first, err)
 			} else {
 				store.revision = 5
@@ -49,7 +51,7 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 					edge(t, g, name, "join")
 				}
 				r = compile(t, g)
-				first, err = r.Start(context.Background(), "replay", 0, opts)
+				_, first, err = r.Start(context.Background(), "replay", 0, optsStore, opts)
 				checkCall(t, log.snapshot(), graph.OperationStart, first, err)
 			}
 			if !errors.Is(err, graph.ErrConflict) {
@@ -60,7 +62,7 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 			if len(firstCallbacks) != 1 {
 				t.Fatalf("first callbacks = %+v", firstCallbacks)
 			}
-			result, err := r.Recover(context.Background(), "replay", inputs, opts)
+			_, result, err := r.Recover(context.Background(), "replay", inputs, optsStore, opts)
 			if err != nil || result.Status != graph.StatusCompleted {
 				t.Fatalf("recovery = %+v, %v", result, err)
 			}

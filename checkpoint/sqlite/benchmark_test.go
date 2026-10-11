@@ -47,11 +47,11 @@ func BenchmarkCheckpointCAS(b *testing.B) {
 			}
 
 			runner := benchmarkCheckpointRunner(b)
-			seed, err := runner.Start(context.Background(), "cas", newBenchmarkState(), graph.Options[benchmarkState]{Store: store, MaxSteps: 1})
-			if err != nil || seed.Status != graph.StatusBudget || len(seed.Checkpoint.Invocations) != 1 {
+			seedExecution, seed, err := runner.Start(context.Background(), "cas", newBenchmarkState(), store, graph.Options{MaxSteps: 1})
+			if err != nil || seed.Status != graph.StatusBudget || len(mustCheckpoint(seedExecution).Invocations) != 1 {
 				b.Fatalf("seed checkpoint = %+v, %v", seed, err)
 			}
-			current := seed.Checkpoint
+			current := mustCheckpoint(seedExecution)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
@@ -84,10 +84,10 @@ func BenchmarkSQLiteReopenRecover(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		result, recoverErr := runner.Recover(context.Background(), "cold-recovery", []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, graph.Options[benchmarkState]{Store: store})
+		_, result, recoverErr := runner.Recover(context.Background(), "cold-recovery", []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, store, graph.Options{})
 		closeErr := store.Close()
-		if recoverErr != nil || result.Status != graph.StatusCompleted || result.Checkpoint.Final == nil || (*result.Checkpoint.Final).Values["value-0"] != 1 {
-			b.Fatalf("recovered result = status %s, checkpoint revision %d, error %v", result.Status, result.Checkpoint.Revision, recoverErr)
+		if recoverErr != nil || result.Status != graph.StatusCompleted || result.Final == nil || (*result.Final).Values["value-0"] != 1 {
+			b.Fatalf("recovered result = status %s, checkpoint revision %d, error %v", result.Status, result.Header.Revision, recoverErr)
 		}
 		if closeErr != nil {
 			b.Fatal(closeErr)
@@ -183,10 +183,10 @@ func seedSQLiteWaitingRun(b *testing.B, path string, runner *graph.Runner[benchm
 	if err != nil {
 		b.Fatal(err)
 	}
-	result, runErr := runner.Start(context.Background(), "cold-recovery", newBenchmarkState(), graph.Options[benchmarkState]{Store: store})
+	_, result, runErr := runner.Start(context.Background(), "cold-recovery", newBenchmarkState(), store, graph.Options{})
 	closeErr := store.Close()
-	if runErr != nil || result.Status != graph.StatusWaiting || result.Checkpoint.Revision != 2 {
-		b.Fatalf("seed waiting run = status %s, revision %d, error %v", result.Status, result.Checkpoint.Revision, runErr)
+	if runErr != nil || result.Status != graph.StatusWaiting || result.Header.Revision != 2 {
+		b.Fatalf("seed waiting run = status %s, revision %d, error %v", result.Status, result.Header.Revision, runErr)
 	}
 	if closeErr != nil {
 		b.Fatal(closeErr)

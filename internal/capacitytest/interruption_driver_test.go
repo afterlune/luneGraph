@@ -56,13 +56,16 @@ func checkInterruptionCheckpoint(cp graph.Checkpoint[state], width int) error {
 
 func interruptionCall(ctx context.Context, r *graph.Runner[state], store graph.Store[state], c *interruptionController, s *interruptionSlot, width, concurrency int) (graph.Result[state], error) {
 	before := s.checkpoint
-	opts := graph.Options[state]{Store: store, MaxConcurrency: concurrency, MaxSteps: width + 2}
+	opts := graph.Options{MaxConcurrency: concurrency, MaxSteps: width + 2}
+	optsStore := store
+
 	var out graph.Result[state]
+	var outExecution *graph.Execution[state]
 	var err error
 	if store == nil {
-		out, err = r.Resume(ctx, before, interruptionInputs(before), opts)
+		outExecution, out, err = r.Resume(ctx, before, interruptionInputs(before), optsStore, opts)
 	} else {
-		out, err = r.Recover(ctx, s.id, interruptionInputs(before), opts)
+		outExecution, out, err = r.Recover(ctx, s.id, interruptionInputs(before), optsStore, opts)
 	}
 	if !c.quiescent(s.id) {
 		return out, fmt.Errorf("callbacks outlived public call for %s", s.id)
@@ -76,22 +79,22 @@ func interruptionCall(ctx context.Context, r *graph.Runner[state], store graph.S
 	if out.Status != graph.StatusInterrupted && out.Status != graph.StatusWaiting && out.Status != graph.StatusBudget {
 		return out, fmt.Errorf("unexpected status %s", out.Status)
 	}
-	if out.Checkpoint.Revision < before.Revision || out.Checkpoint.Steps < before.Steps {
+	if out.Header.Revision < before.Revision || out.Header.Steps < before.Steps {
 		return out, errors.New("checkpoint counters regressed")
 	}
-	if err := checkInterruptionCheckpoint(out.Checkpoint, width); err != nil {
+	if err := checkInterruptionCheckpoint(mustCheckpoint(outExecution), width); err != nil {
 		return out, err
 	}
-	if count := c.reconcile(out.Checkpoint); count > width+1 {
+	if count := c.reconcile(mustCheckpoint(outExecution)); count > width+1 {
 		return out, fmt.Errorf("controller retained %d pending callbacks", count)
 	}
 	if out.Status == graph.StatusWaiting {
-		v, stateErr := rootState(out.Checkpoint)
+		v, stateErr := rootState(mustCheckpoint(outExecution))
 		if stateErr != nil {
 			return out, stateErr
 		}
-		if v.Total != v.Round*width || v.Values["sum"] != v.Round*width*(width+1)/2 || v.Values["inputs"] != v.Round-1 || out.Checkpoint.Steps != uint64(v.Round*(width+2)) || out.Checkpoint.Revision != out.Checkpoint.Steps+uint64(2*v.Round) {
-			return out, fmt.Errorf("invalid round boundary: %+v", out.Checkpoint)
+		if v.Total != v.Round*width || v.Values["sum"] != v.Round*width*(width+1)/2 || v.Values["inputs"] != v.Round-1 || out.Header.Steps != uint64(v.Round*(width+2)) || out.Header.Revision != out.Header.Steps+uint64(2*v.Round) {
+			return out, fmt.Errorf("invalid round boundary: %+v", mustCheckpoint(outExecution))
 		}
 	}
 	// CAS acknowledgements are certain in this fixture; persisted results must
@@ -101,11 +104,11 @@ func interruptionCall(ctx context.Context, r *graph.Runner[state], store graph.S
 		if loadErr != nil {
 			return out, loadErr
 		}
-		if !reflect.DeepEqual(saved, out.Checkpoint) {
+		if !reflect.DeepEqual(saved, mustCheckpoint(outExecution)) {
 			return out, errors.New("returned and stored checkpoints differ")
 		}
 	}
-	s.remember(out.Checkpoint, store != nil)
+	s.remember(mustCheckpoint(outExecution), store != nil)
 	return out, err
 }
 

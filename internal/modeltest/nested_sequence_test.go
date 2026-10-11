@@ -35,13 +35,15 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 	makeRunner := func() *graph.Runner[nestedState] { return nestedRunner(t, m, c) }
 	r := makeRunner()
 	maxSteps := 128
-	opts := graph.Options[nestedState]{Store: store, Observer: c, Limiter: limiter, MaxConcurrency: concurrency, MaxSteps: maxSteps}
+	opts := graph.Options{Observer: c, Limiter: limiter, MaxConcurrency: concurrency, MaxSteps: maxSteps}
+	optsStore := store
+
 	initial := nestedState{Owner: "model-run", Branch: -1, Values: map[string]int{"sum": 0, "phase": phaseRoot, "branch": -1}}
-	out, err := r.Start(ctx, "model-run", initial, opts)
+	outExecution, out, err := r.Start(ctx, "model-run", initial, optsStore, opts)
 	if err != nil || out.Status != graph.StatusWaiting {
 		t.Fatalf("nested seed: %+v %v", out, err)
 	}
-	cp := out.Checkpoint
+	cp := mustCheckpoint(outExecution)
 	if err := m.check(cp); err != nil {
 		t.Fatalf("initial checkpoint: %v", err)
 	}
@@ -64,14 +66,14 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 				inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("1")})
 			}
 		}
-		got, callErr := makeRunner().Recover(callCtx, "model-run", inputs, opts)
+		gotExecution, got, callErr := makeRunner().Recover(callCtx, "model-run", inputs, optsStore, opts)
 		if callErr != nil && !errors.Is(callErr, graph.ErrConflict) && !errors.Is(callErr, errStore) && !errors.Is(callErr, graph.ErrInterrupted) && !errors.Is(callErr, context.Canceled) {
 			t.Fatalf("nested operation %+v: %+v %v", i, got, callErr)
 		}
 		if err := c.check(capacity); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.check(got.Checkpoint); err != nil {
+		if err := m.check(mustCheckpoint(gotExecution)); err != nil {
 			t.Fatalf("returned nested checkpoint: %v", err)
 		}
 		loaded, err := store.Load(ctx, "model-run")
@@ -85,8 +87,8 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 		if loaded.Steps != uint64(confirmedNodes) || loaded.Revision != 1+uint64(confirmedNodes+confirmedInputs) {
 			t.Fatalf("nested oracle counters differ: steps/revision=%d/%d confirmed node/apply=%d/%d", loaded.Steps, loaded.Revision, confirmedNodes, confirmedInputs)
 		}
-		if loaded.Revision < before.Revision || loaded.Steps < before.Steps || got.Checkpoint.Revision > loaded.Revision || got.Checkpoint.Steps > loaded.Steps {
-			t.Fatalf("nested checkpoint regressed/advanced: before=%+v returned=%+v stored=%+v", before, got.Checkpoint, loaded)
+		if loaded.Revision < before.Revision || loaded.Steps < before.Steps || got.Header.Revision > loaded.Revision || got.Header.Steps > loaded.Steps {
+			t.Fatalf("nested checkpoint regressed/advanced: before=%+v returned=%+v stored=%+v", before, mustCheckpoint(gotExecution), loaded)
 		}
 		if loaded.Steps != store.steps || loaded.Revision != 1+store.steps+store.inputs {
 			t.Fatalf("nested store counters differ: %+v steps=%d inputs=%d", loaded, store.steps, store.inputs)
@@ -105,7 +107,7 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 			t.Fatalf("unexpected nested status: %+v", got)
 		}
 		if callErr == nil {
-			a, cloneErr := got.Checkpoint.Clone(cloneNested)
+			a, cloneErr := mustCheckpoint(gotExecution).Clone(cloneNested)
 			if cloneErr != nil {
 				t.Fatal(cloneErr)
 			}
@@ -230,7 +232,7 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 		if loaded.Final != nil {
 			loaded.Final.Values["speculative"] = 1
 		}
-		if err := m.check(got.Checkpoint); err != nil {
+		if err := m.check(mustCheckpoint(gotExecution)); err != nil {
 			t.Fatalf("returned checkpoint aliases Store state: %v", err)
 		}
 		cp, err = store.Load(ctx, "model-run")

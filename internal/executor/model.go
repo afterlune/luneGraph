@@ -12,13 +12,15 @@ type (
 	Continuation[S any] = model.Continuation[S]
 	Failure             = model.Failure
 	FailureScope        = model.FailureScope
+	Header              = model.Header
 	Invocation[S any]   = model.Invocation[S]
 	InvocationStatus    = model.InvocationStatus
 	JoinSpec[S any]     = model.JoinSpec[S]
 	Machine[S any]      = model.Machine[S]
 	NodeSpec[S any]     = model.NodeSpec[S]
-	Options[S any]      = model.Options[S]
+	Options             = model.Options
 	PanicError          = model.PanicError
+	PendingInvocation   = model.PendingInvocation
 	Result[S any]       = model.Result[S]
 	ResumeInput         = model.ResumeInput
 	Status              = model.Status

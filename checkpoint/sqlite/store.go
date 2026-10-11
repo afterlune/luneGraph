@@ -134,12 +134,9 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 	if err != nil {
 		return empty, err
 	}
-	var h graph.Header
-	if err := json.Unmarshal(payload, &h); err != nil {
-		return empty, fmt.Errorf("header: %w", checkpoint.ErrCorrupt)
-	}
-	if h.RunID != id || h.MachineID != machine || h.Revision == 0 || strconv.FormatUint(h.Revision, 10) != revision || h.FormatVersion != graph.CheckpointFormatVersion {
-		return empty, checkpoint.ErrCorrupt
+	h, err := decodeHeader(id, machine, revision, payload)
+	if err != nil {
+		return empty, err
 	}
 	cp := (graph.Change[S]{Header: h}).Checkpoint()
 	if final != nil {
@@ -205,6 +202,35 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 	}
 	return cp, nil
 }
+
+func (s *Store[S]) LoadHeader(ctx context.Context, id string) (graph.Header, error) {
+	var empty graph.Header
+	if err := s.check(ctx); err != nil {
+		return empty, err
+	}
+	var machine, revision string
+	var payload []byte
+	err := s.db.QueryRowContext(ctx, "SELECT machine_id,revision,payload FROM checkpoints WHERE run_id=?", id).Scan(&machine, &revision, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return empty, checkpoint.ErrNotFound
+	}
+	if err != nil {
+		return empty, err
+	}
+	return decodeHeader(id, machine, revision, payload)
+}
+
+func decodeHeader(id, machine, revision string, payload []byte) (graph.Header, error) {
+	var header graph.Header
+	if err := json.Unmarshal(payload, &header); err != nil {
+		return graph.Header{}, fmt.Errorf("header: %w", checkpoint.ErrCorrupt)
+	}
+	if header.RunID != id || header.MachineID != machine || header.Revision == 0 || strconv.FormatUint(header.Revision, 10) != revision || header.FormatVersion != graph.CheckpointFormatVersion {
+		return graph.Header{}, checkpoint.ErrCorrupt
+	}
+	return header, nil
+}
+
 func (s *Store[S]) Delete(ctx context.Context, id string) error {
 	if err := s.check(ctx); err != nil {
 		return err

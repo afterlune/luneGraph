@@ -53,16 +53,16 @@ func (p *limiterPopulation) reconcile(ctx context.Context, i int) (limiterRecove
 		opts := p.opts
 		opts.MaxSteps = 10 - int(cp.Steps%10)
 		started = time.Now()
-		out, recoverErr := p.runner.Recover(ctx, s.id, nil, opts)
+		outExecution, out, recoverErr := p.runner.Recover(ctx, s.id, nil, p.store, opts)
 		result.Recover = time.Since(started)
 		if recoverErr != nil {
 			return result, recoverErr
 		}
-		if out.Checkpoint.Steps < cp.Steps {
+		if out.Header.Steps < cp.Steps {
 			return result, fmt.Errorf("recovery steps regressed")
 		}
-		result.RecoverySteps = out.Checkpoint.Steps - cp.Steps
-		cp = out.Checkpoint
+		result.RecoverySteps = out.Header.Steps - cp.Steps
+		cp = mustCheckpoint(outExecution)
 	}
 	if err := checkLimitedBoundary(cp, s.id); err != nil {
 		return result, err
@@ -106,7 +106,7 @@ func TestCapacitySharedLimiterCancellationRecovery(t *testing.T) {
 				t.Cleanup(func() { cancel(); workers.Wait() })
 				go func() {
 					defer workers.Done()
-					out, err := p.runner.Recover(ctx, p.slots[0].id, interruptionInputs(p.slots[0].checkpoint), opts)
+					_, out, err := p.runner.Recover(ctx, p.slots[0].id, interruptionInputs(p.slots[0].checkpoint), p.store, opts)
 					done <- answer{out, err}
 				}()
 				select {
@@ -116,7 +116,7 @@ func TestCapacitySharedLimiterCancellationRecovery(t *testing.T) {
 				}
 				cancel()
 				got := <-done
-				if !errors.Is(got.err, context.Canceled) || got.out.Status != graph.StatusCancelled || got.out.Checkpoint.Steps < 11 || got.out.Checkpoint.Completed || got.out.Checkpoint.Failure != nil {
+				if !errors.Is(got.err, context.Canceled) || got.out.Status != graph.StatusCancelled || got.out.Header.Steps < 11 || got.out.Header.Completed || got.out.Header.Failure != nil {
 					t.Fatalf("cancel=%+v %v", got.out, got.err)
 				}
 				p.tracker.verifyDrained(t, capacity)

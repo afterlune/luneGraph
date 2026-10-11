@@ -33,7 +33,7 @@ func TestLoopAllocatesDistinctCallIDs(t *testing.T) {
 		return graph.To(state+1, "loop"), nil
 	})
 	edge(t, g, "loop", "loop")
-	out, err := intRunner(t, g).Start(context.Background(), "loop-run", 0, graph.Options[int]{})
+	_, out, err := intRunner(t, g).Start(context.Background(), "loop-run", 0, nil, graph.Options{})
 	if err != nil || out.Status != graph.StatusCompleted || len(calls) != 3 {
 		t.Fatalf("loop result = %+v, calls=%+v, err=%v", out, calls, err)
 	}
@@ -58,15 +58,15 @@ func TestNodeCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		return graph.EndExecution(state + 1), nil
 	})
 	runner := intRunner(t, g)
-	first, err := runner.Start(context.Background(), "node-replay", 0, graph.Options[int]{Store: store})
-	if !errors.Is(err, graph.ErrConflict) || first.Checkpoint.Revision != 1 {
+	_, first, err := runner.Start(context.Background(), "node-replay", 0, store, graph.Options{})
+	if !errors.Is(err, graph.ErrConflict) || first.Header.Revision != 1 {
 		t.Fatalf("first start = %+v, %v", first, err)
 	}
 	stored, err := store.Load(context.Background(), "node-replay")
 	if err != nil || stored.Invocations[0].CallID != calls[0].CallID {
 		t.Fatalf("stored ready call = %+v, %v", stored, err)
 	}
-	out, err := runner.Recover(context.Background(), "node-replay", nil, graph.Options[int]{Store: store})
+	_, out, err := runner.Recover(context.Background(), "node-replay", nil, store, graph.Options{})
 	if err != nil || out.Status != graph.StatusCompleted || len(calls) != 2 {
 		t.Fatalf("recovered run = %+v, calls=%+v, err=%v", out, calls, err)
 	}
@@ -98,16 +98,16 @@ func TestContinuationCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := intRunner(t, g)
-	first, err := runner.Start(context.Background(), "continuation-replay", 2, graph.Options[int]{Store: store})
+	firstExecution, first, err := runner.Start(context.Background(), "continuation-replay", 2, store, graph.Options{})
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
 	inputs := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("3")}}
-	if _, err := runner.Resume(context.Background(), first.Checkpoint, inputs, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
+	if _, _, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), inputs, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("first resume error = %v", err)
 	}
-	out, err := runner.Recover(context.Background(), "continuation-replay", inputs, graph.Options[int]{Store: store})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 5 || len(calls) != 2 {
+	_, out, err := runner.Recover(context.Background(), "continuation-replay", inputs, store, graph.Options{})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 5 || len(calls) != 2 {
 		t.Fatalf("recovered continuation = %+v, calls=%+v, err=%v", out, calls, err)
 	}
 	if calls[0] != calls[1] || calls[0].RunID != "continuation-replay" || calls[0].InvocationID != "i1" {
@@ -146,15 +146,15 @@ func TestJoinCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		edge(t, g, pair[0], pair[1])
 	}
 	runner := intRunner(t, g)
-	first, err := runner.Start(context.Background(), "join-replay", 0, graph.Options[int]{Store: store, MaxConcurrency: 1})
-	if !errors.Is(err, graph.ErrConflict) || len(first.Checkpoint.Groups) != 1 || len(mergeCalls) != 1 {
+	firstExecution, first, err := runner.Start(context.Background(), "join-replay", 0, store, graph.Options{MaxConcurrency: 1})
+	if !errors.Is(err, graph.ErrConflict) || len(mustCheckpoint(firstExecution).Groups) != 1 || len(mergeCalls) != 1 {
 		t.Fatalf("first start = %+v, merges=%+v, %v", first, mergeCalls, err)
 	}
-	if first.Checkpoint.Groups[0].CallID != mergeCalls[0].CallID {
-		t.Fatalf("join call was not persisted: checkpoint=%+v merge=%+v", first.Checkpoint.Groups[0], mergeCalls[0])
+	if mustCheckpoint(firstExecution).Groups[0].CallID != mergeCalls[0].CallID {
+		t.Fatalf("join call was not persisted: checkpoint=%+v merge=%+v", mustCheckpoint(firstExecution).Groups[0], mergeCalls[0])
 	}
-	out, err := runner.Recover(context.Background(), "join-replay", nil, graph.Options[int]{Store: store, MaxConcurrency: 1})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 3 || len(mergeCalls) != 2 || len(rightCalls) != 1 {
+	_, out, err := runner.Recover(context.Background(), "join-replay", nil, store, graph.Options{MaxConcurrency: 1})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 3 || len(mergeCalls) != 2 || len(rightCalls) != 1 {
 		t.Fatalf("recovered join = %+v, merges=%+v, right calls=%+v, err=%v", out, mergeCalls, rightCalls, err)
 	}
 	if mergeCalls[0] != mergeCalls[1] {
@@ -213,14 +213,14 @@ func TestCallInfoMetadata(t *testing.T) {
 	}
 
 	runner := intRunner(t, g)
-	res, err := runner.Start(context.Background(), "meta-run", 10, graph.Options[int]{MaxConcurrency: 1})
+	resExecution, res, err := runner.Start(context.Background(), "meta-run", 10, nil, graph.Options{MaxConcurrency: 1})
 	if err != nil || res.Status != graph.StatusWaiting {
 		t.Fatalf("start failed: %+v, %v", res, err)
 	}
-	res, err = runner.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
-		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`5`)},
-	}, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || res.Status != graph.StatusCompleted || res.Checkpoint.Final == nil || *res.Checkpoint.Final != 10+1+10+2+5 {
+	res, err = resExecution.Advance(context.Background(), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`5`)},
+	}, graph.Options{MaxConcurrency: 1})
+	if err != nil || res.Status != graph.StatusCompleted || res.Final == nil || *res.Final != 10+1+10+2+5 {
 		t.Fatalf("resume failed: %+v, %v", res, err)
 	}
 

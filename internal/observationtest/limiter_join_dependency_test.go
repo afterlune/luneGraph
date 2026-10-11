@@ -77,7 +77,7 @@ func TestLimiterIndependentBranchProgressDuringJoin(t *testing.T) {
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		result, runErr = runner.Start(ctx, "dependency", 0, graph.Options[int]{Store: store, Limiter: limiter, MaxConcurrency: 4, Observer: observer})
+		_, result, runErr = runner.Start(ctx, "dependency", 0, store, graph.Options{Limiter: limiter, MaxConcurrency: 4, Observer: observer})
 		close(done)
 	}()
 	f.wait(t, ctx, joinEntered, "join entered; deep not dispatched beyond its gate")
@@ -85,7 +85,7 @@ func TestLimiterIndependentBranchProgressDuringJoin(t *testing.T) {
 	f.wait(t, ctx, deepFinished, "deep finished; result waiting for synchronous join")
 	f.wait(t, ctx, descendantStarted, "independent successor dispatched during Merge")
 	f.wait(t, ctx, done, "asynchronous join completion")
-	if runErr != nil || result.Status != graph.StatusCompleted || !result.Checkpoint.Completed {
+	if runErr != nil || result.Status != graph.StatusCompleted || !result.Header.Completed {
 		t.Fatalf("result=%+v err=%v", result, runErr)
 	}
 	saved, err := store.Load(ctx, "dependency")

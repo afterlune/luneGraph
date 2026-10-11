@@ -29,21 +29,22 @@ func TestReadyBranchesRotateAcrossStoredResumes(t *testing.T) {
 	}
 	r := intRunner(t, g)
 	store := newMemoryStore(t)
-	opts := graph.Options[int]{Store: store, MaxConcurrency: 1, MaxSteps: 1}
-	first, err := r.Start(context.Background(), "fair", 0, opts)
-	if err != nil || first.Status != graph.StatusBudget || first.Checkpoint.ScheduleCursor != 1 {
+	opts := graph.Options{MaxConcurrency: 1, MaxSteps: 1}
+	optsStore := store
+	firstExecution, first, err := r.Start(context.Background(), "fair", 0, optsStore, opts)
+	if err != nil || first.Status != graph.StatusBudget || first.Header.ScheduleCursor != 1 {
 		t.Fatalf("fork = %+v, %v", first, err)
 	}
-	second, err := r.Resume(context.Background(), first.Checkpoint, nil, opts)
-	if err != nil || second.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 0 || second.Checkpoint.ScheduleCursor != 4 {
+	_, second, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), nil, optsStore, opts)
+	if err != nil || second.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 0 || second.Header.ScheduleCursor != 4 {
 		t.Fatalf("first branch = %+v, %v", second, err)
 	}
 	loaded, err := store.Load(context.Background(), "fair")
 	if err != nil || loaded.ScheduleCursor != 4 {
 		t.Fatalf("stored cursor = %+v, %v", loaded, err)
 	}
-	third, err := r.Resume(context.Background(), loaded, nil, opts)
-	if err != nil || third.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 1 || third.Checkpoint.ScheduleCursor != 6 {
+	_, third, err := r.Resume(context.Background(), loaded, nil, optsStore, opts)
+	if err != nil || third.Status != graph.StatusBudget || loopCalls != 1 || onceCalls != 1 || third.Header.ScheduleCursor != 6 {
 		t.Fatalf("rotated branch = %+v, %v", third, err)
 	}
 }
@@ -83,7 +84,7 @@ func TestFirstReceivedEndExecutionWins(t *testing.T) {
 	}
 	done := make(chan response, 1)
 	go func() {
-		result, err := r.Start(ctx, "winner", 0, graph.Options[int]{MaxConcurrency: 2})
+		_, result, err := r.Start(ctx, "winner", 0, nil, graph.Options{MaxConcurrency: 2})
 		done <- response{result, err}
 	}()
 	for _, started := range []chan struct{}{slowStarted, winnerStarted} {
@@ -96,7 +97,7 @@ func TestFirstReceivedEndExecutionWins(t *testing.T) {
 	close(releaseWinner)
 	select {
 	case out := <-done:
-		if out.err != nil || out.result.Status != graph.StatusCompleted || out.result.Checkpoint.Final == nil || *out.result.Checkpoint.Final != 7 {
+		if out.err != nil || out.result.Status != graph.StatusCompleted || out.result.Final == nil || *out.result.Final != 7 {
 			t.Fatalf("first completion = %+v, %v", out.result, out.err)
 		}
 	case <-ctx.Done():
@@ -130,7 +131,7 @@ func TestCancellationWaitsForRunningNode(t *testing.T) {
 	}
 	done := make(chan response, 1)
 	go func() {
-		result, err := r.Start(ctx, "cancel-wait", 0, graph.Options[int]{})
+		_, result, err := r.Start(ctx, "cancel-wait", 0, nil, graph.Options{})
 		done <- response{result, err}
 	}()
 	select {
@@ -152,7 +153,7 @@ func TestCancellationWaitsForRunningNode(t *testing.T) {
 	close(release)
 	select {
 	case out := <-done:
-		if !errors.Is(out.err, context.Canceled) || out.result.Status != graph.StatusCancelled || out.result.Checkpoint.Steps != 0 {
+		if !errors.Is(out.err, context.Canceled) || out.result.Status != graph.StatusCancelled || out.result.Header.Steps != 0 {
 			t.Fatalf("cancel = %+v, %v", out.result, out.err)
 		}
 	case <-time.After(3 * time.Second):
@@ -196,29 +197,30 @@ func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	}
 	r := intRunner(t, g)
 	store := newMemoryStore(t)
-	opts := graph.Options[int]{Store: store, MaxConcurrency: 2}
-	first, err := r.Start(context.Background(), "batch", 0, opts)
+	opts := graph.Options{MaxConcurrency: 2}
+	optsStore := store
+	firstExecution, first, err := r.Start(context.Background(), "batch", 0, optsStore, opts)
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
 	ids := map[string]string{}
-	for _, inv := range first.Checkpoint.Invocations {
+	for _, inv := range mustCheckpoint(firstExecution).Invocations {
 		if inv.Status == graph.InvocationWaiting {
 			ids[inv.Node] = inv.ID
 		}
 	}
 	bad := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("bad")}}
-	rejected, err := r.Resume(context.Background(), first.Checkpoint, bad, opts)
-	if err == nil || rejected.Checkpoint.Revision != first.Checkpoint.Revision || applyCalls != 0 {
+	_, rejected, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), bad, optsStore, opts)
+	if err == nil || rejected.Header.Revision != first.Header.Revision || applyCalls != 0 {
 		t.Fatalf("predecode rejection = %+v, %v", rejected, err)
 	}
 	inputs := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("4")}}
-	partial, err := r.Resume(context.Background(), first.Checkpoint, inputs, opts)
-	if !errors.Is(err, boom) || partial.Checkpoint.Revision != first.Checkpoint.Revision+2 || !partial.Checkpoint.Completed || partial.Checkpoint.Failure == nil || applyCalls != 2 {
+	_, partial, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), inputs, optsStore, opts)
+	if !errors.Is(err, boom) || partial.Header.Revision != first.Header.Revision+2 || !partial.Header.Completed || partial.Header.Failure == nil || applyCalls != 2 {
 		t.Fatalf("partial resume = %+v, %v", partial, err)
 	}
 	stored, err := store.Load(context.Background(), "batch")
-	if err != nil || stored.Revision != partial.Checkpoint.Revision || !stored.Completed || len(stored.Invocations) != 0 {
+	if err != nil || stored.Revision != partial.Header.Revision || !stored.Completed || len(stored.Invocations) != 0 {
 		t.Fatalf("stored failed run = %+v, %v", stored, err)
 	}
 }

@@ -13,7 +13,7 @@ import (
 
 const defaultMaxSteps = 10_000
 
-func normalizeOptions[S any](opts Options[S]) (Options[S], error) {
+func normalizeOptions(opts Options) (Options, error) {
 	if err := limit.Validate(opts.Limiter); err != nil {
 		return opts, err
 	}
@@ -35,8 +35,25 @@ func normalizeOptions[S any](opts Options[S]) (Options[S], error) {
 	return opts, nil
 }
 
-func resultWith[S any](s Checkpoint[S], status Status) Result[S] {
-	return Result[S]{Status: status, Checkpoint: s}
+func (r *Runner[S]) resultWithHeader(header Header, final *S, status Status) (Result[S], error) {
+	result := Result[S]{Status: status, Header: header}
+	if final == nil {
+		return result, nil
+	}
+	copy, err := r.cloneState(*final, "")
+	if err != nil {
+		return result, fmt.Errorf("clone final result: %w", err)
+	}
+	result.Final = &copy
+	return result, nil
+}
+
+func (r *Runner[S]) resultFromLive(l *live[S], status Status) (Result[S], error) {
+	return r.resultWithHeader(l.header.Header(), l.header.Final, status)
+}
+
+func (r *Runner[S]) resultFromCheckpoint(cp Checkpoint[S], status Status) (Result[S], error) {
+	return r.resultWithHeader(cp.Header(), cp.Final, status)
 }
 
 func errorStatus(err error) Status {
@@ -46,22 +63,18 @@ func errorStatus(err error) Status {
 	return StatusFailed
 }
 
-func statusOf[S any](s Checkpoint[S], exhausted bool) Status {
-	if s.Completed {
-		if s.Failure != nil {
+func statusOf(header Header, readyNodes int, exhausted bool) Status {
+	if header.Completed {
+		if header.Failure != nil {
 			return StatusFailed
 		}
-		if s.HadLocalFailures {
+		if header.HadLocalFailures {
 			return StatusCompletedWithFailures
 		}
 		return StatusCompleted
 	}
-	if exhausted {
-		for _, inv := range s.Invocations {
-			if inv.Status == InvocationReady {
-				return StatusBudget
-			}
-		}
+	if exhausted && readyNodes > 0 {
+		return StatusBudget
 	}
 	return StatusWaiting
 }
@@ -81,15 +94,17 @@ func invocationNumber(id string) uint64 {
 	return n
 }
 
-// Start creates a new execution and runs until completion, waiting, or budget exhaustion.
-func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Options[S]) (result Result[S], retErr error) {
-	var empty Checkpoint[S]
+// Start creates a new execution and runs until completion, waiting, or budget
+// exhaustion. It returns the live handle and this call's Result.
+func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store Store[S], opts Options) (execution *Execution[S], result Result[S], retErr error) {
 	if r == nil {
-		return resultWith(empty, StatusFailed), errors.New("runner is nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
 	}
 	if ctx == nil {
-		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
 	}
+	rawStore := store
+	activeStore := store
 	obs := observation.New(opts.Observer, r.id, runID)
 	if obs != nil {
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
@@ -97,89 +112,95 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, opts Opt
 			// A Store panic is not a returned result and leaves spans incomplete.
 			if result.Status != "" {
 				obs.DiscardPending(ctx, retErr)
-				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+				span.End(ctx, model.Event{Revision: result.Header.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
-		opts.Store = observation.WrapStore(opts.Store, obs)
+		activeStore = observation.WrapStore(store, obs)
 	}
 	if !validName(runID) {
-		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("run ID must be non-empty and have no surrounding whitespace")
 	}
 	var err error
 	if opts, err = normalizeOptions(opts); err != nil {
-		return resultWith(empty, StatusFailed), err
+		return nil, Result[S]{Status: StatusFailed}, err
 	}
 	if err = ctx.Err(); err != nil {
-		return resultWith(empty, StatusCancelled), err
+		return nil, Result[S]{Status: StatusCancelled}, err
 	}
 	state, err := r.cloneState(initial, "")
 	if err != nil {
-		return resultWith(empty, StatusFailed), fmt.Errorf("clone initial state: %w", err)
+		return nil, Result[S]{Status: StatusFailed}, fmt.Errorf("clone initial state: %w", err)
 	}
 	s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, MachineID: r.id, Revision: 1, NextID: 3, Invocations: []Invocation[S]{{ID: "i1", CallID: "c2", Node: r.entry, State: state, Status: InvocationReady}}}
-	if opts.Store != nil {
-		if err := opts.Store.Create(ctx, s); err != nil {
-			return resultWith(empty, errorStatus(err)), err
+	if activeStore != nil {
+		if err := activeStore.Create(ctx, s); err != nil {
+			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
-	return r.drive(ctx, s, opts, obs)
+	l := newLive(s)
+	execution = &Execution[S]{runner: r, live: l, store: rawStore}
+	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
+	return execution, result, retErr
 }
 
-// Fork creates an independent execution starting from source's execution position,
-// assigning it newRunID and resetting its Revision to 1. State values are cloned
-// using the runner's Clone function to ensure physical memory isolation.
-// If opts.Store is provided, the initial forked checkpoint is created in the store.
-// Fork then drives the execution forward according to opts, just like Start.
-func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint[S], opts Options[S]) (result Result[S], retErr error) {
-	var empty Checkpoint[S]
+// Fork creates an independent execution from source, assigning it newRunID and
+// resetting its Revision to 1. State values are cloned using the runner's Clone
+// function. If store is non-nil, the initial checkpoint is created there. Fork
+// returns the live handle and this call's Result.
+func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint[S], store Store[S], opts Options) (execution *Execution[S], result Result[S], retErr error) {
 	if r == nil {
-		return resultWith(empty, StatusFailed), errors.New("runner is nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
 	}
 	if ctx == nil {
-		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
 	}
 	if !validName(newRunID) {
-		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("run ID must be non-empty and have no surrounding whitespace")
 	}
 	if err := r.validateCheckpoint(source); err != nil {
-		return resultWith(empty, StatusFailed), err
+		return nil, Result[S]{Status: StatusFailed}, err
 	}
 	if source.Completed {
-		return resultWith(empty, StatusFailed), ErrRunCompleted
+		return nil, Result[S]{Status: StatusFailed}, ErrRunCompleted
 	}
+	rawStore := store
+	activeStore := store
 	obs := observation.New(opts.Observer, r.id, newRunID)
 	if obs != nil {
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
 		defer func() {
 			if result.Status != "" {
 				obs.DiscardPending(ctx, retErr)
-				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+				span.End(ctx, model.Event{Revision: result.Header.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
-		opts.Store = observation.WrapStore(opts.Store, obs)
+		activeStore = observation.WrapStore(store, obs)
 	}
 	var err error
 	if opts, err = normalizeOptions(opts); err != nil {
-		return resultWith(empty, StatusFailed), err
+		return nil, Result[S]{Status: StatusFailed}, err
 	}
 	if err = ctx.Err(); err != nil {
-		return resultWith(empty, StatusCancelled), err
+		return nil, Result[S]{Status: StatusCancelled}, err
 	}
 	forked, err := source.Clone(r.clone)
 	if err != nil {
-		return resultWith(empty, StatusFailed), fmt.Errorf("clone forked checkpoint: %w", err)
+		return nil, Result[S]{Status: StatusFailed}, fmt.Errorf("clone forked checkpoint: %w", err)
 	}
 	forked.RunID = newRunID
 	forked.Revision = 1
-	if opts.Store != nil {
-		if err := opts.Store.Create(ctx, forked); err != nil {
-			return resultWith(empty, errorStatus(err)), err
+	if activeStore != nil {
+		if err := activeStore.Create(ctx, forked); err != nil {
+			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
-	return r.drive(ctx, forked, opts, obs)
+	l := newLive(forked)
+	execution = &Execution[S]{runner: r, live: l, store: rawStore}
+	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
+	return execution, result, retErr
 }
 
-func (r *Runner[S]) scope(declared FailureScope, opts Options[S]) FailureScope {
+func (r *Runner[S]) scope(declared FailureScope, opts Options) FailureScope {
 	if opts.FailureOverride != nil {
 		return *opts.FailureOverride
 	}

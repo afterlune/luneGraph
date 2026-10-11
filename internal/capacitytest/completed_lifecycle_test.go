@@ -21,19 +21,21 @@ func TestCompletedPopulationRetentionAndRecovery(t *testing.T) {
 					calls.Add(1)
 				}
 			})
-			opts := graph.Options[state]{Store: store, Observer: observer}
+			opts := graph.Options{Observer: observer}
+			optsStore := store
+
 			before := resources(true)
 			pool := newBatchPool(count, 8, func(i int) error {
 				id := fmt.Sprintf("completed-%d", i)
-				out, err := r.Start(context.Background(), id, initial(id), opts)
+				_, out, err := r.Start(context.Background(), id, initial(id), optsStore, opts)
 				if err != nil {
 					return err
 				}
-				if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Owner != id || out.Checkpoint.Final.Total != 2 || out.Checkpoint.Final.Values["steps"] != 2 {
+				if out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Owner != id || out.Final.Total != 2 || out.Final.Values["steps"] != 2 {
 					return fmt.Errorf("invalid completed execution %s: %+v", id, out)
 				}
 				// Mutating the returned result must not contaminate the Store.
-				out.Checkpoint.Final.Values["steps"] = -1
+				out.Final.Values["steps"] = -1
 				return nil
 			})
 			err := pool.batch()
@@ -53,8 +55,8 @@ func TestCompletedPopulationRetentionAndRecovery(t *testing.T) {
 					t.Fatalf("retained %s: %+v, %v", id, saved, err)
 				}
 				for range 2 {
-					out, err := r.Recover(context.Background(), id, nil, opts)
-					if err != nil || out.Status != graph.StatusCompleted || !reflect.DeepEqual(out.Checkpoint, saved) {
+					outExecution, out, err := r.Recover(context.Background(), id, nil, optsStore, opts)
+					if err != nil || out.Status != graph.StatusCompleted || !reflect.DeepEqual(mustCheckpoint(outExecution), saved) {
 						t.Fatalf("completed recovery %s changed checkpoint: %v", id, err)
 					}
 				}

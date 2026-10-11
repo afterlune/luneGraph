@@ -54,11 +54,12 @@ func TestCallbackRecoveryWithEffectReceipts(t *testing.T) {
 					return value, err
 				})
 				ctx := context.Background()
-				opts := graph.Options[state]{Store: fault, MaxConcurrency: 1}
-				first, err := r.Start(ctx, "replay", state{Delta: 3}, opts)
+				opts := graph.Options{MaxConcurrency: 1}
+				optsStore := fault
+				firstExecution, first, err := r.Start(ctx, "replay", state{Delta: 3}, optsStore, opts)
 				if kind == "continuation" {
 					check(t, err)
-					first, err = r.Resume(ctx, first.Checkpoint, inputsFor(first.Checkpoint), opts)
+					first, err = firstExecution.Advance(ctx, inputsFor(mustCheckpoint(firstExecution)), opts)
 				}
 				wantErr := errAcknowledgement
 				if mode == "conflict" {
@@ -70,7 +71,7 @@ func TestCallbackRecoveryWithEffectReceipts(t *testing.T) {
 				assertEffects(t, path, 3, 1)
 				saved, err := store.Load(ctx, "replay")
 				check(t, err)
-				wantRevision := first.Checkpoint.Revision
+				wantRevision := first.Header.Revision
 				if mode == "after" {
 					wantRevision++
 				}
@@ -81,14 +82,14 @@ func TestCallbackRecoveryWithEffectReceipts(t *testing.T) {
 				// Recovery must restore this call's receipt value, not today's counter.
 				other, err := newRunner(effect(l))
 				check(t, err)
-				advanced, err := other.Start(ctx, "other", state{Delta: 4}, graph.Options[state]{Store: store})
+				_, advanced, err := other.Start(ctx, "other", state{Delta: 4}, store, graph.Options{})
 				check(t, err)
-				if advanced.Checkpoint.Final == nil || advanced.Checkpoint.Final.Value != 7 {
+				if advanced.Final == nil || advanced.Final.Value != 7 {
 					t.Fatalf("other run: %+v", advanced)
 				}
-				out, err := r.Recover(ctx, "replay", inputsFor(saved), opts)
+				_, out, err := r.Recover(ctx, "replay", inputsFor(saved), optsStore, opts)
 				check(t, err)
-				if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Value != 3 {
+				if out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Value != 3 {
 					t.Fatalf("recovery: %+v", out)
 				}
 				wantCalls := 2
@@ -102,7 +103,7 @@ func TestCallbackRecoveryWithEffectReceipts(t *testing.T) {
 					t.Fatalf("replay identity changed: %+v", calls)
 				}
 				assertEffects(t, path, 7, 2)
-				_, err = r.Recover(ctx, "replay", nil, opts)
+				_, _, err = r.Recover(ctx, "replay", nil, optsStore, opts)
 				check(t, err)
 				if len(calls) != wantCalls {
 					t.Fatal("completed recovery executed callback")
@@ -151,12 +152,14 @@ func TestConcurrentRecoverEffectReceipts(t *testing.T) {
 				runner := callbackRunner(t, kind, apply)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				opts := graph.Options[state]{Store: store, MaxConcurrency: 1}
+				opts := graph.Options{MaxConcurrency: 1}
+				optsStore := store
+
 				seedOptions := opts
 				if kind == "join" {
 					seedOptions.MaxSteps = 10
 				}
-				seed, seedErr := runner.Start(ctx, "concurrent-replay", state{Delta: 3}, seedOptions)
+				seedExecution, seed, seedErr := runner.Start(ctx, "concurrent-replay", state{Delta: 3}, optsStore, seedOptions)
 				switch kind {
 				case "continuation":
 					if seedErr != nil || seed.Status != graph.StatusWaiting {
@@ -167,7 +170,7 @@ func TestConcurrentRecoverEffectReceipts(t *testing.T) {
 						t.Fatalf("seed=%+v err=%v", seed, seedErr)
 					}
 				case "join":
-					if !errors.Is(seedErr, graph.ErrInterrupted) || seed.Status != graph.StatusInterrupted || len(seed.Checkpoint.Groups) != 1 {
+					if !errors.Is(seedErr, graph.ErrInterrupted) || seed.Status != graph.StatusInterrupted || len(mustCheckpoint(seedExecution).Groups) != 1 {
 						t.Fatalf("seed=%+v err=%v", seed, seedErr)
 					}
 				}
@@ -190,9 +193,9 @@ func TestConcurrentRecoverEffectReceipts(t *testing.T) {
 						defer workers.Done()
 						var inputs []graph.ResumeInput
 						if kind == "continuation" {
-							inputs = inputsFor(seed.Checkpoint)
+							inputs = inputsFor(mustCheckpoint(seedExecution))
 						}
-						result, err := runner.Recover(ctx, "concurrent-replay", inputs, opts)
+						_, result, err := runner.Recover(ctx, "concurrent-replay", inputs, optsStore, opts)
 						results <- outcome{result, err}
 					}()
 				}
@@ -215,7 +218,7 @@ func TestConcurrentRecoverEffectReceipts(t *testing.T) {
 				for range 2 {
 					select {
 					case got := <-results:
-						if got.err == nil && got.result.Status == graph.StatusCompleted && got.result.Checkpoint.Final != nil {
+						if got.err == nil && got.result.Status == graph.StatusCompleted && got.result.Final != nil {
 							succeeded++
 						} else if errors.Is(got.err, graph.ErrConflict) {
 							conflicted++
@@ -267,15 +270,16 @@ func TestCancellationAfterEffectCommit(t *testing.T) {
 		return value, err
 	})
 	check(t, err)
-	opts := graph.Options[state]{Store: store}
-	first, err := r.Start(ctx, "cancel", state{Delta: 3}, opts)
+	opts := graph.Options{}
+	optsStore := store
+	_, first, err := r.Start(ctx, "cancel", state{Delta: 3}, optsStore, opts)
 	if !errors.Is(err, context.Canceled) || first.Status != graph.StatusCancelled {
 		t.Fatalf("cancellation: %+v, %v", first, err)
 	}
 	assertEffects(t, path, 3, 1)
-	out, err := r.Recover(context.Background(), "cancel", nil, opts)
+	_, out, err := r.Recover(context.Background(), "cancel", nil, optsStore, opts)
 	check(t, err)
-	if out.Checkpoint.Final == nil || out.Checkpoint.Final.Value != 3 || len(calls) != 2 || calls[0] != calls[1] {
+	if out.Final == nil || out.Final.Value != 3 || len(calls) != 2 || calls[0] != calls[1] {
 		t.Fatalf("recovery=%+v calls=%+v", out, calls)
 	}
 	assertEffects(t, path, 3, 1)
@@ -290,13 +294,13 @@ func TestSharedRunnerAndStores(t *testing.T) {
 		wg.Go(func() {
 			for n := range 4 {
 				id := fmt.Sprintf("worker-%d-run-%d", worker, n)
-				out, err := r.Start(context.Background(), id, state{Delta: 1}, graph.Options[state]{Store: store})
+				_, out, err := r.Start(context.Background(), id, state{Delta: 1}, store, graph.Options{})
 				if err != nil || out.Status != graph.StatusCompleted {
 					t.Errorf("%s: %+v, %v", id, out, err)
 					return
 				}
-				again, err := r.Recover(context.Background(), id, nil, graph.Options[state]{Store: store})
-				if err != nil || again.Checkpoint.Final == nil || *again.Checkpoint.Final != *out.Checkpoint.Final {
+				_, again, err := r.Recover(context.Background(), id, nil, store, graph.Options{})
+				if err != nil || again.Final == nil || *again.Final != *out.Final {
 					t.Errorf("%s recovered: %+v, %v", id, again, err)
 				}
 			}

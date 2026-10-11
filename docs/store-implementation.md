@@ -3,9 +3,12 @@
 Implement graph.Store[S] outside the graph core. Create accepts a full checkpoint;
 Load returns a full independent checkpoint with `Invocations` and `Groups`
 sorted by ascending lexicographic ID; `ActivationGroup.Children` retains its
-fan-out target order. Commit accepts only changed records. State copies belong
-to the Store even after the caller reuses its submission. `Change.Clone(copyState)`
-can establish ownership before the atomic write.
+fan-out target order. `LoadHeader` returns only a copied Header, including an
+independent Failure value, and should avoid loading or decoding invocation and
+group states. Warm `Execution.Advance` uses it to detect stale handles. Commit
+accepts only changed records. State copies belong to the Store even after the
+caller reuses its submission. `Change.Clone(copyState)` can establish ownership
+before the atomic write.
 
 ## Atomic commit
 
@@ -43,8 +46,10 @@ Store panics and are not recovered as callback PanicError.
 ## Verification
 
 Use the built-in Stores and internal/storetest suite as contract references.
-Test canonical Load ordering and preservation of child target order, ownership
-after caller mutation, stale/missing/wrong-machine writes, mixed delta atomicity,
-terminal rejection, cancellation, uncertain acks, concurrent loads/writes and
-single-run deletion. Add process-kill tests for durable backends. Any
-serialization optimization must pass independent-reader and reopen checks.
+Test LoadHeader consistency after commits, missing-run and cancellation errors,
+and Failure copy ownership. Also test canonical Load ordering and preservation
+of child target order, ownership after caller mutation, stale/missing/wrong-machine
+writes, mixed delta atomicity, terminal rejection, cancellation, uncertain acks,
+concurrent loads/writes and single-run deletion. Add process-kill tests for
+durable backends. Any serialization optimization must pass independent-reader
+and reopen checks.

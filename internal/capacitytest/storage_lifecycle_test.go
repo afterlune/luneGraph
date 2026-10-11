@@ -54,7 +54,7 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 	const paused = 16
 	for i := range paused {
 		id := fmt.Sprintf("paused-%d", i)
-		if _, err := waiting.Start(ctx, id, initial(id), graph.Options[state]{Store: store}); err != nil {
+		if _, _, err := waiting.Start(ctx, id, initial(id), store, graph.Options{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -67,11 +67,11 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 		}
 		started := time.Now()
 		pool := newBatchPool(batch, callers, func(i int) error {
-			out, err := r.Start(ctx, ids[i], initial(ids[i]), graph.Options[state]{Store: store})
+			_, out, err := r.Start(ctx, ids[i], initial(ids[i]), store, graph.Options{})
 			if err != nil {
 				return err
 			}
-			if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 2 {
+			if out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Total != 2 {
 				return fmt.Errorf("invalid completion: %+v", out)
 			}
 			return nil
@@ -88,7 +88,7 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := waiting.Recover(ctx, id, interruptionInputs(cp), graph.Options[state]{Store: store}); err != nil {
+		if _, _, err := waiting.Recover(ctx, id, interruptionInputs(cp), store, graph.Options{}); err != nil {
 			t.Fatal(err)
 		}
 		var deleteMS float64
@@ -112,7 +112,7 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 					t.Fatal("deleted load", err)
 				}
 			}
-			if _, err := r.Recover(ctx, old[0], nil, graph.Options[state]{Store: store}); !errors.Is(err, checkpoint.ErrNotFound) {
+			if _, _, err := r.Recover(ctx, old[0], nil, store, graph.Options{}); !errors.Is(err, checkpoint.ErrNotFound) {
 				t.Fatal("deleted recovery", err)
 			}
 			expected := saved.Revision
@@ -177,7 +177,7 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 		store = disk
 		for _, ids := range queue {
 			for _, id := range ids {
-				out, err := r.Recover(ctx, id, nil, graph.Options[state]{Store: store})
+				_, out, err := r.Recover(ctx, id, nil, store, graph.Options{})
 				if err != nil || out.Status != graph.StatusCompleted {
 					t.Fatal("reopen retained recovery", err)
 				}
@@ -195,8 +195,8 @@ func storageLifecycle(t *testing.T, kind string, keepAll bool, rounds, batch, ca
 		}
 		for i := range paused {
 			id := fmt.Sprintf("paused-%d", i)
-			out, err := waiting.Recover(ctx, id, nil, graph.Options[state]{Store: store})
-			if err != nil || out.Status != graph.StatusWaiting || out.Checkpoint.Invocations[0].State.Owner != id {
+			outExecution, out, err := waiting.Recover(ctx, id, nil, store, graph.Options{})
+			if err != nil || out.Status != graph.StatusWaiting || mustCheckpoint(outExecution).Invocations[0].State.Owner != id {
 				t.Fatal("reopen paused recovery", id, err)
 			}
 		}

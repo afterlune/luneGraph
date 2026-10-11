@@ -27,21 +27,21 @@ func executorTestValidationFixtures(t *testing.T) (waitingRunner *Runner[int], w
 		}
 		return total, nil
 	}}}, map[string][]string{"fork": {"left", "right"}, "left": {"joined"}, "right": {"joined"}}, nil, nil)
-	result, err := fanoutRunner.Start(context.Background(), "fanout-checkpoint", 3, Options[int]{MaxSteps: 1, MaxConcurrency: 1})
+	resultExecution, result, err := fanoutRunner.Start(context.Background(), "fanout-checkpoint", 3, nil, Options{MaxSteps: 1, MaxConcurrency: 1})
 	if err != nil || result.Status != StatusBudget {
 		t.Fatalf("create fan-out checkpoint = %+v, %v", result, err)
 	}
-	fanout = result.Checkpoint
+	fanout = mustCheckpoint(resultExecution)
 	if err := fanoutRunner.validateCheckpoint(fanout); err != nil {
 		t.Fatalf("valid fan-out checkpoint rejected: %v", err)
 	}
 
 	completedRunner := executorTestRunner(t, "done", []NodeSpec[int]{executorTestNode("done", executorTestEnd, FailInvocation)}, nil, nil, nil, nil)
-	result, err = completedRunner.Start(context.Background(), "completed-checkpoint", 4, Options[int]{})
+	resultExecution, result, err = completedRunner.Start(context.Background(), "completed-checkpoint", 4, nil, Options{})
 	if err != nil {
 		t.Fatalf("create completed checkpoint: %v", err)
 	}
-	completed = result.Checkpoint
+	completed = mustCheckpoint(resultExecution)
 	if err := completedRunner.validateCheckpoint(completed); err != nil {
 		t.Fatalf("valid completed checkpoint rejected: %v", err)
 	}
@@ -49,8 +49,8 @@ func executorTestValidationFixtures(t *testing.T) (waitingRunner *Runner[int], w
 	failedRunner := executorTestRunner(t, "fail", []NodeSpec[int]{executorTestNode("fail", func(context.Context, CallInfo, int) (Transition[int], error) {
 		return Transition[int]{}, errors.New("failed")
 	}, FailExecution)}, nil, nil, nil, nil)
-	result, _ = failedRunner.Start(context.Background(), "failed-checkpoint", 4, Options[int]{})
-	failed = result.Checkpoint
+	resultExecution, _, err = failedRunner.Start(context.Background(), "failed-checkpoint", 4, nil, Options{})
+	failed = mustCheckpoint(resultExecution)
 	if err := failedRunner.validateCheckpoint(failed); err != nil {
 		t.Fatalf("valid failed checkpoint rejected: %v", err)
 	}
@@ -205,11 +205,11 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 		executorTestNode("left", executorTestEnd, FailInvocation),
 		executorTestNode("right", executorTestEnd, FailInvocation),
 	}, nil, map[string][]string{"fork": {"left", "right"}}, nil, nil)
-	noJoin, err := noJoinRunner.Start(context.Background(), "no-join-checkpoint", 1, Options[int]{MaxSteps: 1, MaxConcurrency: 1})
+	noJoinExecution, _, err := noJoinRunner.Start(context.Background(), "no-join-checkpoint", 1, nil, Options{MaxSteps: 1, MaxConcurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	unexpected := copyCheckpoint(noJoin.Checkpoint)
+	unexpected := copyCheckpoint(mustCheckpoint(noJoinExecution))
 	unexpected.Groups[0].CallID = "c9"
 	if err := noJoinRunner.validateCheckpoint(unexpected); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("no-join group callback error = %v", err)

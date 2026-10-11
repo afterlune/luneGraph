@@ -194,8 +194,8 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 			}
 			return values[0] + values[1], nil
 		}}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}, "joined": {"done"}}, nil, nil)
-		result, err := runner.Start(context.Background(), "parallel-join", 0, Options[int]{MaxConcurrency: 1})
-		if err != nil || result.Status != StatusCompleted || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 3 {
+		_, result, err := runner.Start(context.Background(), "parallel-join", 0, nil, Options{MaxConcurrency: 1})
+		if err != nil || result.Status != StatusCompleted || result.Final == nil || *result.Final != 3 {
 			t.Fatalf("joined run = %+v, %v", result, err)
 		}
 	})
@@ -212,8 +212,8 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 				return model.EndBranch[int](), nil
 			}, FailInvocation),
 		}, nil, map[string][]string{"fork": {"a", "b"}}, nil, nil)
-		result, err := runner.Start(context.Background(), "no-join", 0, Options[int]{MaxConcurrency: 1})
-		if err != nil || result.Status != StatusCompleted || len(result.Checkpoint.Invocations) != 0 || result.Checkpoint.Final != nil {
+		resultExecution, result, err := runner.Start(context.Background(), "no-join", 0, nil, Options{MaxConcurrency: 1})
+		if err != nil || result.Status != StatusCompleted || len(mustCheckpoint(resultExecution).Invocations) != 0 || result.Final != nil {
 			t.Fatalf("no-join run = %+v, %v", result, err)
 		}
 	})
@@ -222,12 +222,12 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 	for _, scope := range []FailureScope{FailInvocation, FailGroup, FailExecution} {
 		t.Run(fmt.Sprintf("failure scope %d", scope), func(t *testing.T) {
 			runner := executorTestRunner(t, "fail", []NodeSpec[int]{executorTestNode("fail", func(context.Context, CallInfo, int) (Transition[int], error) { return Transition[int]{}, boom }, scope)}, nil, nil, nil, nil)
-			result, err := runner.Start(context.Background(), fmt.Sprintf("failure-%d", scope), 0, Options[int]{})
+			_, result, err := runner.Start(context.Background(), fmt.Sprintf("failure-%d", scope), 0, nil, Options{})
 			if scope == FailExecution || scope == FailGroup {
-				if !errors.Is(err, boom) || result.Status != StatusFailed || !result.Checkpoint.Completed {
+				if !errors.Is(err, boom) || result.Status != StatusFailed || !result.Header.Completed {
 					t.Fatalf("terminal failure = %+v, %v", result, err)
 				}
-			} else if err != nil || result.Status != StatusCompletedWithFailures || (!result.Checkpoint.HadLocalFailures || result.Checkpoint.Failure != nil) {
+			} else if err != nil || result.Status != StatusCompletedWithFailures || (!result.Header.HadLocalFailures || result.Header.Failure != nil) {
 				t.Fatalf("local failure = %+v, %v", result, err)
 			}
 		})
@@ -244,8 +244,8 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 			return model.To(value, "joined"), nil
 		}, FailInvocation),
 	}, []JoinSpec[int]{{Name: "joined", From: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, []int) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
-	result, err := mergeFailure.Start(context.Background(), "merge-failure", 0, Options[int]{MaxConcurrency: 1})
-	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Checkpoint.Failure == nil {
+	_, result, err := mergeFailure.Start(context.Background(), "merge-failure", 0, nil, Options{MaxConcurrency: 1})
+	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Header.Failure == nil {
 		t.Fatalf("join failure = %+v, %v", result, err)
 	}
 }

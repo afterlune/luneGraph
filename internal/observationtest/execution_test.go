@@ -20,7 +20,7 @@ func TestLoopBudgetAndResumeEvents(t *testing.T) {
 	edge(t, g, "step", "step")
 	r := compile(t, g)
 	log := &recorder{}
-	first, err := r.Start(context.Background(), "loop", 0, graph.Options[int]{MaxSteps: 1, Observer: log})
+	firstExecution, first, err := r.Start(context.Background(), "loop", 0, nil, graph.Options{MaxSteps: 1, Observer: log})
 	if err != nil || first.Status != graph.StatusBudget {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
@@ -30,8 +30,8 @@ func TestLoopBudgetAndResumeEvents(t *testing.T) {
 	if len(nodes) != 1 || nodes[0].CallID != "c2" || nodes[0].Revision != 1 || nodes[0].Action != graph.ActionContinue {
 		t.Fatalf("node = %+v", nodes)
 	}
-	second, err := r.Resume(context.Background(), first.Checkpoint, nil, graph.Options[int]{Observer: log})
-	if err != nil || second.Status != graph.StatusCompleted || *second.Checkpoint.Final != 3 {
+	_, second, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, graph.Options{Observer: log})
+	if err != nil || second.Status != graph.StatusCompleted || *second.Final != 3 {
 		t.Fatalf("resume = %+v, %v", second, err)
 	}
 	remaining := log.snapshot()[len(initial):]
@@ -53,13 +53,14 @@ func TestLoopBudgetAndResumeEvents(t *testing.T) {
 
 func TestObserverPanicsDoNotChangeExecution(t *testing.T) {
 	r := singleRunner(t)
-	baseline, baseErr := r.Start(context.Background(), "same", 4, graph.Options[int]{Store: memoryStore(t)})
+	_, baseline, baseErr := r.Start(context.Background(), "same", 4, memoryStore(t), graph.Options{})
 	log := &recorder{}
-	opts := graph.Options[int]{Store: memoryStore(t), Observer: graph.ObserverFunc(func(ctx context.Context, e graph.Event) {
+	opts := graph.Options{Observer: graph.ObserverFunc(func(ctx context.Context, e graph.Event) {
 		log.Observe(ctx, e)
 		panic("observer failure")
 	})}
-	actual, err := r.Start(context.Background(), "same", 4, opts)
+	optsStore := memoryStore(t)
+	_, actual, err := r.Start(context.Background(), "same", 4, optsStore, opts)
 	if err != baseErr || !reflect.DeepEqual(actual, baseline) {
 		t.Fatalf("changed outcome: %+v, %v", actual, err)
 	}
@@ -86,7 +87,9 @@ func TestFailureAndValidationEvents(t *testing.T) {
 				t.Fatal(err)
 			}
 			log := &recorder{}
-			opts := graph.Options[int]{Observer: log, Store: memoryStore(t)}
+			opts := graph.Options{Observer: log}
+			optsStore := memoryStore(t)
+
 			ctx := context.Background()
 			if name == "invalid options" {
 				opts.MaxSteps = -1
@@ -96,7 +99,7 @@ func TestFailureAndValidationEvents(t *testing.T) {
 				cancel()
 				ctx = cancelled
 			}
-			result, err := compile(t, g).Start(ctx, "failure", 0, opts)
+			_, result, err := compile(t, g).Start(ctx, "failure", 0, optsStore, opts)
 			if err == nil {
 				t.Fatal("missing error")
 			}
@@ -105,12 +108,12 @@ func TestFailureAndValidationEvents(t *testing.T) {
 			switch name {
 			case "panic":
 				var panicErr *graph.PanicError
-				if len(nodes) != 1 || !errors.As(nodes[0].Err, &panicErr) || !result.Checkpoint.Completed {
+				if len(nodes) != 1 || !errors.As(nodes[0].Err, &panicErr) || !result.Header.Completed {
 					t.Fatalf("panic outcome: %+v", result)
 				}
 			case "invalid transition":
 				var transitionErr *graph.TransitionError
-				if !errors.As(err, &transitionErr) || len(nodes) != 1 || nodes[0].Err != nil || result.Checkpoint.Completed || result.Checkpoint.Revision != 1 {
+				if !errors.As(err, &transitionErr) || len(nodes) != 1 || nodes[0].Err != nil || result.Header.Completed || result.Header.Revision != 1 {
 					t.Fatalf("transition outcome: %+v", result)
 				}
 			default:
@@ -133,13 +136,13 @@ func TestCloneFailureAndInvalidCheckpointEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := &recorder{}
-	result, err := r.Start(context.Background(), "clone", 0, graph.Options[int]{Observer: log})
+	_, result, err := r.Start(context.Background(), "clone", 0, nil, graph.Options{Observer: log})
 	if !errors.Is(err, boom) || len(log.snapshot()) != 2 {
 		t.Fatalf("clone result: %+v, %v", result, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationStart, result, err)
 	log = &recorder{}
-	result, err = singleRunner(t).Resume(context.Background(), graph.Checkpoint[int]{RunID: "invalid"}, nil, graph.Options[int]{Observer: log})
+	_, result, err = singleRunner(t).Resume(context.Background(), graph.Checkpoint[int]{RunID: "invalid"}, nil, nil, graph.Options{Observer: log})
 	if !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatal(err)
 	}

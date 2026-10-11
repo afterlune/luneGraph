@@ -82,14 +82,14 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 			_ = store.Close()
 		}
 	}()
-	paused, err := firstRunner.Start(ctx, runID, 4, graph.Options[int]{Store: store})
+	pausedExecution, paused, err := firstRunner.Start(ctx, runID, 4, store, graph.Options{})
 	if err != nil || paused.Status != graph.StatusWaiting {
 		t.Fatalf("start subgraph run = %+v, %v", paused, err)
 	}
-	if len(paused.Checkpoint.Invocations) != 1 {
-		t.Fatalf("waiting invocations = %+v", paused.Checkpoint.Invocations)
+	if len(mustCheckpoint(pausedExecution).Invocations) != 1 {
+		t.Fatalf("waiting invocations = %+v", mustCheckpoint(pausedExecution).Invocations)
 	}
-	waiting := paused.Checkpoint.Invocations[0]
+	waiting := mustCheckpoint(pausedExecution).Invocations[0]
 	if waiting.Node != "worker/ask" || waiting.Continuation != "worker/add" || len(waiting.Next) != 1 || waiting.Next[0] != "worker/return" || waiting.CallID == "" {
 		t.Fatalf("persisted subgraph position = %+v", waiting)
 	}
@@ -110,8 +110,8 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 	}
 
 	inputs := []graph.ResumeInput{{InvocationID: waiting.ID, Payload: []byte("6")}}
-	completed, err := recoveredRunner.Recover(ctx, runID, inputs, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 10 {
+	_, completed, err := recoveredRunner.Recover(ctx, runID, inputs, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 10 {
 		t.Fatalf("recover subgraph run = %+v, %v", completed, err)
 	}
 	if len(recoveredRunnerCalls) != 1 {
@@ -123,11 +123,11 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 	}
 
 	stored, err := store.Load(ctx, runID)
-	if err != nil || !stored.Completed || stored.Final == nil || *stored.Final != 10 || stored.Revision != completed.Checkpoint.Revision {
+	if err != nil || !stored.Completed || stored.Final == nil || *stored.Final != 10 || stored.Revision != completed.Header.Revision {
 		t.Fatalf("stored completed run = %+v, %v", stored, err)
 	}
-	finished, err := recoveredRunner.Recover(ctx, runID, nil, graph.Options[int]{Store: store})
-	if err != nil || finished.Status != graph.StatusCompleted || finished.Checkpoint.Revision != stored.Revision || len(recoveredRunnerCalls) != 1 {
+	_, finished, err := recoveredRunner.Recover(ctx, runID, nil, store, graph.Options{})
+	if err != nil || finished.Status != graph.StatusCompleted || finished.Header.Revision != stored.Revision || len(recoveredRunnerCalls) != 1 {
 		t.Fatalf("completed recovery replayed work: %+v, calls=%+v, err=%v", finished, recoveredRunnerCalls, err)
 	}
 }

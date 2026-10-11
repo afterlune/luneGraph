@@ -225,20 +225,20 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed, err := f.runner.Start(f.ctx, "target", 7, graph.Options[int]{Store: store, MaxSteps: 1, MaxConcurrency: 1})
+	seedExecution, seed, err := f.runner.Start(f.ctx, "target", 7, store, graph.Options{MaxSteps: 1, MaxConcurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		seed, err = f.runner.Recover(f.ctx, "target", nil, graph.Options[int]{Store: store, MaxSteps: 1, MaxConcurrency: 1})
+		seed, err = seedExecution.Advance(f.ctx, nil, graph.Options{MaxSteps: 1, MaxConcurrency: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if seed.Checkpoint.Steps != 3 || len(seed.Checkpoint.Groups) != 2 {
+	if seed.Header.Steps != 3 || len(mustCheckpoint(seedExecution).Groups) != 2 {
 		t.Fatalf("seed=%+v", seed)
 	}
-	f.seed = seed.Checkpoint
+	f.seed = mustCheckpoint(seedExecution)
 	armed.Store(true)
 	holderStarted := make(chan struct{})
 	holderGraph := graph.New[int]("holder")
@@ -254,7 +254,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 	holder := compile(t, holderGraph)
 	holderLaunched = true
 	go func() {
-		_, err := holder.Start(f.holderCtx, "independent", 0, graph.Options[int]{Store: store, Limiter: f.limiter})
+		_, _, err := holder.Start(f.holderCtx, "independent", 0, store, graph.Options{Limiter: f.limiter})
 		f.holderDone <- err
 		close(f.holderDone)
 	}()

@@ -13,8 +13,8 @@ func BenchmarkCapacityCompile(b *testing.B) {
 		b.Run("nodes="+strconv.Itoa(size), func(b *testing.B) {
 			g := chainGraph(b, size)
 			r := compile(b, g)
-			out, err := r.Start(context.Background(), "chain", initial("chain"), graph.Options[state]{MaxSteps: size + 1})
-			if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != size || out.Checkpoint.Final.Values["steps"] != size || out.Checkpoint.Steps != uint64(size) {
+			_, out, err := r.Start(context.Background(), "chain", initial("chain"), nil, graph.Options{MaxSteps: size + 1})
+			if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Total != size || out.Final.Values["steps"] != size || out.Header.Steps != uint64(size) {
 				b.Fatalf("invalid chain: %+v, %v", out, err)
 			}
 			b.ReportAllocs()

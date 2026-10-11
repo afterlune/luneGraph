@@ -129,23 +129,24 @@ func ExampleRunner_Resume() {
 		panic(err)
 	}
 	store := &resumeExampleStore{Store: backing}
-	opts := graph.Options[int]{Store: store, MaxConcurrency: 1}
-	first, err := runner.Start(ctx, "inputs", 0, opts)
+	opts := graph.Options{MaxConcurrency: 1}
+	optsStore := store
+	firstExecution, _, err := runner.Start(ctx, "inputs", 0, optsStore, opts)
 	if err != nil {
 		panic(err)
 	}
-	left, err := recordResumeInput(first.Checkpoint, "left", []byte("3"))
+	left, err := recordResumeInput(mustCheckpoint(firstExecution), "left", []byte("3"))
 	if err != nil {
 		panic(err)
 	}
-	right, err := recordResumeInput(first.Checkpoint, "right", []byte("4"))
+	right, err := recordResumeInput(mustCheckpoint(firstExecution), "right", []byte("4"))
 	if err != nil {
 		panic(err)
 	}
 	saved := []recordedResumeInput{left, right} // Persist these in application storage.
-	batch, _ := pendingResumeInputs(first.Checkpoint, saved)
+	batch, _ := pendingResumeInputs(mustCheckpoint(firstExecution), saved)
 	store.loseAck.Store(true)
-	if _, err = runner.Resume(ctx, first.Checkpoint, batch, opts); !errors.Is(err, errResumeExampleAck) {
+	if _, _, err := runner.Resume(ctx, mustCheckpoint(firstExecution), batch, optsStore, opts); !errors.Is(err, errResumeExampleAck) {
 		panic(fmt.Sprintf("expected an uncertain commit, got %v", err))
 	}
 
@@ -162,12 +163,15 @@ func ExampleRunner_Resume() {
 	}
 	// Resume reloads and checks this revision. On another error, return to the
 	// caller for reconciliation; this example performs no automatic retry.
-	result, err := runner.Resume(ctx, latest, matching, opts)
+	_,
+
+		result, err := runner.Resume(ctx, latest, matching, optsStore, opts)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("final:", *result.Checkpoint.Final)
 	// Output:
 	// pending=1 review=1
 	// final: 7
+	fmt.Println("final:", *result.Final)
+
 }

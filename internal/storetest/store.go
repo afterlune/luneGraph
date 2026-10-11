@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"testing"
 
 	graph "github.com/afterlune/luneGraph"
@@ -27,6 +28,7 @@ func CloneState(value State) (State, error) {
 // open must return a fresh store for every subtest and register its cleanup.
 func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 	t.Helper()
+	loadHeader(t, open)
 	ordering(t, open)
 	t.Run("copies", func(t *testing.T) {
 		store := open(t)
@@ -156,6 +158,61 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		}
 		if err := store.Delete(ctx, "run"); !errors.Is(err, checkpoint.ErrNotFound) {
 			t.Fatalf("delete already deleted = %v, want %v", err, checkpoint.ErrNotFound)
+		}
+	})
+}
+
+func loadHeader(t *testing.T, open func(*testing.T) graph.Store[State]) {
+	t.Helper()
+	t.Run("load header", func(t *testing.T) {
+		store := open(t)
+		ctx := context.Background()
+		if _, err := store.LoadHeader(ctx, "missing"); !errors.Is(err, checkpoint.ErrNotFound) {
+			t.Fatalf("missing header = %v", err)
+		}
+		position := fixture()
+		if err := store.Create(ctx, position); err != nil {
+			t.Fatal(err)
+		}
+		header, err := store.LoadHeader(ctx, position.RunID)
+		if err != nil || !reflect.DeepEqual(header, position.Header()) {
+			t.Fatalf("header = %+v, %v; want %+v", header, err, position.Header())
+		}
+		position.Revision = 2
+		position.Steps = 1
+		if err := store.Commit(ctx, 1, position.Change()); err != nil {
+			t.Fatal(err)
+		}
+		header, err = store.LoadHeader(ctx, position.RunID)
+		if err != nil || header.Revision != 2 || header.Steps != 1 {
+			t.Fatalf("committed header = %+v, %v", header, err)
+		}
+
+		terminal := graph.Checkpoint[State]{
+			FormatVersion: graph.CheckpointFormatVersion,
+			RunID:         "terminal",
+			MachineID:     "machine-v1",
+			Revision:      1,
+			Completed:     true,
+			Failure:       &graph.Failure{Message: "original"},
+		}
+		if err := store.Create(ctx, terminal); err != nil {
+			t.Fatal(err)
+		}
+		header, err = store.LoadHeader(ctx, terminal.RunID)
+		if err != nil || header.Failure == nil || header.Failure.Message != "original" {
+			t.Fatalf("terminal header = %+v, %v", header, err)
+		}
+		header.Failure.Message = "mutated"
+		header, err = store.LoadHeader(ctx, terminal.RunID)
+		if err != nil || header.Failure == nil || header.Failure.Message != "original" {
+			t.Fatalf("header failure mutation escaped into Store: %+v, %v", header, err)
+		}
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if _, err := store.LoadHeader(cancelled, position.RunID); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled header load = %v", err)
 		}
 	})
 }

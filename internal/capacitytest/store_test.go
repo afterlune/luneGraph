@@ -53,13 +53,13 @@ func population(t testing.TB, r *graph.Runner[state], store graph.Store[state], 
 	slots := make([]slot, count)
 	for i := range slots {
 		id := fmt.Sprintf("run-%d", i)
-		out, err := r.Start(context.Background(), id, initial(id), graph.Options[state]{Store: store})
-		if err != nil || out.Status != graph.StatusWaiting || out.Checkpoint.Steps != 1 {
+		outExecution, out, err := r.Start(context.Background(), id, initial(id), store, graph.Options{})
+		if err != nil || out.Status != graph.StatusWaiting || out.Header.Steps != 1 {
 			t.Fatalf("seed %s = %+v, %v", id, out, err)
 		}
-		slots[i] = slot{id: id, round: 1, revision: out.Checkpoint.Revision}
+		slots[i] = slot{id: id, round: 1, revision: out.Header.Revision}
 		if store == nil {
-			slots[i].checkpoint = out.Checkpoint
+			slots[i].checkpoint = mustCheckpoint(outExecution)
 		}
 	}
 	return slots
@@ -67,27 +67,30 @@ func population(t testing.TB, r *graph.Runner[state], store graph.Store[state], 
 
 func advance(ctx context.Context, r *graph.Runner[state], store graph.Store[state], s *slot) error {
 	input := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}
-	opts := graph.Options[state]{Store: store, MaxSteps: 2, MaxConcurrency: 1}
+	opts := graph.Options{MaxSteps: 2, MaxConcurrency: 1}
+	optsStore := store
+
 	var out graph.Result[state]
+	var outExecution *graph.Execution[state]
 	var err error
 	if store == nil {
-		out, err = r.Resume(ctx, s.checkpoint, input, opts)
+		outExecution, out, err = r.Resume(ctx, s.checkpoint, input, optsStore, opts)
 	} else {
-		out, err = r.Recover(ctx, s.id, input, opts)
+		outExecution, out, err = r.Recover(ctx, s.id, input, optsStore, opts)
 	}
 	if err != nil {
 		return err
 	}
-	value, stateErr := rootState(out.Checkpoint)
+	value, stateErr := rootState(mustCheckpoint(outExecution))
 	if stateErr != nil {
 		return stateErr
 	}
-	if out.Status != graph.StatusWaiting || value.Owner != s.id || value.Round != s.round+1 || value.Total != value.Round || value.Values["sum"] != value.Round || value.Values["inputs"] != value.Round-1 || out.Checkpoint.Revision != s.revision+2 || out.Checkpoint.Steps != uint64(value.Round) {
+	if out.Status != graph.StatusWaiting || value.Owner != s.id || value.Round != s.round+1 || value.Total != value.Round || value.Values["sum"] != value.Round || value.Values["inputs"] != value.Round-1 || out.Header.Revision != s.revision+2 || out.Header.Steps != uint64(value.Round) {
 		return fmt.Errorf("advance %s mixed state or counters: %+v", s.id, out)
 	}
-	s.round, s.revision = value.Round, out.Checkpoint.Revision
+	s.round, s.revision = value.Round, out.Header.Revision
 	if store == nil {
-		s.checkpoint = out.Checkpoint
+		s.checkpoint = mustCheckpoint(outExecution)
 	}
 	return nil
 }

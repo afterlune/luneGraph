@@ -16,19 +16,19 @@ func TestCapacityDeleteIsolation(t *testing.T) {
 			defer cancel()
 			store := openStore(t, kind)
 			r := waitingRunner(t)
-			seed, err := r.Start(ctx, "active", initial("active"), graph.Options[state]{Store: store})
+			seedExecution, _, err := r.Start(ctx, "active", initial("active"), store, graph.Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			complete := compile(t, chainGraph(t, 2))
 			for _, id := range []string{"old-a", "old-b"} {
-				if _, err := complete.Start(ctx, id, initial(id), graph.Options[state]{Store: store}); err != nil {
+				if _, _, err := complete.Start(ctx, id, initial(id), store, graph.Options{}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			started, release := make(chan struct{}), make(chan struct{})
 			done := make(chan error, 1)
-			opts := graph.Options[state]{Store: store, Observer: graph.ObserverFunc(func(ctx context.Context, e graph.Event) {
+			opts := graph.Options{Observer: graph.ObserverFunc(func(ctx context.Context, e graph.Event) {
 				if e.Operation == graph.OperationNode && e.Phase == graph.PhaseStarted {
 					close(started)
 					select {
@@ -37,8 +37,13 @@ func TestCapacityDeleteIsolation(t *testing.T) {
 					}
 				}
 			})}
+			optsStore := store
+
 			var workers sync.WaitGroup
-			workers.Go(func() { _, err := r.Recover(ctx, "active", interruptionInputs(seed.Checkpoint), opts); done <- err })
+			workers.Go(func() {
+				_, _, err := r.Recover(ctx, "active", interruptionInputs(mustCheckpoint(seedExecution)), optsStore, opts)
+				done <- err
+			})
 			t.Cleanup(func() { cancel(); workers.Wait() })
 			select {
 			case <-started:

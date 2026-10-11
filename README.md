@@ -41,10 +41,13 @@ func main() {
         MachineID: "counter-v1", Clone: graph.ValueClone[int],
     })
     if err != nil { panic(err) }
-    result, err := runner.Start(context.Background(), "run-1", 0, graph.Options[int]{})
+    execution, result, err := runner.Start(context.Background(), "run-1", 0, nil, graph.Options{})
     if err != nil { panic(err) }
     if result.Status != graph.StatusCompleted { panic(result.Status) }
-    fmt.Println(*result.Checkpoint.Final) // 3
+    fmt.Println(*result.Final) // 3
+    checkpoint, err := execution.Checkpoint()
+    if err != nil { panic(err) }
+    fmt.Println(checkpoint.Steps) // 4
 }
 ```
 
@@ -101,30 +104,36 @@ InvocationID, original waiting CallID and an owned payload. After an uncertain
 commit, it loads the checkpoint and selects only inputs whose original waiting
 identity is still pending. Unmatched records remain available for application
 reconciliation; a changed CallID alone does not prove that a payload succeeded.
-Terminal runs and an empty matching set do not receive inputs. The example uses
-`Resume(loadedCheckpoint, matchingInputs, opts)` so its loaded revision is
-checked again. Return conflicts and uncertain errors to the caller for another
+Terminal runs and an empty matching set do not receive inputs. `Resume` opens a
+checkpoint as a new in-memory execution and checks its revision against the
+Store. Return conflicts and uncertain errors to the caller for another
 reconciliation decision; the example adds no automatic retry or acknowledgement.
 
-This reconciliation path performs an explicit Load plus Resume's own Load.
-It can therefore load a full checkpoint twice, while preserving the existing
-Commit boundaries. The input record and selection helper are application-local
-example code, not additions to the library API or checkpoint format. Callback
-side effects still need application idempotency across concurrent replays.
+This reconciliation path performs an explicit Load plus Resume's own full Load.
+It can therefore materialize a full checkpoint twice. Callback side effects
+still need application idempotency across concurrent replays.
 
-Start creates a run. Resume drives its supplied checkpoint, loading authoritative
-state and rejecting stale references when a Store is supplied. Recover loads by
-RunID. Fork creates an independent run from an active checkpoint, with a new
-RunID and revision 1. Completed runs cannot be resumed or forked; Recover can
-inspect terminal results without invoking callbacks.
+Start, Resume, Recover and Fork return an `Execution` handle and the result of
+that call. `Execution.Advance` continues the same live scheduler state; when a
+Store is attached, it checks the persisted header revision before advancing.
+`Execution.Checkpoint` creates an independent full checkpoint only when needed,
+and `Execution.Pending` lists waiting continuation identities without copying
+their state. Keep one handle on one goroutine; applications can still make
+progress from another handle, but the Store's revision check will reject a stale
+advance. Recover loads by RunID and is the cold-open path. Fork creates an
+independent run from an active checkpoint, with a new RunID and revision 1.
+Completed runs cannot be resumed or forked; Recover can inspect terminal results
+without invoking callbacks.
 
 ```go
 store, err := sqlite.Open(ctx, "runs.db", checkpoint.JSON[State]{})
 if err != nil { return err }
 defer store.Close()
-result, err := runner.Start(ctx, "run-1", initial, graph.Options[State]{Store: store})
+execution, result, err := runner.Start(ctx, "run-1", initial, store, graph.Options{})
 // Reopen with the same definition/MachineID in another process:
-result, err = runner.Recover(ctx, "run-1", inputs, graph.Options[State]{Store: store})
+execution, result, err = runner.Recover(ctx, "run-1", inputs, store, graph.Options{})
+// Within this process, continue the same live execution without reloading all states:
+result, err = execution.Advance(ctx, moreInputs, graph.Options{})
 ```
 
 Import `checkpoint` and `checkpoint/sqlite` from the module's corresponding
@@ -133,7 +142,9 @@ encodes S only; execution metadata is stored separately. Memory Store is in
 checkpoint/memory and requires an independent-copy Clone.
 
 Store.Commit(expectedRevision, Change[S]) atomically applies changed records.
-Custom Stores implement Create, Load, Commit and single-run Delete. ErrConflict
+Custom Stores implement Create, Load, LoadHeader, Commit and single-run Delete.
+LoadHeader returns only revision and scheduling metadata for warm-handle conflict
+checks; it must not materialize invocation states. ErrConflict
 guarantees no write; other Store errors can leave the outcome uncertain. Reload
 before replay. Load returns Invocations and Groups sorted by ascending
 lexicographic ID; ActivationGroup.Children preserves fan-out target order. CAS
@@ -155,7 +166,7 @@ returns ErrRunFailed and its stored message. Invalid transitions, Clone errors
 and cancellation do not create a failed terminal. Callback panics become
 PanicError; Store/codec panics are outside this boundary.
 
-**StatusFailed describes a failed call.** Inspect Checkpoint.Completed/Failure
+**StatusFailed describes a failed call.** Inspect Result.Header.Completed/Failure
 and reload after uncertain writes to determine execution lifetime. See the
 [complete result handling table](docs/execution-semantics.md#failures-and-public-call-outcomes).
 
@@ -174,7 +185,7 @@ bound all node, Merge and Apply callbacks in one process:
 ```go
 limiter, err := graph.NewLimiter(64)
 if err != nil { return err }
-options := graph.Options[State]{Store: store, MaxConcurrency: 8, Limiter: limiter}
+options := graph.Options{MaxConcurrency: 8, Limiter: limiter}
 ```
 
 Host applications still bound resident executions, waiting callers and memory.
@@ -233,3 +244,10 @@ Mermaid error and Resume's ErrRunCompleted.
 Formats 1/2/3 and SQLite schema 1 are rejected. Complete existing runs using the
 old runtime and use a new database for format 4; there is no automatic migration.
 See [CHANGELOG](CHANGELOG.md) for the complete source and semantic changes.
+
+The execution-handle API is a separate source migration: use non-generic
+`graph.Options`, pass Store as the explicit argument to Start/Resume/Recover/Fork,
+and capture their `(execution, result, error)` returns. Read `result.Header` and
+`result.Final`; call `execution.Checkpoint()` for a full snapshot or reuse the
+handle with `execution.Advance(...)` for another in-process call. Custom Store
+implementations must add `LoadHeader` while leaving checkpoint encoding intact.

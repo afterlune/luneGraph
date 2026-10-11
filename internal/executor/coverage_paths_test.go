@@ -28,20 +28,19 @@ func TestFailGroupRemovesNestedActivationTree(t *testing.T) {
 		"root":   {"nested", "killer"},
 		"nested": {"inner-a", "inner-b"},
 	}, nil, nil)
-
-	first, err := runner.Start(context.Background(), "nested-failure", 7, Options[int]{MaxSteps: 2, MaxConcurrency: 1})
-	if err != nil || first.Status != StatusBudget || len(first.Checkpoint.Groups) != 2 {
+	firstExecution, first, err := runner.Start(context.Background(), "nested-failure", 7, nil, Options{MaxSteps: 2, MaxConcurrency: 1})
+	if err != nil || first.Status != StatusBudget || len(mustCheckpoint(firstExecution).Groups) != 2 {
 		t.Fatalf("setup run = %+v, %v", first, err)
 	}
-	result, err := runner.Resume(context.Background(), first.Checkpoint, nil, Options[int]{MaxSteps: 1, MaxConcurrency: 1})
+	resultExecution, result, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, Options{MaxSteps: 1, MaxConcurrency: 1})
 	if err != nil || result.Status != StatusCompletedWithFailures {
 		t.Fatalf("FailGroup result = %+v, %v", result, err)
 	}
-	if !result.Checkpoint.Completed || !result.Checkpoint.HadLocalFailures || len(result.Checkpoint.Groups) != 0 {
-		t.Fatalf("nested activation tree remains: %+v", result.Checkpoint)
+	if !result.Header.Completed || !result.Header.HadLocalFailures || len(mustCheckpoint(resultExecution).Groups) != 0 {
+		t.Fatalf("nested activation tree remains: %+v", mustCheckpoint(resultExecution))
 	}
-	if len(result.Checkpoint.Invocations) != 0 {
-		t.Fatalf("completed local failure retained invocations: %+v", result.Checkpoint.Invocations)
+	if len(mustCheckpoint(resultExecution).Invocations) != 0 {
+		t.Fatalf("completed local failure retained invocations: %+v", mustCheckpoint(resultExecution).Invocations)
 	}
 }
 
@@ -57,22 +56,22 @@ func TestForkCopiesWaitingExecutionAndReportsCloneFailure(t *testing.T) {
 			Apply:  func(_ context.Context, _ CallInfo, state int, _ any) (int, error) { return state + 1, nil },
 		},
 	}, nil)
-	source, err := runner.Start(context.Background(), "fork-source", 9, Options[int]{})
+	sourceExecution, source, err := runner.Start(context.Background(), "fork-source", 9, nil, Options{})
 	if err != nil || source.Status != StatusWaiting {
 		t.Fatalf("source = %+v, %v", source, err)
 	}
-
-	forked, err := runner.Fork(context.Background(), "fork-copy", source.Checkpoint, Options[int]{})
+	forkedExecution, forked, err := runner.Fork(context.Background(), "fork-copy", mustCheckpoint(sourceExecution), nil, Options{})
 	if err != nil || forked.Status != StatusWaiting {
 		t.Fatalf("fork = %+v, %v", forked, err)
 	}
-	if forked.Checkpoint.RunID != "fork-copy" || forked.Checkpoint.Revision != 1 || source.Checkpoint.RunID != "fork-source" || source.Checkpoint.Revision != 2 {
-		t.Fatalf("fork/source identity or revision changed: fork=%+v source=%+v", forked.Checkpoint, source.Checkpoint)
+	if forked.Header.RunID != "fork-copy" || forked.Header.Revision != 1 || source.Header.RunID != "fork-source" || source.Header.Revision != 2 {
+		t.Fatalf("fork/source identity or revision changed: fork=%+v source=%+v", mustCheckpoint(forkedExecution), mustCheckpoint(sourceExecution))
 	}
 
+	sourceCheckpoint := mustCheckpoint(sourceExecution)
 	cloneErr := errors.New("clone failed")
 	runner.clone = func(int) (int, error) { return 0, cloneErr }
-	failed, err := runner.Fork(context.Background(), "fork-failed", source.Checkpoint, Options[int]{})
+	_, failed, err := runner.Fork(context.Background(), "fork-failed", sourceCheckpoint, nil, Options{})
 	if !errors.Is(err, cloneErr) || failed.Status != StatusFailed {
 		t.Fatalf("fork clone failure = %+v, %v", failed, err)
 	}

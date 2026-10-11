@@ -81,8 +81,8 @@ func TestLimiterValidation(t *testing.T) {
 		}
 	}
 	store := newMemoryStore(t)
-	out, err := r.Start(context.Background(), "invalid", 0, graph.Options[int]{Store: store, Limiter: &graph.Limiter{}})
-	if err == nil || out.Checkpoint.Revision != 0 {
+	_, out, err := r.Start(context.Background(), "invalid", 0, store, graph.Options{Limiter: &graph.Limiter{}})
+	if err == nil || out.Header.Revision != 0 {
 		t.Fatalf("invalid limiter: %+v %v", out, err)
 	}
 	if _, err := store.Load(context.Background(), "invalid"); err == nil {
@@ -127,22 +127,22 @@ func TestSharedLimiterAcrossCallbackKindsAndRunners(t *testing.T) {
 					id := fmt.Sprintf("%s-%d", role, i)
 					var cp graph.Checkpoint[int]
 					if role == "apply" {
-						out, err := r.Start(ctx, id, 1, graph.Options[int]{})
+						outExecution, _, err := r.Start(ctx, id, 1, nil, graph.Options{})
 						if err != nil {
 							t.Fatal(err)
 						}
-						cp = out.Checkpoint
+						cp = mustCheckpoint(outExecution)
 					}
 					wg.Go(func() {
-						opts := graph.Options[int]{Limiter: limiter, MaxConcurrency: 8, Observer: observer}
+						opts := graph.Options{Limiter: limiter, MaxConcurrency: 8, Observer: observer}
 						var out graph.Result[int]
 						var err error
 						if role == "apply" {
-							out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, opts)
+							_, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, nil, opts)
 						} else {
-							out, err = r.Start(ctx, id, 1, opts)
+							_, out, err = r.Start(ctx, id, 1, nil, opts)
 						}
-						if err == nil && !out.Checkpoint.Completed {
+						if err == nil && !out.Header.Completed {
 							err = fmt.Errorf("not completed: %+v", out)
 						}
 						errs <- err
@@ -175,7 +175,7 @@ func TestLimiterWaitCancellationPreservesPosition(t *testing.T) {
 	})
 	holderDone := make(chan error, 1)
 	go func() {
-		_, err := holder.Start(holderCtx, "holder", 0, graph.Options[int]{Limiter: limiter})
+		_, _, err := holder.Start(holderCtx, "holder", 0, nil, graph.Options{Limiter: limiter})
 		holderDone <- err
 	}()
 	<-started
@@ -186,53 +186,56 @@ func TestLimiterWaitCancellationPreservesPosition(t *testing.T) {
 			var cp graph.Checkpoint[int]
 			seedCtx := context.Background()
 			if role == "apply" {
-				out, err := r.Start(seedCtx, "waiting", 0, graph.Options[int]{})
+				outExecution, _, err := r.Start(seedCtx, "waiting", 0, nil, graph.Options{})
 				if err != nil {
 					t.Fatal(err)
 				}
-				cp = out.Checkpoint
+				cp = mustCheckpoint(outExecution)
 			}
 			if role == "join" {
-				out, err := r.Start(seedCtx, "waiting", 0, graph.Options[int]{MaxSteps: 2, MaxConcurrency: 1})
+				outExecution, _, err := r.Start(seedCtx, "waiting", 0, nil, graph.Options{MaxSteps: 2, MaxConcurrency: 1})
 				if err != nil {
 					t.Fatal(err)
 				}
-				cp = out.Checkpoint
+				cp = mustCheckpoint(outExecution)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			log := make(chan struct{}, 1)
-			opts := graph.Options[int]{Limiter: limiter, MaxConcurrency: 8, Observer: graph.ObserverFunc(func(_ context.Context, e graph.Event) {
+			opts := graph.Options{Limiter: limiter, MaxConcurrency: 8, Observer: graph.ObserverFunc(func(_ context.Context, e graph.Event) {
 				if (e.Operation == graph.OperationStart || e.Operation == graph.OperationResume) && e.Phase == graph.PhaseStarted {
 					log <- struct{}{}
 				}
 			})}
 			done := make(chan struct {
-				out graph.Result[int]
-				err error
+				execution *graph.Execution[int]
+				out       graph.Result[int]
+				err       error
 			}, 1)
 			go func() {
+				var outExecution *graph.Execution[int]
 				var out graph.Result[int]
 				var err error
 				if role == "apply" {
-					out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, opts)
+					outExecution, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, nil, opts)
 				} else if role == "join" {
-					out, err = r.Resume(ctx, cp, nil, opts)
+					outExecution, out, err = r.Resume(ctx, cp, nil, nil, opts)
 				} else {
-					out, err = r.Start(ctx, "waiting", 0, opts)
+					outExecution, out, err = r.Start(ctx, "waiting", 0, nil, opts)
 				}
 				done <- struct {
-					out graph.Result[int]
-					err error
-				}{out, err}
+					execution *graph.Execution[int]
+					out       graph.Result[int]
+					err       error
+				}{outExecution, out, err}
 			}()
 			<-log
 			cancel()
 			got := <-done
-			if !errors.Is(got.err, context.Canceled) || got.out.Status != graph.StatusCancelled || entered.Load() || got.out.Checkpoint.Failure != nil {
+			if !errors.Is(got.err, context.Canceled) || got.out.Status != graph.StatusCancelled || entered.Load() || got.out.Header.Failure != nil {
 				t.Fatalf("waiting result=%+v err=%v entered=%v", got.out, got.err, entered.Load())
 			}
-			if cp.Revision != 0 && (cp.Revision != got.out.Checkpoint.Revision || cp.Steps != got.out.Checkpoint.Steps || cp.Invocations[0].CallID != got.out.Checkpoint.Invocations[0].CallID) {
+			if cp.Revision != 0 && (cp.Revision != got.out.Header.Revision || cp.Steps != got.out.Header.Steps || cp.Invocations[0].CallID != mustCheckpoint(got.execution).Invocations[0].CallID) {
 				t.Fatal("waiting changed position")
 			}
 		})
@@ -244,7 +247,7 @@ func TestLimiterWaitCancellationPreservesPosition(t *testing.T) {
 	r := limiterFixture(t, "node", func(_ context.Context, _ graph.CallInfo, s int) (int, error) { return s, nil })
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := r.Start(ctx, "reuse", 0, graph.Options[int]{Limiter: limiter}); err != nil {
+	if _, _, err := r.Start(ctx, "reuse", 0, nil, graph.Options{Limiter: limiter}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -271,28 +274,28 @@ func TestLimiterReleasesAfterCallbackFailures(t *testing.T) {
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				opts := graph.Options[int]{Limiter: limiter}
+				opts := graph.Options{Limiter: limiter}
 				var out graph.Result[int]
 				var err error
 				if role == "apply" {
-					out, err = r.Start(ctx, "first", 0, opts)
-					if err != nil {
-						t.Fatal(err)
+					execution, _, startErr := r.Start(ctx, "first", 0, nil, opts)
+					if startErr != nil {
+						t.Fatal(startErr)
 					}
-					out, err = r.Resume(ctx, out.Checkpoint, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, opts)
+					out, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, opts)
 				} else {
-					out, err = r.Start(ctx, "first", 0, opts)
+					_, out, err = r.Start(ctx, "first", 0, nil, opts)
 				}
 				if err == nil {
 					t.Fatal("missing callback failure")
 				}
 				if mode == "interrupt" {
-					if !errors.Is(err, graph.ErrInterrupted) || out.Checkpoint.Completed {
+					if !errors.Is(err, graph.ErrInterrupted) || out.Header.Completed {
 						t.Fatal("interruption committed")
 					}
 				}
 				healthy := limiterFixture(t, "node", func(_ context.Context, _ graph.CallInfo, s int) (int, error) { return s, nil })
-				if _, err := healthy.Start(ctx, "reuse", 0, opts); err != nil {
+				if _, _, err := healthy.Start(ctx, "reuse", 0, nil, opts); err != nil {
 					t.Fatal("permit leaked:", err)
 				}
 			})

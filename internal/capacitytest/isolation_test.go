@@ -97,7 +97,9 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 				case 3:
 					id = "interrupt"
 				}
-				out, err := r.Start(callCtx, id, initial(id), graph.Options[state]{Store: store})
+				var out graph.Result[state]
+				var err error
+				_, out, err = r.Start(callCtx, id, initial(id), store, graph.Options{})
 				saved, loadErr := store.Load(context.Background(), id)
 				if loadErr != nil {
 					return loadErr
@@ -124,14 +126,14 @@ func TestSharedExecutionFailureIsolation(t *testing.T) {
 					if !errors.Is(err, want) || saved.Revision != 1 || saved.Completed || saved.Failure != nil || saved.HadLocalFailures {
 						return fmt.Errorf("conflict wrote state: %+v, %v", saved, err)
 					}
-					out, err = r.Recover(context.Background(), id, nil, graph.Options[state]{Store: store})
+					_, out, err = r.Recover(context.Background(), id, nil, store, graph.Options{})
 					fallthrough
 				default:
-					if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Owner != id || out.Checkpoint.Final.Total != 1 || out.Checkpoint.Final.Values["steps"] != 1 {
+					if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Owner != id || out.Final.Total != 1 || out.Final.Values["steps"] != 1 {
 						return fmt.Errorf("unrelated run %s: %+v, %v", id, out, err)
 					}
 					saved, err = store.Load(context.Background(), id)
-					if err != nil || !saved.Completed || saved.Final == nil || saved.Final.Owner != id || saved.Final.Total != 1 || saved.Final.Values["steps"] != 1 || saved.Revision != out.Checkpoint.Revision {
+					if err != nil || !saved.Completed || saved.Final == nil || saved.Final.Owner != id || saved.Final.Total != 1 || saved.Final.Values["steps"] != 1 || saved.Revision != out.Header.Revision {
 						return fmt.Errorf("stored run %s: %+v, %v", id, saved, err)
 					}
 				}

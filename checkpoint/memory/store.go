@@ -100,6 +100,25 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 	slices.SortFunc(cp.Groups, func(a, b graph.ActivationGroup) int { return cmp.Compare(a.ID, b.ID) })
 	return cp.Clone(s.clone)
 }
+
+func (s *Store[S]) LoadHeader(ctx context.Context, id string) (graph.Header, error) {
+	if err := checkContext(ctx); err != nil {
+		return graph.Header{}, err
+	}
+	if s == nil {
+		return graph.Header{}, errors.New("store is nil")
+	}
+	s.mu.RLock()
+	rec, ok := s.values[id]
+	if !ok {
+		s.mu.RUnlock()
+		return graph.Header{}, fmt.Errorf("run %q: %w", id, checkpoint.ErrNotFound)
+	}
+	header := rec.header.Header()
+	s.mu.RUnlock()
+	return header, nil
+}
+
 func (s *Store[S]) Commit(ctx context.Context, expected uint64, c graph.Change[S]) error {
 	if err := checkContext(ctx); err != nil {
 		return err

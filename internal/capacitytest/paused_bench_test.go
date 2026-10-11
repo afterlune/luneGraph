@@ -35,9 +35,9 @@ func BenchmarkCapacityPaused(b *testing.B) {
 								b.Fatal(err)
 							}
 						} else {
-							out, err := r.Recover(context.Background(), s.id, nil, graph.Options[state]{Store: store})
-							value, stateErr := rootState(out.Checkpoint)
-							if err != nil || stateErr != nil || out.Status != graph.StatusWaiting || value.Owner != s.id || value.Round != s.round || out.Checkpoint.Revision != s.revision {
+							outExecution, out, err := r.Recover(context.Background(), s.id, nil, store, graph.Options{})
+							value, stateErr := rootState(mustCheckpoint(outExecution))
+							if err != nil || stateErr != nil || out.Status != graph.StatusWaiting || value.Owner != s.id || value.Round != s.round || out.Header.Revision != s.revision {
 								b.Fatalf("inspect %s: %+v, %v, %v", s.id, out, err, stateErr)
 							}
 						}

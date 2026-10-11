@@ -29,12 +29,12 @@ func TestLimiterCloneFailureReleasesPermit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out, err := r.Start(ctx, "clone", 1, graph.Options[int]{Limiter: l})
-	if err == nil || out.Checkpoint.Revision != 1 || out.Checkpoint.Steps != 0 || out.Checkpoint.Completed {
+	_, out, err := r.Start(ctx, "clone", 1, nil, graph.Options{Limiter: l})
+	if err == nil || out.Header.Revision != 1 || out.Header.Steps != 0 || out.Header.Completed {
 		t.Fatalf("clone=%+v %v", out, err)
 	}
 	healthy := limiterFixture(t, "node", func(_ context.Context, _ graph.CallInfo, s int) (int, error) { return s, nil })
-	if _, err := healthy.Start(ctx, "reuse", 1, graph.Options[int]{Limiter: l}); err != nil {
+	if _, _, err := healthy.Start(ctx, "reuse", 1, nil, graph.Options{Limiter: l}); err != nil {
 		t.Fatal("permit leaked:", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestLimiterWaitingJoinCancellationDoesNotFailExecution(t *testing.T) {
 		clones++
 		if clones == 7 {
 			go func() {
-				_, err := holder.Start(holderCtx, "holder", 0, graph.Options[int]{Limiter: l})
+				_, _, err := holder.Start(holderCtx, "holder", 0, nil, graph.Options{Limiter: l})
 				holderDone <- err
 			}()
 			<-holderStarted
@@ -73,8 +73,8 @@ func TestLimiterWaitingJoinCancellationDoesNotFailExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := r.Start(ctx, "join", 1, graph.Options[int]{Limiter: l, MaxConcurrency: 1})
-	if !errors.Is(err, context.Canceled) || out.Status != graph.StatusCancelled || merged.Load() || out.Checkpoint.Completed || out.Checkpoint.Failure != nil || out.Checkpoint.Revision != 4 || out.Checkpoint.Steps != 3 {
+	_, out, err := r.Start(ctx, "join", 1, nil, graph.Options{Limiter: l, MaxConcurrency: 1})
+	if !errors.Is(err, context.Canceled) || out.Status != graph.StatusCancelled || merged.Load() || out.Header.Completed || out.Header.Failure != nil || out.Header.Revision != 4 || out.Header.Steps != 3 {
 		t.Fatalf("join=%+v %v merged=%v clones=%d", out, err, merged.Load(), clones)
 	}
 	release()
@@ -98,11 +98,11 @@ func TestSharedLimiterWithDifferentStateTypes(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := r.Start(ctx, "integer", 1, graph.Options[int]{Limiter: l}); err != nil {
+	if _, _, err := r.Start(ctx, "integer", 1, nil, graph.Options{Limiter: l}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := strings.Start(ctx, "string", "hello", graph.Options[string]{Limiter: l})
-	if err != nil || out.Checkpoint.Final == nil || *out.Checkpoint.Final != "hello!" {
+	_, out, err := strings.Start(ctx, "string", "hello", nil, graph.Options{Limiter: l})
+	if err != nil || out.Final == nil || *out.Final != "hello!" {
 		t.Fatalf("different state=%+v %v", out, err)
 	}
 }

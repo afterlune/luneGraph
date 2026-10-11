@@ -43,9 +43,10 @@ func TestResolvedNestedJoinInterruptionPreservesCommittedInnerJoin(t *testing.T)
 		edge(t, g, e[0], e[1])
 	}
 	r, log := compile(t, g), &recorder{}
-	opts := graph.Options[int]{Observer: log, MaxConcurrency: 1, Store: memoryStore(t)}
-	first, err := r.Start(context.Background(), "nested", 1, opts)
-	if !errors.Is(err, graph.ErrInterrupted) || len(first.Checkpoint.Groups) != 1 {
+	opts := graph.Options{Observer: log, MaxConcurrency: 1}
+	optsStore := memoryStore(t)
+	firstExecution, first, err := r.Start(context.Background(), "nested", 1, optsStore, opts)
+	if !errors.Is(err, graph.ErrInterrupted) || len(mustCheckpoint(firstExecution).Groups) != 1 {
 		t.Fatalf("interruption=%+v %v", first, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationStart, first, err)
@@ -59,14 +60,14 @@ func TestResolvedNestedJoinInterruptionPreservesCommittedInnerJoin(t *testing.T)
 		if e.Node == "innerjoin" {
 			want = graph.OutcomeCommitted
 		}
-		if e.Outcome != want || e.Revision != first.Checkpoint.Revision {
+		if e.Outcome != want || e.Revision != first.Header.Revision {
 			t.Fatalf("nested resolution=%+v", e)
 		}
 		ids[e.Node] = e.CallID
 	}
 	before := len(log.snapshot())
-	last, err := r.Recover(context.Background(), "nested", nil, opts)
-	if err != nil || !last.Checkpoint.Completed {
+	_, last, err := r.Recover(context.Background(), "nested", nil, optsStore, opts)
+	if err != nil || !last.Header.Completed {
 		t.Fatalf("recovery=%+v %v", last, err)
 	}
 	checkCall(t, log.snapshot()[before:], graph.OperationRecover, last, err)
@@ -75,7 +76,7 @@ func TestResolvedNestedJoinInterruptionPreservesCommittedInnerJoin(t *testing.T)
 		t.Fatalf("replayed joins=%+v", joins)
 	}
 	for _, e := range joins {
-		if e.Outcome != graph.OutcomeCommitted || e.Revision != last.Checkpoint.Revision || ids[e.Node] != e.CallID {
+		if e.Outcome != graph.OutcomeCommitted || e.Revision != last.Header.Revision || ids[e.Node] != e.CallID {
 			t.Fatalf("replayed resolution=%+v", e)
 		}
 	}
@@ -109,12 +110,12 @@ func TestResolvedApplyInputPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, store := compile(t, g), memoryStore(t)
-	seed, err := r.Start(context.Background(), "prefix", 1, graph.Options[int]{Store: store, MaxConcurrency: 1})
+	seedExecution, seed, err := r.Start(context.Background(), "prefix", 1, store, graph.Options{MaxConcurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var inputs []graph.ResumeInput
-	for _, inv := range seed.Checkpoint.Invocations {
+	for _, inv := range mustCheckpoint(seedExecution).Invocations {
 		if inv.Status == graph.InvocationWaiting {
 			payload := []byte("1")
 			if len(inputs) == 1 {
@@ -127,19 +128,20 @@ func TestResolvedApplyInputPrefix(t *testing.T) {
 		t.Fatal("waiting fixture")
 	}
 	log := &recorder{}
-	opts := graph.Options[int]{Store: store, Observer: log, MaxConcurrency: 1}
-	first, err := r.Resume(context.Background(), seed.Checkpoint, inputs, opts)
-	if !errors.Is(err, graph.ErrInterrupted) || first.Checkpoint.Revision != seed.Checkpoint.Revision+1 {
+	opts := graph.Options{Observer: log, MaxConcurrency: 1}
+	optsStore := store
+	_, first, err := r.Resume(context.Background(), mustCheckpoint(seedExecution), inputs, optsStore, opts)
+	if !errors.Is(err, graph.ErrInterrupted) || first.Header.Revision != seed.Header.Revision+1 {
 		t.Fatalf("prefix=%+v %v", first, err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationResume, first, err)
 	seen := resolved(log.snapshot(), graph.OperationApply)
-	if len(seen) != 2 || seen[0].Outcome != graph.OutcomeCommitted || seen[1].Outcome != graph.OutcomeDiscarded || seen[0].Revision != first.Checkpoint.Revision || seen[1].Revision != first.Checkpoint.Revision {
+	if len(seen) != 2 || seen[0].Outcome != graph.OutcomeCommitted || seen[1].Outcome != graph.OutcomeDiscarded || seen[0].Revision != first.Header.Revision || seen[1].Revision != first.Header.Revision {
 		t.Fatalf("apply prefix=%+v", seen)
 	}
 	before := len(log.snapshot())
-	last, err := r.Recover(context.Background(), "prefix", inputs[1:], opts)
-	if err != nil || !last.Checkpoint.Completed {
+	_, last, err := r.Recover(context.Background(), "prefix", inputs[1:], optsStore, opts)
+	if err != nil || !last.Header.Completed {
 		t.Fatalf("recover=%+v %v", last, err)
 	}
 	checkCall(t, log.snapshot()[before:], graph.OperationRecover, last, err)

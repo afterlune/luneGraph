@@ -24,22 +24,22 @@ func TestExecutionFailureIsPersisted(t *testing.T) {
 			}
 			runner := intRunner(t, g)
 			store := newMemoryStore(t)
-			first, err := runner.Start(context.Background(), "failed", 1, graph.Options[int]{Store: store})
-			if !errors.Is(err, boom) || first.Status != graph.StatusFailed || first.Checkpoint.Revision != 2 || first.Checkpoint.Steps != 1 || !first.Checkpoint.Completed || first.Checkpoint.Final != nil || len(first.Checkpoint.Invocations) != 0 || len(first.Checkpoint.Groups) != 0 || first.Checkpoint.Failure == nil {
+			firstExecution, first, err := runner.Start(context.Background(), "failed", 1, store, graph.Options{})
+			if !errors.Is(err, boom) || first.Status != graph.StatusFailed || first.Header.Revision != 2 || first.Header.Steps != 1 || !first.Header.Completed || first.Final != nil || len(mustCheckpoint(firstExecution).Invocations) != 0 || len(mustCheckpoint(firstExecution).Groups) != 0 || first.Header.Failure == nil {
 				t.Fatalf("failed result = %+v, %v", first, err)
 			}
 			loaded, err := store.Load(context.Background(), "failed")
 			if err != nil || loaded.Revision != 2 || !loaded.Completed {
 				t.Fatalf("stored failure = %+v, %v", loaded, err)
 			}
-			recovered, err := runner.Recover(context.Background(), "failed", nil, graph.Options[int]{Store: store})
-			if !errors.Is(err, graph.ErrRunFailed) || errors.Is(err, boom) || recovered.Status != graph.StatusFailed || recovered.Checkpoint.Revision != 2 || !strings.Contains(err.Error(), boom.Error()) || calls != 1 {
+			_, recovered, err := runner.Recover(context.Background(), "failed", nil, store, graph.Options{})
+			if !errors.Is(err, graph.ErrRunFailed) || errors.Is(err, boom) || recovered.Status != graph.StatusFailed || recovered.Header.Revision != 2 || !strings.Contains(err.Error(), boom.Error()) || calls != 1 {
 				t.Fatalf("recovered failure = %+v, %v; calls=%d", recovered, err, calls)
 			}
-			if _, err := runner.Resume(context.Background(), loaded, nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunCompleted) {
+			if _, _, err := runner.Resume(context.Background(), loaded, nil, store, graph.Options{}); !errors.Is(err, graph.ErrRunCompleted) {
 				t.Fatalf("resumed terminal failure = %v", err)
 			}
-			withInput, err := runner.Recover(context.Background(), "failed", []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{Store: store})
+			_, withInput, err := runner.Recover(context.Background(), "failed", []graph.ResumeInput{{InvocationID: "i1"}}, store, graph.Options{})
 			if !errors.Is(err, graph.ErrRunCompleted) || withInput.Status != graph.StatusFailed || calls != 1 {
 				t.Fatalf("input to failed run = %+v, %v", withInput, err)
 			}
@@ -57,7 +57,7 @@ func TestRejectMalformedFailedCheckpoint(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	if _, err := runner.Start(context.Background(), "malformed-failure", 0, graph.Options[int]{Store: store}); !errors.Is(err, boom) {
+	if _, _, err := runner.Start(context.Background(), "malformed-failure", 0, store, graph.Options{}); !errors.Is(err, boom) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -71,7 +71,7 @@ func TestRejectMalformedFailedCheckpoint(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			corrupt := &alteredLoadStore{Store: store, alter: tc.alter}
-			if _, err := runner.Recover(context.Background(), "malformed-failure", nil, graph.Options[int]{Store: corrupt}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+			if _, _, err := runner.Recover(context.Background(), "malformed-failure", nil, corrupt, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 				t.Fatalf("malformed terminal = %v", err)
 			}
 		})
@@ -87,8 +87,8 @@ func TestFailureOverridePersistsTerminal(t *testing.T) {
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
 	scope := graph.FailExecution
-	failed, err := runner.Start(context.Background(), "override", 0, graph.Options[int]{Store: store, FailureOverride: &scope})
-	if !errors.Is(err, boom) || !failed.Checkpoint.Completed || failed.Checkpoint.Failure == nil {
+	_, failed, err := runner.Start(context.Background(), "override", 0, store, graph.Options{FailureOverride: &scope})
+	if !errors.Is(err, boom) || !failed.Header.Completed || failed.Header.Failure == nil {
 		t.Fatalf("overridden failure = %+v, %v", failed, err)
 	}
 }
@@ -112,15 +112,15 @@ func TestContinuationExecutionFailureIsPersisted(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	first, err := runner.Start(context.Background(), "apply", 0, graph.Options[int]{Store: store})
-	if err != nil || first.Status != graph.StatusWaiting || first.Checkpoint.Steps != 1 {
+	firstExecution, first, err := runner.Start(context.Background(), "apply", 0, store, graph.Options{})
+	if err != nil || first.Status != graph.StatusWaiting || first.Header.Steps != 1 {
 		t.Fatalf("wait = %+v, %v", first, err)
 	}
-	failed, err := runner.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: "i1"}}, graph.Options[int]{Store: store})
-	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Checkpoint.Revision != first.Checkpoint.Revision+1 || failed.Checkpoint.Steps != first.Checkpoint.Steps || !failed.Checkpoint.Completed || failed.Checkpoint.Failure == nil || failed.Checkpoint.Failure.Node != "wait" {
+	_, failed, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: "i1"}}, store, graph.Options{})
+	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Header.Revision != first.Header.Revision+1 || failed.Header.Steps != first.Header.Steps || !failed.Header.Completed || failed.Header.Failure == nil || failed.Header.Failure.Node != "wait" {
 		t.Fatalf("apply failure = %+v, %v", failed, err)
 	}
-	if _, err := runner.Recover(context.Background(), "apply", nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunFailed) {
+	if _, _, err := runner.Recover(context.Background(), "apply", nil, store, graph.Options{}); !errors.Is(err, graph.ErrRunFailed) {
 		t.Fatalf("recovered continuation failure = %v", err)
 	}
 }
@@ -145,11 +145,11 @@ func TestJoinExecutionFailureIsPersisted(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	failed, err := runner.Start(context.Background(), "join-failure", 0, graph.Options[int]{Store: store, MaxConcurrency: 1})
-	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Checkpoint.Revision != 5 || failed.Checkpoint.Steps != 3 || !failed.Checkpoint.Completed || failed.Checkpoint.Failure == nil || failed.Checkpoint.Failure.Node != "join" {
+	_, failed, err := runner.Start(context.Background(), "join-failure", 0, store, graph.Options{MaxConcurrency: 1})
+	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Header.Revision != 5 || failed.Header.Steps != 3 || !failed.Header.Completed || failed.Header.Failure == nil || failed.Header.Failure.Node != "join" {
 		t.Fatalf("join failure = %+v, %v", failed, err)
 	}
-	if _, err := runner.Recover(context.Background(), "join-failure", nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunFailed) {
+	if _, _, err := runner.Recover(context.Background(), "join-failure", nil, store, graph.Options{}); !errors.Is(err, graph.ErrRunFailed) {
 		t.Fatalf("recovered join failure = %v", err)
 	}
 }
@@ -164,13 +164,13 @@ func TestExecutionPanicKeepsOriginalErrorAndStoredStack(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	failed, err := runner.Start(context.Background(), "panic-failure", 0, graph.Options[int]{Store: store})
+	_, failed, err := runner.Start(context.Background(), "panic-failure", 0, store, graph.Options{})
 	var panicErr *graph.PanicError
-	if !errors.Is(err, boom) || !errors.As(err, &panicErr) || failed.Checkpoint.Failure.PanicStack == "" {
+	if !errors.Is(err, boom) || !errors.As(err, &panicErr) || failed.Header.Failure.PanicStack == "" {
 		t.Fatalf("panic result = %+v, %v", failed, err)
 	}
-	recovered, err := runner.Recover(context.Background(), "panic-failure", nil, graph.Options[int]{Store: store})
-	if !errors.Is(err, graph.ErrRunFailed) || errors.As(err, &panicErr) || recovered.Checkpoint.Failure.PanicStack == "" {
+	_, recovered, err := runner.Recover(context.Background(), "panic-failure", nil, store, graph.Options{})
+	if !errors.Is(err, graph.ErrRunFailed) || errors.As(err, &panicErr) || recovered.Header.Failure.PanicStack == "" {
 		t.Fatalf("recovered panic = %+v, %v", recovered, err)
 	}
 }

@@ -119,23 +119,23 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 			_ = store.Close()
 		}
 	}()
-	first, err := runner.Start(ctx, runID, 7, graph.Options[int]{Store: store, MaxSteps: 1, MaxConcurrency: 4})
-	if err != nil || first.Status != graph.StatusBudget || len(first.Checkpoint.Groups) != 1 {
-		t.Fatalf("initial fan-out = status %s, groups %d, error %v", first.Status, len(first.Checkpoint.Groups), err)
+	firstExecution, first, err := runner.Start(ctx, runID, 7, store, graph.Options{MaxSteps: 1, MaxConcurrency: 4})
+	if err != nil || first.Status != graph.StatusBudget || len(mustCheckpoint(firstExecution).Groups) != 1 {
+		t.Fatalf("initial fan-out = status %s, groups %d, error %v", first.Status, len(mustCheckpoint(firstExecution).Groups), err)
 	}
-	checkpointWithNestedGroup, err := runner.Recover(ctx, runID, nil, graph.Options[int]{Store: store, MaxSteps: 1, MaxConcurrency: 4})
-	if err != nil || checkpointWithNestedGroup.Status != graph.StatusBudget || len(checkpointWithNestedGroup.Checkpoint.Groups) != 2 {
-		t.Fatalf("nested fan-out = status %s, groups %d, error %v", checkpointWithNestedGroup.Status, len(checkpointWithNestedGroup.Checkpoint.Groups), err)
+	checkpointWithNestedGroupExecution, checkpointWithNestedGroup, err := runner.Recover(ctx, runID, nil, store, graph.Options{MaxSteps: 1, MaxConcurrency: 4})
+	if err != nil || checkpointWithNestedGroup.Status != graph.StatusBudget || len(mustCheckpoint(checkpointWithNestedGroupExecution).Groups) != 2 {
+		t.Fatalf("nested fan-out = status %s, groups %d, error %v", checkpointWithNestedGroup.Status, len(mustCheckpoint(checkpointWithNestedGroupExecution).Groups), err)
 	}
 	var nestedParentFound bool
-	for _, invocation := range checkpointWithNestedGroup.Checkpoint.Invocations {
+	for _, invocation := range mustCheckpoint(checkpointWithNestedGroupExecution).Invocations {
 		if invocation.Node == "inner" && invocation.Status == graph.InvocationGroup && invocation.ChildGroupID != "" {
 			nestedParentFound = true
 			break
 		}
 	}
 	if !nestedParentFound {
-		t.Fatalf("checkpoint did not retain nested activation parent: %+v", checkpointWithNestedGroup.Checkpoint.Invocations)
+		t.Fatalf("checkpoint did not retain nested activation parent: %+v", mustCheckpoint(checkpointWithNestedGroupExecution).Invocations)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened, err := store.Load(ctx, runID)
-	if err != nil || reopened.Revision != checkpointWithNestedGroup.Checkpoint.Revision || len(reopened.Groups) != 2 {
+	if err != nil || reopened.Revision != checkpointWithNestedGroup.Header.Revision || len(reopened.Groups) != 2 {
 		t.Fatalf("reopened nested checkpoint = revision %d, groups %d, error %v", reopened.Revision, len(reopened.Groups), err)
 	}
 	var reopenedNestedParent bool
@@ -161,15 +161,15 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 		t.Fatalf("SQLite lost nested activation parent: %+v", reopened.Invocations)
 	}
 	runner = compile()
-	result, err := runner.Recover(ctx, runID, nil, graph.Options[int]{Store: store, MaxConcurrency: 4})
-	if err != nil || result.Status != graph.StatusCompletedWithFailures || result.Checkpoint.Final == nil || *result.Checkpoint.Final != 17 {
-		t.Fatalf("nested group recovery = status %s, final %v, error %v", result.Status, result.Checkpoint.Final, err)
+	resultExecution, result, err := runner.Recover(ctx, runID, nil, store, graph.Options{MaxConcurrency: 4})
+	if err != nil || result.Status != graph.StatusCompletedWithFailures || result.Final == nil || *result.Final != 17 {
+		t.Fatalf("nested group recovery = status %s, final %v, error %v", result.Status, result.Final, err)
 	}
-	if !result.Checkpoint.HadLocalFailures || result.Checkpoint.Failure != nil {
-		t.Fatalf("local failure marker = %+v", result.Checkpoint)
+	if !result.Header.HadLocalFailures || result.Header.Failure != nil {
+		t.Fatalf("local failure marker = %+v", mustCheckpoint(resultExecution))
 	}
-	if !result.Checkpoint.Completed || len(result.Checkpoint.Groups) != 0 || len(result.Checkpoint.Invocations) != 0 {
-		t.Fatalf("completed checkpoint retained execution paths: %+v", result.Checkpoint)
+	if !result.Header.Completed || len(mustCheckpoint(resultExecution).Groups) != 0 || len(mustCheckpoint(resultExecution).Invocations) != 0 {
+		t.Fatalf("completed checkpoint retained execution paths: %+v", mustCheckpoint(resultExecution))
 	}
 	if mergeCallCount.Load() != 1 || len(mergedStates) != 1 || len(mergedStates[0]) != 1 || mergedStates[0][0] != 17 {
 		t.Fatalf("outer join calls=%d states=%v", mergeCallCount.Load(), mergedStates)
@@ -188,11 +188,11 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 		}
 	}
 	stored, err := store.Load(ctx, runID)
-	if err != nil || !stored.Completed || stored.Revision != result.Checkpoint.Revision || stored.Final == nil || *stored.Final != 17 || len(stored.Groups) != 0 || len(stored.Invocations) != 0 || (!stored.HadLocalFailures || stored.Failure != nil) {
+	if err != nil || !stored.Completed || stored.Revision != result.Header.Revision || stored.Final == nil || *stored.Final != 17 || len(stored.Groups) != 0 || len(stored.Invocations) != 0 || (!stored.HadLocalFailures || stored.Failure != nil) {
 		t.Fatalf("stored final checkpoint = %+v, error %v", stored, err)
 	}
-	again, err := runner.Recover(ctx, runID, nil, graph.Options[int]{Store: store, MaxConcurrency: 4})
-	if err != nil || again.Status != graph.StatusCompletedWithFailures || again.Checkpoint.Revision != stored.Revision || failureCallCount.Load() != 1 || mergeCallCount.Load() != 1 {
-		t.Fatalf("completed recovery replayed callbacks: status %s, revision %d, error %v", again.Status, again.Checkpoint.Revision, err)
+	_, again, err := runner.Recover(ctx, runID, nil, store, graph.Options{MaxConcurrency: 4})
+	if err != nil || again.Status != graph.StatusCompletedWithFailures || again.Header.Revision != stored.Revision || failureCallCount.Load() != 1 || mergeCallCount.Load() != 1 {
+		t.Fatalf("completed recovery replayed callbacks: status %s, revision %d, error %v", again.Status, again.Header.Revision, err)
 	}
 }

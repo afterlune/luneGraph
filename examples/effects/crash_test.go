@@ -46,7 +46,7 @@ func TestEffectCrashHelper(t *testing.T) {
 		return value, ctx.Err()
 	})
 	check(t, err)
-	_, err = r.Start(ctx, "crash", state{Delta: 3}, graph.Options[state]{Store: store})
+	_, _, err = r.Start(ctx, "crash", state{Delta: 3}, store, graph.Options{})
 	t.Fatalf("blocked callback returned: %v", err)
 }
 
@@ -115,9 +115,9 @@ func TestRecoveryAfterEffectCommitAndProcessCrash(t *testing.T) {
 		return add(ctx, call, delta)
 	})
 	check(t, err)
-	out, err := r.Recover(context.Background(), "crash", nil, graph.Options[state]{Store: store})
+	_, out, err := r.Recover(context.Background(), "crash", nil, store, graph.Options{})
 	check(t, err)
-	if out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || out.Checkpoint.Final.Value != 3 || len(calls) != 1 || calls[0].RunID != "crash" || calls[0].CallID != callID {
+	if out.Status != graph.StatusCompleted || out.Final == nil || out.Final.Value != 3 || len(calls) != 1 || calls[0].RunID != "crash" || calls[0].CallID != callID {
 		t.Fatalf("recovery=%+v calls=%+v", out, calls)
 	}
 	committed, err := store.Load(context.Background(), "crash")

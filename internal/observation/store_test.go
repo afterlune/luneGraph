@@ -29,6 +29,11 @@ func (m *mockStore) Load(_ context.Context, runID string) (model.Checkpoint[int]
 	return m.loaded, nil
 }
 
+func (m *mockStore) LoadHeader(ctx context.Context, runID string) (model.Header, error) {
+	cp, err := m.Load(ctx, runID)
+	return cp.Header(), err
+}
+
 func (m *mockStore) Commit(_ context.Context, expected uint64, change model.Change[int]) error {
 	cp := change.Checkpoint()
 	m.casRev = expected

@@ -20,7 +20,7 @@ func TestStorePanicRemainsOutsideCallbackBoundary(t *testing.T) {
 				t.Fatalf("store panic = %v", value)
 			}
 		}()
-		_, _ = r.Start(context.Background(), "store-panic", 0, graph.Options[int]{Store: panicStore{}, Observer: log})
+		_, _, _ = r.Start(context.Background(), "store-panic", 0, panicStore{}, graph.Options{Observer: log})
 	}()
 	events := log.snapshot()
 	if len(events) != 2 || events[0].Operation != graph.OperationStart || events[1].Operation != graph.OperationCreate {

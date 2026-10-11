@@ -91,29 +91,29 @@ func BenchmarkCapacityGroups(b *testing.B) {
 		for _, concurrency := range []int{1, 8} {
 			b.Run(fmt.Sprintf("groups=%d/concurrency=%d", count, concurrency), func(b *testing.B) {
 				r := nestedPopulation(b, count)
-				seed, err := r.Start(context.Background(), "groups", initial("groups"), graph.Options[state]{MaxSteps: count + 1, MaxConcurrency: 1})
-				if err != nil || len(seed.Checkpoint.Groups) != count+1 {
-					b.Fatalf("seed: %v groups=%d", err, len(seed.Checkpoint.Groups))
+				seedExecution, _, err := r.Start(context.Background(), "groups", initial("groups"), nil, graph.Options{MaxSteps: count + 1, MaxConcurrency: 1})
+				if err != nil || len(mustCheckpoint(seedExecution).Groups) != count+1 {
+					b.Fatalf("seed: %v groups=%d", err, len(mustCheckpoint(seedExecution).Groups))
 				}
-				original := fmt.Sprintf("%#v", seed.Checkpoint)
-				values := make([]map[string]int, len(seed.Checkpoint.Invocations))
-				for i, inv := range seed.Checkpoint.Invocations {
+				original := fmt.Sprintf("%#v", mustCheckpoint(seedExecution))
+				values := make([]map[string]int, len(mustCheckpoint(seedExecution).Invocations))
+				for i, inv := range mustCheckpoint(seedExecution).Invocations {
 					copied, _ := clone(inv.State)
 					values[i] = copied.Values
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
-					out, err := r.Resume(context.Background(), seed.Checkpoint, nil, graph.Options[state]{MaxSteps: count*8 + 1, MaxConcurrency: concurrency})
-					if err != nil || out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != count*8 || out.Checkpoint.Steps != uint64(2+count*9) {
+					_, out, err := r.Resume(context.Background(), mustCheckpoint(seedExecution), nil, nil, graph.Options{MaxSteps: count*8 + 1, MaxConcurrency: concurrency})
+					if err != nil || out.Final == nil || out.Final.Total != count*8 || out.Header.Steps != uint64(2+count*9) {
 						b.Fatalf("result: %+v %v", out, err)
 					}
 				}
 				b.StopTimer()
-				if original != fmt.Sprintf("%#v", seed.Checkpoint) {
+				if original != fmt.Sprintf("%#v", mustCheckpoint(seedExecution)) {
 					b.Fatal("seed structure mutated")
 				}
-				for i, inv := range seed.Checkpoint.Invocations {
+				for i, inv := range mustCheckpoint(seedExecution).Invocations {
 					if !reflect.DeepEqual(inv.State.Values, values[i]) {
 						b.Fatal("seed state mutated")
 					}

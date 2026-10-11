@@ -57,21 +57,21 @@ func TestRecoverWaitingRunAndCompletedResult(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := &countingLoadStore{Store: newMemoryStore(t)}
-	first, err := runner.Start(ctx, "waiting-recover", 2, graph.Options[int]{Store: store})
+	_, first, err := runner.Start(ctx, "waiting-recover", 2, store, graph.Options{})
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
 	input := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("3")}}
-	completed, err := runner.Recover(ctx, "waiting-recover", input, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Revision != 4 || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 5 || store.loads != 1 || calls != 2 {
+	_, completed, err := runner.Recover(ctx, "waiting-recover", input, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Header.Revision != 4 || completed.Final == nil || *completed.Final != 5 || store.loads != 1 || calls != 2 {
 		t.Fatalf("recovered = %+v, %v; loads=%d calls=%d", completed, err, store.loads, calls)
 	}
-	again, err := runner.Recover(ctx, "waiting-recover", nil, graph.Options[int]{Store: store})
-	if err != nil || again.Status != graph.StatusCompleted || again.Checkpoint.Revision != completed.Checkpoint.Revision || again.Checkpoint.Final == nil || *again.Checkpoint.Final != 5 || calls != 2 || store.loads != 2 {
+	_, again, err := runner.Recover(ctx, "waiting-recover", nil, store, graph.Options{})
+	if err != nil || again.Status != graph.StatusCompleted || again.Header.Revision != completed.Header.Revision || again.Final == nil || *again.Final != 5 || calls != 2 || store.loads != 2 {
 		t.Fatalf("completed reload = %+v, %v; loads=%d calls=%d", again, err, store.loads, calls)
 	}
-	rejected, err := runner.Recover(ctx, "waiting-recover", input, graph.Options[int]{Store: store})
-	if !errors.Is(err, graph.ErrRunCompleted) || rejected.Status != graph.StatusFailed || rejected.Checkpoint.Revision != completed.Checkpoint.Revision || calls != 2 {
+	_, rejected, err := runner.Recover(ctx, "waiting-recover", input, store, graph.Options{})
+	if !errors.Is(err, graph.ErrRunCompleted) || rejected.Status != graph.StatusFailed || rejected.Header.Revision != completed.Header.Revision || calls != 2 {
 		t.Fatalf("input to completed run = %+v, %v; calls=%d", rejected, err, calls)
 	}
 }
@@ -88,12 +88,12 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 	edge(t, g, "loop", "loop")
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	first, err := runner.Start(ctx, "budget-recover", 0, graph.Options[int]{Store: store, MaxSteps: 1})
+	_, first, err := runner.Start(ctx, "budget-recover", 0, store, graph.Options{MaxSteps: 1})
 	if err != nil || first.Status != graph.StatusBudget {
 		t.Fatalf("budgeted = %+v, %v", first, err)
 	}
-	completed, err := runner.Recover(ctx, "budget-recover", nil, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 2 {
+	_, completed, err := runner.Recover(ctx, "budget-recover", nil, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 2 {
 		t.Fatalf("budget recovery = %+v, %v", completed, err)
 	}
 
@@ -114,12 +114,12 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 			node(t, g, "only", tc.node)
 			runner := intRunner(t, g)
 			store := newMemoryStore(t)
-			first, err := runner.Start(ctx, tc.name, 7, graph.Options[int]{Store: store})
+			_, first, err := runner.Start(ctx, tc.name, 7, store, graph.Options{})
 			if err != nil || first.Status != tc.status {
 				t.Fatalf("start = %+v, %v", first, err)
 			}
-			again, err := runner.Recover(ctx, tc.name, nil, graph.Options[int]{Store: store})
-			if err != nil || again.Status != tc.status || again.Checkpoint.Revision != first.Checkpoint.Revision || again.Checkpoint.Final != nil {
+			_, again, err := runner.Recover(ctx, tc.name, nil, store, graph.Options{})
+			if err != nil || again.Status != tc.status || again.Header.Revision != first.Header.Revision || again.Final != nil {
 				t.Fatalf("terminal recovery = %+v, %v", again, err)
 			}
 		})
@@ -134,20 +134,20 @@ func TestRecoverRejectsInvalidStoredRun(t *testing.T) {
 	})
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	if _, err := runner.Start(ctx, "stored", 1, graph.Options[int]{Store: store}); err != nil {
+	if _, _, err := runner.Start(ctx, "stored", 1, store, graph.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Recover(ctx, "stored", nil, graph.Options[int]{}); err == nil {
+	if _, _, err := runner.Recover(ctx, "stored", nil, nil, graph.Options{}); err == nil {
 		t.Fatal("recovery without a store succeeded")
 	}
-	if _, err := runner.Recover(ctx, "missing", nil, graph.Options[int]{Store: store}); !errors.Is(err, checkpoint.ErrNotFound) {
+	if _, _, err := runner.Recover(ctx, "missing", nil, store, graph.Options{}); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("missing run = %v", err)
 	}
 	other, err := g.Compile(graph.Config[int]{MachineID: "other-machine", Clone: func(v int) (int, error) { return v, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := other.Recover(ctx, "stored", nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+	if _, _, err := other.Recover(ctx, "stored", nil, store, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("wrong machine = %v", err)
 	}
 	for _, tc := range []struct {
@@ -165,7 +165,7 @@ func TestRecoverRejectsInvalidStoredRun(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			corrupt := &alteredLoadStore{Store: store, alter: tc.alter}
-			if _, err := runner.Recover(ctx, "stored", nil, graph.Options[int]{Store: corrupt}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+			if _, _, err := runner.Recover(ctx, "stored", nil, corrupt, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 				t.Fatalf("corrupt terminal = %v", err)
 			}
 		})
@@ -192,7 +192,7 @@ func TestConcurrentRecoverReturnsConflict(t *testing.T) {
 	edge(t, g, "seed", "work")
 	runner := intRunner(t, g)
 	store := newMemoryStore(t)
-	if _, err := runner.Start(ctx, "contended", 0, graph.Options[int]{Store: store, MaxSteps: 1}); err != nil {
+	if _, _, err := runner.Start(ctx, "contended", 0, store, graph.Options{MaxSteps: 1}); err != nil {
 		t.Fatal(err)
 	}
 	type outcome struct {
@@ -205,7 +205,7 @@ func TestConcurrentRecoverReturnsConflict(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			result, err := runner.Recover(ctx, "contended", nil, graph.Options[int]{Store: store})
+			_, result, err := runner.Recover(ctx, "contended", nil, store, graph.Options{})
 			results <- outcome{result, err}
 		}()
 	}
@@ -257,12 +257,12 @@ func TestRecoverAfterAmbiguousFinalCommit(t *testing.T) {
 	runner := intRunner(t, g)
 	boom := errors.New("commit acknowledgement lost")
 	store := &ambiguousStore{Store: newMemoryStore(t), report: boom}
-	first, err := runner.Start(ctx, "ambiguous-final", 0, graph.Options[int]{Store: store})
-	if !errors.Is(err, boom) || first.Checkpoint.Revision != 1 {
+	_, first, err := runner.Start(ctx, "ambiguous-final", 0, store, graph.Options{})
+	if !errors.Is(err, boom) || first.Header.Revision != 1 {
 		t.Fatalf("ambiguous commit = %+v, %v", first, err)
 	}
-	completed, err := runner.Recover(ctx, "ambiguous-final", nil, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Revision != 2 || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 1 || calls != 1 {
+	_, completed, err := runner.Recover(ctx, "ambiguous-final", nil, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Header.Revision != 2 || completed.Final == nil || *completed.Final != 1 || calls != 1 {
 		t.Fatalf("recovered final = %+v, %v; calls=%d", completed, err, calls)
 	}
 }

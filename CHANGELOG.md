@@ -4,7 +4,13 @@
 
 - Add executable contract examples and regressions for partial resume input
   reconciliation, nested mutable state cloning and shared Limiter dependencies.
-  Public APIs, checkpoint format 4 and SQLite schema 2 are unchanged.
+- Add live `Execution` handles for repeated in-process advances. Start, Resume,
+  Recover and Fork now return `(execution, result, error)`; Result carries only
+  Status, Header and optional Final, while `Execution.Checkpoint()` materializes
+  the full state on demand and `Pending()` lists continuation identities.
+  `Options` is no longer generic and Store is an explicit method argument.
+  Custom Stores implement `LoadHeader` for warm-handle revision checks. This is
+  a source API change; the checkpoint encoding and SQLite schema are unchanged.
 - Add concurrent recovery effect-receipt coverage, an outer-join conflict case
   keyed by activation identity, and single-run checkpoint scaling benchmarks.
 - Dispatch Merge callbacks independently so other branches can progress while

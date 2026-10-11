@@ -31,8 +31,8 @@ func TestExecutionFailureSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := runner.Start(ctx, "failed", 0, graph.Options[int]{Store: store})
-	if !errors.Is(err, boom) || first.Status != graph.StatusFailed || first.Checkpoint.Revision != 2 {
+	_, first, err := runner.Start(ctx, "failed", 0, store, graph.Options{})
+	if !errors.Is(err, boom) || first.Status != graph.StatusFailed || first.Header.Revision != 2 {
 		t.Fatalf("failed run = %+v, %v", first, err)
 	}
 	if err := store.Close(); err != nil {
@@ -43,8 +43,8 @@ func TestExecutionFailureSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	recovered, err := runner.Recover(ctx, "failed", nil, graph.Options[int]{Store: store})
-	if !errors.Is(err, graph.ErrRunFailed) || recovered.Status != graph.StatusFailed || recovered.Checkpoint.Revision != 2 || recovered.Checkpoint.Failure.Message != boom.Error() || calls != 1 {
+	_, recovered, err := runner.Recover(ctx, "failed", nil, store, graph.Options{})
+	if !errors.Is(err, graph.ErrRunFailed) || recovered.Status != graph.StatusFailed || recovered.Header.Revision != 2 || recovered.Header.Failure.Message != boom.Error() || calls != 1 {
 		t.Fatalf("reopened failure = %+v, %v; calls=%d", recovered, err, calls)
 	}
 }

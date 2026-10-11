@@ -13,19 +13,19 @@ func TestNestedPopulationAcrossRecoveryBudgets(t *testing.T) {
 		for _, concurrency := range []int{1, 8} {
 			t.Run(kind+"/concurrency="+strconv.Itoa(concurrency), func(t *testing.T) {
 				r, store := nestedPopulation(t, 8), openStore(t, kind)
-				out, err := r.Start(context.Background(), "nested", initial("nested"), graph.Options[state]{Store: store, MaxSteps: 9, MaxConcurrency: 1})
-				if err != nil || len(out.Checkpoint.Groups) != 9 {
+				outExecution, out, err := r.Start(context.Background(), "nested", initial("nested"), store, graph.Options{MaxSteps: 9, MaxConcurrency: 1})
+				if err != nil || len(mustCheckpoint(outExecution).Groups) != 9 {
 					t.Fatalf("seed: %+v %v", out, err)
 				}
-				previous := out.Checkpoint.Steps
-				for attempt := 0; attempt < 20 && !out.Checkpoint.Completed; attempt++ {
-					out, err = r.Recover(context.Background(), "nested", nil, graph.Options[state]{Store: store, MaxSteps: 7, MaxConcurrency: concurrency})
-					if err != nil || out.Checkpoint.Steps <= previous || out.Checkpoint.Steps > previous+7 || out.Checkpoint.Revision < out.Checkpoint.Steps+1 {
+				previous := out.Header.Steps
+				for attempt := 0; attempt < 20 && !out.Header.Completed; attempt++ {
+					outExecution, out, err = r.Recover(context.Background(), "nested", nil, store, graph.Options{MaxSteps: 7, MaxConcurrency: concurrency})
+					if err != nil || out.Header.Steps <= previous || out.Header.Steps > previous+7 || out.Header.Revision < out.Header.Steps+1 {
 						t.Fatalf("recovery: %+v %v", out, err)
 					}
-					previous = out.Checkpoint.Steps
+					previous = out.Header.Steps
 				}
-				if out.Checkpoint.Final == nil || out.Checkpoint.Final.Total != 64 || out.Checkpoint.Steps != 74 || len(out.Checkpoint.Groups) != 0 || (out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures) {
+				if out.Final == nil || out.Final.Total != 64 || out.Header.Steps != 74 || len(mustCheckpoint(outExecution).Groups) != 0 || (out.Header.Failure != nil || out.Header.HadLocalFailures) {
 					t.Fatalf("final: %+v", out)
 				}
 			})

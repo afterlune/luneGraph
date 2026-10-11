@@ -57,18 +57,20 @@ func TestCapacityInterruptionSQLiteReopenFreshRunner(t *testing.T) {
 			fresh := interruptionRunner(t, 8, &interruptionController{allow: true})
 			var observed atomic.Bool
 			op := map[string]graph.EventOperation{"node": graph.OperationNode, "join": graph.OperationJoin, "apply": graph.OperationApply}[role]
-			out, err := fresh.Recover(ctx, s.id, interruptionInputs(saved), graph.Options[state]{Store: store, MaxConcurrency: 1, Observer: graph.ObserverFunc(func(_ context.Context, e graph.Event) {
-				if e.Phase == graph.PhaseStarted && e.Operation == op && e.RunID == s.id && e.CallID == wanted {
-					observed.Store(true)
-				}
-			})})
+			outExecution, out, err := fresh.Recover(ctx, s.id, interruptionInputs(saved), store,
+
+				graph.Options{MaxConcurrency: 1, Observer: graph.ObserverFunc(func(_ context.Context, e graph.Event) {
+					if e.Phase == graph.PhaseStarted && e.Operation == op && e.RunID == s.id && e.CallID == wanted {
+						observed.Store(true)
+					}
+				})})
 			if err != nil || out.Status != graph.StatusWaiting || !observed.Load() {
 				t.Fatalf("reopened=%+v wanted=%s observed=%v %v", out, wanted, observed.Load(), err)
 			}
-			if err := checkInterruptionCheckpoint(out.Checkpoint, 8); err != nil {
+			if err := checkInterruptionCheckpoint(mustCheckpoint(outExecution), 8); err != nil {
 				t.Fatal(err)
 			}
-			value, err := rootState(out.Checkpoint)
+			value, err := rootState(mustCheckpoint(outExecution))
 			wantRound := 1
 			if role == "apply" {
 				wantRound = 2

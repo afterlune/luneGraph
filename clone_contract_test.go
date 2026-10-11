@@ -102,25 +102,26 @@ func TestNestedReferenceCloneContractExample(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			seed, err := r.Start(ctx, "references", original, graph.Options[referenceExampleState]{Store: store, MaxSteps: 1})
+			seedExecution, seed, err := r.Start(ctx, "references", original, store, graph.Options{MaxSteps: 1})
 			if err != nil || seed.Status != graph.StatusBudget {
 				t.Fatalf("seed=%+v err=%v", seed, err)
 			}
-			opts := graph.Options[referenceExampleState]{Store: store, MaxConcurrency: concurrency}
-			out, err := r.Resume(ctx, seed.Checkpoint, nil, opts)
-			if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || len(merges) != 1 || out.Checkpoint.Revision != seed.Checkpoint.Revision+2 {
+			opts := graph.Options{MaxConcurrency: concurrency}
+			optsStore := store
+			outExecution, out, err := r.Resume(ctx, mustCheckpoint(seedExecution), nil, optsStore, opts)
+			if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || len(merges) != 1 || out.Header.Revision != seed.Header.Revision+2 {
 				t.Fatalf("interrupted=%+v merges=%v err=%v", out, merges, err)
 			}
 			if original.Values["item"][0] != 10 || original.Data[0] != 20 {
 				t.Fatal("execution mutated its caller's initial state")
 			}
-			for _, inv := range seed.Checkpoint.Invocations {
+			for _, inv := range mustCheckpoint(seedExecution).Invocations {
 				if inv.State.Values["item"][0] != 10 || inv.State.Data[0] != 20 {
 					t.Fatalf("callbacks mutated the immutable source checkpoint: %+v", inv)
 				}
 			}
 			joined := 0
-			for _, inv := range out.Checkpoint.Invocations {
+			for _, inv := range mustCheckpoint(outExecution).Invocations {
 				if inv.Status == graph.InvocationJoined {
 					joined++
 					if inv.State.Values["item"][0] != byte(11+inv.BranchIndex) || inv.State.Data[0] != byte(21+inv.BranchIndex) {
@@ -132,15 +133,15 @@ func TestNestedReferenceCloneContractExample(t *testing.T) {
 				t.Fatalf("joined inputs=%d", joined)
 			}
 			saved, err := store.Load(ctx, "references")
-			if err != nil || !reflect.DeepEqual(saved, out.Checkpoint) {
+			if err != nil || !reflect.DeepEqual(saved, mustCheckpoint(outExecution)) {
 				t.Fatalf("returned position differs from stored position: %v", err)
 			}
-			finished, err := r.Recover(ctx, "references", nil, opts)
-			if err != nil || finished.Status != graph.StatusCompleted || finished.Checkpoint.Final == nil || len(merges) != 2 || merges[0].CallID != merges[1].CallID {
+			_, finished, err := r.Recover(ctx, "references", nil, optsStore, opts)
+			if err != nil || finished.Status != graph.StatusCompleted || finished.Final == nil || len(merges) != 2 || merges[0].CallID != merges[1].CallID {
 				t.Fatalf("finished=%+v merges=%v err=%v", finished, merges, err)
 			}
-			if finished.Checkpoint.Final.Values["item"][0] != 23 || finished.Checkpoint.Final.Data[0] != 43 {
-				t.Fatalf("wrong merged result: %+v", *finished.Checkpoint.Final)
+			if finished.Final.Values["item"][0] != 23 || finished.Final.Data[0] != 43 {
+				t.Fatalf("wrong merged result: %+v", *finished.Final)
 			}
 		})
 	}
@@ -156,8 +157,10 @@ func TestNestedReferenceCloneContractExample(t *testing.T) {
 		r := referenceContractRunner(t, shallow, &merges)
 		// Serial admission makes the intentional contract violation deterministic
 		// without introducing a deliberate data race into the race suite.
-		out, err := r.Start(context.Background(), "shallow", original, graph.Options[referenceExampleState]{MaxConcurrency: 1})
-		if err == nil || out.Checkpoint.Failure == nil || original.Values["item"][0] != 13 || original.Data[0] != 20 {
+		_,
+
+			out, err := r.Start(context.Background(), "shallow", original, nil, graph.Options{MaxConcurrency: 1})
+		if err == nil || out.Header.Failure == nil || original.Values["item"][0] != 13 || original.Data[0] != 20 {
 			t.Fatalf("negative control did not detect shared nested storage: out=%+v original=%+v err=%v", out, original, err)
 		}
 	})

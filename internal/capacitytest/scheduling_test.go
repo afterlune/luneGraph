@@ -60,22 +60,23 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 			}
 			continuation(t, g)
 			r, store := compile(t, g), openStore(t, kind)
-			opts := graph.Options[state]{Store: store, MaxSteps: 1, MaxConcurrency: 1}
-			out, err := r.Start(context.Background(), "rotation", initial("rotation"), opts)
-			if err != nil || out.Status != graph.StatusBudget || len(out.Checkpoint.Invocations) != 17 {
+			opts := graph.Options{MaxSteps: 1, MaxConcurrency: 1}
+			optsStore := store
+			outExecution, out, err := r.Start(context.Background(), "rotation", initial("rotation"), optsStore, opts)
+			if err != nil || out.Status != graph.StatusBudget || len(mustCheckpoint(outExecution).Invocations) != 17 {
 				t.Fatalf("fork: %+v, %v", out, err)
 			}
 			var waitingID string
 			for step := range 17 {
-				out, err = r.Recover(context.Background(), "rotation", nil, opts)
+				outExecution, out, err = r.Recover(context.Background(), "rotation", nil, optsStore, opts)
 				want := step
 				if step == 16 {
 					want = 0
 				}
-				if err != nil || len(visits) != step+1 || visits[step].branch != want || out.Checkpoint.ScheduleCursor != visits[step].id || out.Checkpoint.Steps != uint64(step+2) {
+				if err != nil || len(visits) != step+1 || visits[step].branch != want || out.Header.ScheduleCursor != visits[step].id || out.Header.Steps != uint64(step+2) {
 					t.Fatalf("step %d: %+v visits=%v, %v", step, out, visits, err)
 				}
-				for _, inv := range out.Checkpoint.Invocations {
+				for _, inv := range mustCheckpoint(outExecution).Invocations {
 					if inv.Status == graph.InvocationWaiting {
 						waitingID = inv.ID
 					}
@@ -84,8 +85,8 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 			if out.Status != graph.StatusWaiting || waitingID == "" {
 				t.Fatalf("expected one waiting branch: %+v", out)
 			}
-			out, err = r.Recover(context.Background(), "rotation", []graph.ResumeInput{{InvocationID: waitingID, Payload: []byte("1")}}, opts)
-			if err != nil || out.Status != graph.StatusCompleted || len(visits) != 18 || visits[17].branch != 1 || len(out.Checkpoint.Invocations) != 0 || len(out.Checkpoint.Groups) != 0 {
+			outExecution, out, err = r.Recover(context.Background(), "rotation", []graph.ResumeInput{{InvocationID: waitingID, Payload: []byte("1")}}, optsStore, opts)
+			if err != nil || out.Status != graph.StatusCompleted || len(visits) != 18 || visits[17].branch != 1 || len(mustCheckpoint(outExecution).Invocations) != 0 || len(mustCheckpoint(outExecution).Groups) != 0 {
 				t.Fatalf("continued branch: %+v visits=%v, %v", out, visits, err)
 			}
 		})

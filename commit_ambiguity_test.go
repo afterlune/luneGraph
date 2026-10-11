@@ -39,16 +39,16 @@ func TestStoreErrorAfterCommitRequiresReload(t *testing.T) {
 	underlying := newMemoryStore(t)
 	boom := errors.New("commit acknowledgement lost")
 	store := &ambiguousStore{Store: underlying, report: boom}
-	returned, err := r.Start(context.Background(), "ambiguous", 0, graph.Options[int]{Store: store})
-	if !errors.Is(err, boom) || returned.Checkpoint.Revision != 1 {
+	_, returned, err := r.Start(context.Background(), "ambiguous", 0, store, graph.Options{})
+	if !errors.Is(err, boom) || returned.Header.Revision != 1 {
 		t.Fatalf("returned checkpoint = %+v, %v", returned, err)
 	}
 	loaded, err := store.Load(context.Background(), "ambiguous")
 	if err != nil || loaded.Revision != 2 || loaded.Invocations[0].Node != "done" {
 		t.Fatalf("committed checkpoint = %+v, %v", loaded, err)
 	}
-	completed, err := r.Resume(context.Background(), loaded, nil, graph.Options[int]{Store: store})
-	if err != nil || completed.Status != graph.StatusCompleted || completed.Checkpoint.Final == nil || *completed.Checkpoint.Final != 1 {
+	_, completed, err := r.Resume(context.Background(), loaded, nil, store, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 1 {
 		t.Fatalf("recovered execution = %+v, %v", completed, err)
 	}
 }

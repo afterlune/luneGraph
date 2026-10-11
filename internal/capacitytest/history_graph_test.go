@@ -97,20 +97,20 @@ func checkHistory(cp graph.Checkpoint[state], mode string, round int) error {
 	return nil
 }
 
-func advanceHistory(ctx context.Context, r *graph.Runner[state], cp graph.Checkpoint[state], opts graph.Options[state]) (graph.Result[state], error) {
+func advanceHistory(ctx context.Context, r *graph.Runner[state], cp graph.Checkpoint[state], store graph.Store[state], opts graph.Options) (*graph.Execution[state], graph.Result[state], error) {
 	var inputs []graph.ResumeInput
 	if cp.Invocations[0].Status == graph.InvocationWaiting {
 		inputs = []graph.ResumeInput{{InvocationID: cp.Invocations[0].ID, Payload: []byte("1")}}
 	}
-	if opts.Store == nil {
-		return r.Resume(ctx, cp, inputs, opts)
+	if store == nil {
+		return r.Resume(ctx, cp, inputs, nil, opts)
 	}
-	return r.Recover(ctx, cp.RunID, inputs, opts)
+	return r.Recover(ctx, cp.RunID, inputs, store, opts)
 }
 
-func seedHistory(t testing.TB, r *graph.Runner[state], opts graph.Options[state], mode string, rounds int) graph.Checkpoint[state] {
+func seedHistory(t testing.TB, r *graph.Runner[state], store graph.Store[state], opts graph.Options, mode string, rounds int) graph.Checkpoint[state] {
 	t.Helper()
-	out, err := r.Start(context.Background(), "history", initial("history"), opts)
+	outExecution, out, err := r.Start(context.Background(), "history", initial("history"), store, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,21 +122,21 @@ func seedHistory(t testing.TB, r *graph.Runner[state], opts graph.Options[state]
 		if out.Status != wantStatus {
 			t.Fatalf("round %d status=%s want=%s", round, out.Status, wantStatus)
 		}
-		if err := checkHistory(out.Checkpoint, mode, round); err != nil {
+		if err := checkHistory(mustCheckpoint(outExecution), mode, round); err != nil {
 			t.Fatal(err)
 		}
 		if round < rounds {
-			out, err = advanceHistory(context.Background(), r, out.Checkpoint, opts)
+			outExecution, out, err = advanceHistory(context.Background(), r, mustCheckpoint(outExecution), store, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if opts.Store != nil {
-		saved, err := opts.Store.Load(context.Background(), out.Checkpoint.RunID)
-		if err != nil || !reflect.DeepEqual(saved, out.Checkpoint) {
+	if store != nil {
+		saved, err := store.Load(context.Background(), out.Header.RunID)
+		if err != nil || !reflect.DeepEqual(saved, mustCheckpoint(outExecution)) {
 			t.Fatalf("stored history differs: %v", err)
 		}
 	}
-	return out.Checkpoint
+	return mustCheckpoint(outExecution)
 }

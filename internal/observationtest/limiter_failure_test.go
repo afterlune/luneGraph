@@ -92,13 +92,19 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 						if fault != nil {
 							f.store = &faultStore{Store: store, fault: fault, write: write, revision: joinRevision}
 						}
-						opts := graph.Options[int]{Store: f.store, Limiter: f.limiter, MaxConcurrency: 4, Observer: f.observer}
+						opts := graph.Options{Limiter: f.limiter, MaxConcurrency: 4, Observer: f.observer}
+						optsStore := f.store
+
 						type answer struct {
-							out graph.Result[int]
-							err error
+							execution *graph.Execution[int]
+							out       graph.Result[int]
+							err       error
 						}
 						done := make(chan answer, 1)
-						f.goRun(func() { out, err := f.runner.Recover(f.ctx, "target", nil, opts); done <- answer{out, err} })
+						f.goRun(func() {
+							outExecution, out, err := f.runner.Recover(f.ctx, "target", nil, optsStore, opts)
+							done <- answer{outExecution, out, err}
+						})
 						f.wait(t, f.ctx, f.cloneReached, "outer join clone reached")
 						if limit.TryAcquire(f.limiter) {
 							limit.Release(f.limiter)
@@ -155,14 +161,14 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 								t.Fatalf("join=%+v", e)
 							}
 							if fault != nil {
-								if !errors.Is(first.err, fault) || first.out.Checkpoint.Revision != joinRevision-1 {
+								if !errors.Is(first.err, fault) || first.out.Header.Revision != joinRevision-1 {
 									t.Fatalf("uncertain=%+v %v", first.out, first.err)
 								}
-							} else if first.err != nil || !first.out.Checkpoint.Completed {
+							} else if first.err != nil || !first.out.Header.Completed {
 								t.Fatalf("completion=%+v %v", first.out, first.err)
 							}
 						}
-						if !write && !reflect.DeepEqual(loaded, first.out.Checkpoint) {
+						if !write && !reflect.DeepEqual(loaded, mustCheckpoint(first.execution)) {
 							t.Fatal("stored position differs")
 						}
 						if write && loaded.Revision != joinRevision {
@@ -177,17 +183,17 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 							t.Fatal(err)
 						}
 						if reopen != nil {
-							opts.Store = reopen()
+							optsStore = reopen()
 						}
 						before := len(f.log.snapshot())
 						recoverCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer cancel()
-						last, err := f.runner.Recover(recoverCtx, "target", nil, opts)
+						lastExecution, last, err := f.runner.Recover(recoverCtx, "target", nil, optsStore, opts)
 						steps := uint64(6)
 						if origin == "join" {
 							steps = 8
 						}
-						if err != nil || last.Status != graph.StatusCompletedWithFailures || last.Checkpoint.Steps != steps || last.Checkpoint.Revision != joinRevision+1 || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 17 {
+						if err != nil || last.Status != graph.StatusCompletedWithFailures || last.Header.Steps != steps || last.Header.Revision != joinRevision+1 || last.Final == nil || *last.Final != 17 {
 							t.Fatalf("recovery=%+v %v", last, err)
 						}
 						replay := failureResolutions(f.log.snapshot()[before:])
@@ -206,8 +212,8 @@ func TestLimiterNestedFailGroupProgress(t *testing.T) {
 						if old := seen["outerjoin"].CallID; old != "" && replay["outerjoin"].CallID != "" && old != replay["outerjoin"].CallID {
 							t.Fatal("join replay identity changed")
 						}
-						stored, err := opts.Store.Load(recoverCtx, "target")
-						if err != nil || !reflect.DeepEqual(stored, last.Checkpoint) {
+						stored, err := optsStore.Load(recoverCtx, "target")
+						if err != nil || !reflect.DeepEqual(stored, mustCheckpoint(lastExecution)) {
 							t.Fatal("recovery not durable", err)
 						}
 						acquired := 0

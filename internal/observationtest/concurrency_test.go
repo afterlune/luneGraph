@@ -36,9 +36,9 @@ func TestSharedObserverRunnerAndStore(t *testing.T) {
 	var workers sync.WaitGroup
 	for i := range 16 {
 		workers.Go(func() {
-			result, err := r.Start(context.Background(), fmt.Sprintf("shared-%d", i), i, graph.Options[int]{Store: store, Observer: log, MaxConcurrency: 2})
-			merged, ok := merges.Load(result.Checkpoint.RunID)
-			if err != nil || result.Status != graph.StatusCompleted || !ok || merged != 2*(i+1) || result.Checkpoint.Final != nil || len(result.Checkpoint.Invocations) != 0 {
+			resultExecution, result, err := r.Start(context.Background(), fmt.Sprintf("shared-%d", i), i, store, graph.Options{Observer: log, MaxConcurrency: 2})
+			merged, ok := merges.Load(result.Header.RunID)
+			if err != nil || result.Status != graph.StatusCompleted || !ok || merged != 2*(i+1) || result.Final != nil || len(mustCheckpoint(resultExecution).Invocations) != 0 {
 				t.Errorf("run %d: %+v, %v", i, result, err)
 			}
 		})
@@ -93,12 +93,12 @@ func TestCancellationAndDiscardedCallbackFinish(t *testing.T) {
 			edge(t, g, "fork", "slow")
 			edge(t, g, "fork", "winner")
 			log := &recorder{}
-			result, err := compile(t, g).Start(ctx, "drain", 0, graph.Options[int]{Observer: log, MaxConcurrency: 2})
+			_, result, err := compile(t, g).Start(ctx, "drain", 0, nil, graph.Options{Observer: log, MaxConcurrency: 2})
 			if endExecution {
-				if err != nil || result.Status != graph.StatusCompleted || *result.Checkpoint.Final != 7 {
+				if err != nil || result.Status != graph.StatusCompleted || *result.Final != 7 {
 					t.Fatalf("winner = %+v, %v", result, err)
 				}
-			} else if result.Status != graph.StatusCancelled || err == nil || result.Checkpoint.Completed {
+			} else if result.Status != graph.StatusCancelled || err == nil || result.Header.Completed {
 				t.Fatalf("cancel = %+v, %v", result, err)
 			}
 			events := log.snapshot()
@@ -143,7 +143,7 @@ func TestNodeObserverDeliveryIsConcurrent(t *testing.T) {
 	done := make(chan error, 1)
 	r := compile(t, g)
 	go func() {
-		_, err := r.Start(ctx, "delivery", 0, graph.Options[int]{Observer: observer, MaxConcurrency: 2})
+		_, _, err := r.Start(ctx, "delivery", 0, nil, graph.Options{Observer: observer, MaxConcurrency: 2})
 		done <- err
 	}()
 	for range 2 {

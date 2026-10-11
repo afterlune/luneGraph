@@ -47,15 +47,15 @@ func TestCycleBudgetAndResume(t *testing.T) {
 	})
 	edge(t, g, "loop", "loop")
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "cycle", 0, graph.Options[int]{MaxSteps: 2})
-	if err != nil || first.Status != graph.StatusBudget || first.Checkpoint.Steps != 2 || first.Checkpoint.Invocations[0].State != 2 {
+	firstExecution, first, err := r.Start(context.Background(), "cycle", 0, nil, graph.Options{MaxSteps: 2})
+	if err != nil || first.Status != graph.StatusBudget || first.Header.Steps != 2 || mustCheckpoint(firstExecution).Invocations[0].State != 2 {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
-	last, err := r.Resume(context.Background(), first.Checkpoint, nil, graph.Options[int]{})
-	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 3 {
+	lastExecution, last, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, graph.Options{})
+	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 3 {
 		t.Fatalf("last = %+v, %v", last, err)
 	}
-	if _, err := r.Resume(context.Background(), last.Checkpoint, nil, graph.Options[int]{}); err == nil {
+	if _, _, err := r.Resume(context.Background(), mustCheckpoint(lastExecution), nil, nil, graph.Options{}); err == nil {
 		t.Fatal("completed checkpoint resumed")
 	}
 }
@@ -105,7 +105,7 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 		err    error
 	}, 1)
 	go func() {
-		result, err := r.Start(ctx, "parallel", 0, graph.Options[int]{MaxConcurrency: 2})
+		_, result, err := r.Start(ctx, "parallel", 0, nil, graph.Options{MaxConcurrency: 2})
 		complete <- struct {
 			result graph.Result[int]
 			err    error
@@ -121,7 +121,7 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 	}
 	close(release)
 	out := <-complete
-	if out.err != nil || out.result.Status != graph.StatusCompleted || out.result.Checkpoint.Final == nil || *out.result.Checkpoint.Final != 12 {
+	if out.err != nil || out.result.Status != graph.StatusCompleted || out.result.Final == nil || *out.result.Final != 12 {
 		t.Fatalf("parallel = %+v, %v", out.result, out.err)
 	}
 }
@@ -164,8 +164,8 @@ func TestNestedGroups(t *testing.T) {
 	for _, pair := range [][2]string{{"root", "a"}, {"root", "b"}, {"a", "c"}, {"a", "d"}, {"b", "outer"}, {"c", "inner"}, {"d", "inner"}, {"inner", "after_inner"}, {"after_inner", "outer"}, {"outer", "done"}} {
 		edge(t, g, pair[0], pair[1])
 	}
-	out, err := intRunner(t, g).Start(context.Background(), "nested", 0, graph.Options[int]{MaxConcurrency: 4})
-	if err != nil || out.Status != graph.StatusCompleted || out.Checkpoint.Final == nil || *out.Checkpoint.Final != 13 {
+	_, out, err := intRunner(t, g).Start(context.Background(), "nested", 0, nil, graph.Options{MaxConcurrency: 4})
+	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 13 {
 		t.Fatalf("nested = %+v, %v", out, err)
 	}
 }
@@ -183,17 +183,17 @@ func TestPauseResumeAndPayloadValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := intRunner(t, g)
-	first, err := r.Start(context.Background(), "pause", 4, graph.Options[int]{})
+	firstExecution, first, err := r.Start(context.Background(), "pause", 4, nil, graph.Options{})
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	id := first.Checkpoint.Invocations[0].ID
-	bad, err := r.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: id, Payload: []byte("bad")}}, graph.Options[int]{})
-	if err == nil || bad.Checkpoint.Revision != first.Checkpoint.Revision || bad.Checkpoint.Invocations[0].Status != graph.InvocationWaiting {
+	id := mustCheckpoint(firstExecution).Invocations[0].ID
+	badExecution, bad, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, Payload: []byte("bad")}}, nil, graph.Options{})
+	if err == nil || bad.Header.Revision != first.Header.Revision || mustCheckpoint(badExecution).Invocations[0].Status != graph.InvocationWaiting {
 		t.Fatalf("bad resume = %+v, %v", bad, err)
 	}
-	last, err := r.Resume(context.Background(), first.Checkpoint, []graph.ResumeInput{{InvocationID: id, Payload: []byte("5")}}, graph.Options[int]{})
-	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 9 {
+	_, last, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, Payload: []byte("5")}}, nil, graph.Options{})
+	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 9 {
 		t.Fatalf("resume = %+v, %v", last, err)
 	}
 }
@@ -224,15 +224,15 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		}
 		return intRunner(t, g)
 	}
-	local, err := build(graph.FailInvocation).Start(context.Background(), "local", 0, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || local.Status != graph.StatusCompletedWithFailures || local.Checkpoint.Final == nil || *local.Checkpoint.Final != 5 || (!local.Checkpoint.HadLocalFailures || local.Checkpoint.Failure != nil) {
+	_, local, err := build(graph.FailInvocation).Start(context.Background(), "local", 0, nil, graph.Options{MaxConcurrency: 1})
+	if err != nil || local.Status != graph.StatusCompletedWithFailures || local.Final == nil || *local.Final != 5 || (!local.Header.HadLocalFailures || local.Header.Failure != nil) {
 		t.Fatalf("local = %+v, %v", local, err)
 	}
-	group, err := build(graph.FailGroup).Start(context.Background(), "group", 0, graph.Options[int]{MaxConcurrency: 1})
-	if err != nil || group.Status != graph.StatusCompletedWithFailures || group.Checkpoint.Final != nil || (!group.Checkpoint.HadLocalFailures || group.Checkpoint.Failure != nil) {
+	_, group, err := build(graph.FailGroup).Start(context.Background(), "group", 0, nil, graph.Options{MaxConcurrency: 1})
+	if err != nil || group.Status != graph.StatusCompletedWithFailures || group.Final != nil || (!group.Header.HadLocalFailures || group.Header.Failure != nil) {
 		t.Fatalf("group = %+v, %v", group, err)
 	}
-	execution, err := build(graph.FailExecution).Start(context.Background(), "execution", 0, graph.Options[int]{MaxConcurrency: 1})
+	_, execution, err := build(graph.FailExecution).Start(context.Background(), "execution", 0, nil, graph.Options{MaxConcurrency: 1})
 	if !errors.Is(err, boom) || execution.Status != graph.StatusFailed {
 		t.Fatalf("execution = %+v, %v", execution, err)
 	}
@@ -254,8 +254,8 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	initial := state{Values: map[string]int{"n": 1}}
-	rolled, err := r.Start(context.Background(), "mutable", initial, graph.Options[state]{})
-	if err != nil || !rolled.Checkpoint.Completed || !rolled.Checkpoint.HadLocalFailures || rolled.Checkpoint.Failure != nil || len(rolled.Checkpoint.Invocations) != 0 || initial.Values["n"] != 1 {
+	rolledExecution, rolled, err := r.Start(context.Background(), "mutable", initial, nil, graph.Options{})
+	if err != nil || !rolled.Header.Completed || !rolled.Header.HadLocalFailures || rolled.Header.Failure != nil || len(mustCheckpoint(rolledExecution).Invocations) != 0 || initial.Values["n"] != 1 {
 		t.Fatalf("rollback = %+v, %v", rolled, err)
 	}
 }
@@ -291,6 +291,10 @@ func (m *failingStore) Load(ctx context.Context, id string) (graph.Checkpoint[in
 	return m.inner.Load(ctx, id)
 }
 
+func (m *failingStore) LoadHeader(ctx context.Context, id string) (graph.Header, error) {
+	return m.inner.LoadHeader(ctx, id)
+}
+
 func (m *failingStore) Commit(ctx context.Context, expected uint64, change graph.Change[int]) error {
 	m.mu.Lock()
 	if m.failNext {
@@ -319,15 +323,15 @@ func TestStoreFailureReturnsLastCommittedCheckpoint(t *testing.T) {
 	edge(t, g, "first", "second")
 	r := intRunner(t, g)
 	store := &failingStore{inner: newMemoryStore(t), failNext: true}
-	failed, err := r.Start(context.Background(), "durable", 0, graph.Options[int]{Store: store})
-	if err == nil || failed.Status != graph.StatusFailed || failed.Checkpoint.Revision != 1 || failed.Checkpoint.Steps != 0 || failed.Checkpoint.Invocations[0].Node != "first" {
+	failedExecution, failed, err := r.Start(context.Background(), "durable", 0, store, graph.Options{})
+	if err == nil || failed.Status != graph.StatusFailed || failed.Header.Revision != 1 || failed.Header.Steps != 0 || mustCheckpoint(failedExecution).Invocations[0].Node != "first" {
 		t.Fatalf("failed save = %+v, %v", failed, err)
 	}
-	last, err := r.Resume(context.Background(), failed.Checkpoint, nil, graph.Options[int]{Store: store})
-	if err != nil || last.Status != graph.StatusCompleted || last.Checkpoint.Final == nil || *last.Checkpoint.Final != 2 || called != 2 {
+	_, last, err := r.Resume(context.Background(), mustCheckpoint(failedExecution), nil, store, graph.Options{})
+	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 2 || called != 2 {
 		t.Fatalf("resume = %+v, %v, called=%d", last, err, called)
 	}
-	if _, err := r.Resume(context.Background(), failed.Checkpoint, nil, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
+	if _, _, err := r.Resume(context.Background(), mustCheckpoint(failedExecution), nil, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("stale checkpoint error = %v", err)
 	}
 }
@@ -382,14 +386,14 @@ func TestRegisterJSONContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
-	res, err := runner.Start(context.Background(), "json-run", 10, graph.Options[int]{})
+	resExecution, res, err := runner.Start(context.Background(), "json-run", 10, nil, graph.Options{})
 	if err != nil || res.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", res, err)
 	}
-	res, err = runner.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
-		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`{"delta": 5}`)},
-	}, graph.Options[int]{})
-	if err != nil || res.Status != graph.StatusCompleted || res.Checkpoint.Final == nil || *res.Checkpoint.Final != 15 {
+	res, err = resExecution.Advance(context.Background(), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`{"delta": 5}`)},
+	}, graph.Options{})
+	if err != nil || res.Status != graph.StatusCompleted || res.Final == nil || *res.Final != 15 {
 		t.Fatalf("resume = %+v, %v", res, err)
 	}
 }
@@ -414,30 +418,28 @@ func TestRunnerFork(t *testing.T) {
 	}
 	store := newMemoryStore(t)
 	r := intRunner(t, g)
-	res, err := r.Start(context.Background(), "run-original", 10, graph.Options[int]{Store: store})
+	resExecution, res, err := r.Start(context.Background(), "run-original", 10, store, graph.Options{})
 	if err != nil || res.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", res, err)
 	}
-
 	// Fork off into run-forked
-	forkedRes, err := r.Fork(context.Background(), "run-forked", res.Checkpoint, graph.Options[int]{Store: store})
-	if err != nil || forkedRes.Status != graph.StatusWaiting || forkedRes.Checkpoint.RunID != "run-forked" || forkedRes.Checkpoint.Revision != 1 {
+	forkedResExecution,
+		forkedRes, err := r.Fork(context.Background(), "run-forked", mustCheckpoint(resExecution), store, graph.Options{})
+	if err != nil || forkedRes.Status != graph.StatusWaiting || forkedRes.Header.RunID != "run-forked" || forkedRes.Header.Revision != 1 {
 		t.Fatalf("fork = %+v, %v", forkedRes, err)
 	}
-
 	// Advance original with +100
-	origFinal, err := r.Resume(context.Background(), res.Checkpoint, []graph.ResumeInput{
-		{InvocationID: res.Checkpoint.Invocations[0].ID, Payload: []byte(`100`)},
-	}, graph.Options[int]{Store: store})
-	if err != nil || origFinal.Status != graph.StatusCompleted || *origFinal.Checkpoint.Final != 111 {
+	_, origFinal, err := r.Resume(context.Background(), mustCheckpoint(resExecution), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`100`)},
+	}, store, graph.Options{})
+	if err != nil || origFinal.Status != graph.StatusCompleted || *origFinal.Final != 111 {
 		t.Fatalf("orig final = %+v, %v", origFinal, err)
 	}
-
 	// Advance forked with +500
-	forkFinal, err := r.Resume(context.Background(), forkedRes.Checkpoint, []graph.ResumeInput{
-		{InvocationID: forkedRes.Checkpoint.Invocations[0].ID, Payload: []byte(`500`)},
-	}, graph.Options[int]{Store: store})
-	if err != nil || forkFinal.Status != graph.StatusCompleted || *forkFinal.Checkpoint.Final != 511 {
+	_, forkFinal, err := r.Resume(context.Background(), mustCheckpoint(forkedResExecution), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(forkedResExecution).Invocations[0].ID, Payload: []byte(`500`)},
+	}, store, graph.Options{})
+	if err != nil || forkFinal.Status != graph.StatusCompleted || *forkFinal.Final != 511 {
 		t.Fatalf("fork final = %+v, %v", forkFinal, err)
 	}
 
@@ -452,7 +454,7 @@ func TestRunnerFork(t *testing.T) {
 	}
 
 	// Forking completed run fails with ErrRunCompleted
-	if _, err := r.Fork(context.Background(), "run-fork-completed", origLoaded, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrRunCompleted) {
+	if _, _, err := r.Fork(context.Background(), "run-fork-completed", origLoaded, store, graph.Options{}); !errors.Is(err, graph.ErrRunCompleted) {
 		t.Fatalf("fork completed = %v, want ErrRunCompleted", err)
 	}
 }
@@ -479,27 +481,27 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	}
 
 	// 1. nil runner
-	if _, err := nilRunner.Fork(ctx, "run-1", cp, graph.Options[int]{}); err == nil {
+	if _, _, err := nilRunner.Fork(ctx, "run-1", cp, nil, graph.Options{}); err == nil {
 		t.Fatal("expected error on nil runner")
 	}
 
 	// 2. nil ctx
-	if _, err := r.Fork(nil, "run-1", cp, graph.Options[int]{}); err == nil {
+	if _, _, err := r.Fork(nil, "run-1", cp, nil, graph.Options{}); err == nil {
 		t.Fatal("expected error on nil ctx")
 	}
 
 	// 3. invalid runID
-	if _, err := r.Fork(ctx, "", cp, graph.Options[int]{}); err == nil {
+	if _, _, err := r.Fork(ctx, "", cp, nil, graph.Options{}); err == nil {
 		t.Fatal("expected error on empty runID")
 	}
-	if _, err := r.Fork(ctx, "  spaces  ", cp, graph.Options[int]{}); err == nil {
+	if _, _, err := r.Fork(ctx, "  spaces  ", cp, nil, graph.Options{}); err == nil {
 		t.Fatal("expected error on runID with spaces")
 	}
 
 	// 4. invalid checkpoint (mismatched machine ID)
 	invalidCp := cp
 	invalidCp.MachineID = "wrong-machine"
-	if _, err := r.Fork(ctx, "run-1", invalidCp, graph.Options[int]{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+	if _, _, err := r.Fork(ctx, "run-1", invalidCp, nil, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("expected ErrInvalidCheckpoint, got: %v", err)
 	}
 
@@ -507,14 +509,14 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	if err := store.Create(ctx, cp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Fork(ctx, "run-cp", cp, graph.Options[int]{Store: store}); !errors.Is(err, graph.ErrConflict) {
+	if _, _, err := r.Fork(ctx, "run-cp", cp, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("expected ErrConflict, got: %v", err)
 	}
 
 	// 6. Canceled context
 	cancCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if res, err := r.Fork(cancCtx, "run-canc", cp, graph.Options[int]{}); res.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) {
+	if _, res, err := r.Fork(cancCtx, "run-canc", cp, nil, graph.Options{}); res.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected StatusCancelled and context.Canceled, got: %+v, %v", res, err)
 	}
 
@@ -523,7 +525,7 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	obs := graph.ObserverFunc(func(_ context.Context, e graph.Event) {
 		observedEvents = append(observedEvents, e)
 	})
-	res, err := r.Fork(ctx, "run-obs", cp, graph.Options[int]{Observer: obs})
+	_, res, err := r.Fork(ctx, "run-obs", cp, nil, graph.Options{Observer: obs})
 	if err != nil || res.Status != graph.StatusCompleted {
 		t.Fatalf("fork with observer failed: %+v, %v", res, err)
 	}

@@ -26,7 +26,7 @@ func BenchmarkCapacitySharedLimiter(b *testing.B) {
 					before := p.slots[i].checkpoint.Steps
 					out, err := p.advance(ctx, i)
 					if err == nil {
-						m.record(time.Since(started), false, out.Checkpoint.Steps-before)
+						m.record(time.Since(started), false, out.Header.Steps-before)
 					}
 					return err
 				})

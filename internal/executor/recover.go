@@ -8,16 +8,16 @@ import (
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
-// Recover loads the latest checkpoint for runID from opts.Store and advances it.
-// A terminal run is returned without executing callbacks or writing another
-// revision. A failed terminal returns ErrRunFailed; inputs return ErrRunCompleted.
-func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, opts Options[S]) (result Result[S], retErr error) {
-	var empty Checkpoint[S]
+// Recover loads the latest checkpoint for runID and advances it. It returns a
+// live handle with this call's Result. A terminal run is returned without
+// callbacks or another revision. Failed terminals return ErrRunFailed; inputs
+// return ErrRunCompleted.
+func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, store Store[S], opts Options) (execution *Execution[S], result Result[S], retErr error) {
 	if ctx == nil {
-		return resultWith(empty, StatusFailed), errors.New("context must not be nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
 	}
 	if r == nil {
-		return resultWith(empty, StatusFailed), errors.New("runner is nil")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
 	}
 	obs := observation.New(opts.Observer, r.id, runID)
 	if obs != nil {
@@ -25,45 +25,57 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 		defer func() {
 			if result.Status != "" {
 				obs.DiscardPending(ctx, retErr)
-				span.End(ctx, model.Event{Revision: result.Checkpoint.Revision, Status: result.Status, Err: retErr})
+				span.End(ctx, model.Event{Revision: result.Header.Revision, Status: result.Status, Err: retErr})
 			}
 		}()
-		opts.Store = observation.WrapStore(opts.Store, obs)
 	}
 	if !validName(runID) {
-		return resultWith(empty, StatusFailed), errors.New("run ID must be non-empty and have no surrounding whitespace")
+		return nil, Result[S]{Status: StatusFailed}, errors.New("run ID must be non-empty and have no surrounding whitespace")
 	}
 	var err error
 	if opts, err = normalizeOptions(opts); err != nil {
-		return resultWith(empty, StatusFailed), err
+		return nil, Result[S]{Status: StatusFailed}, err
 	}
-	if opts.Store == nil {
-		return resultWith(empty, StatusFailed), errors.New("store is required for recovery")
+	if store == nil {
+		return nil, Result[S]{Status: StatusFailed}, errors.New("store is required for recovery")
 	}
 	if err = ctx.Err(); err != nil {
-		return resultWith(empty, StatusCancelled), err
+		return nil, Result[S]{Status: StatusCancelled}, err
 	}
-	checkpoint, err := opts.Store.Load(ctx, runID)
+	activeStore := observation.WrapStore(store, obs)
+	checkpoint, err := activeStore.Load(ctx, runID)
 	if err != nil {
-		return resultWith(empty, errorStatus(err)), err
+		return nil, Result[S]{Status: errorStatus(err)}, err
 	}
 	if err = ctx.Err(); err != nil {
-		return resultWith(checkpoint, StatusCancelled), err
+		l := newLive(checkpoint)
+		execution = &Execution[S]{runner: r, live: l, store: store}
+		result, retErr = r.resultFromLiveOrEmpty(l, StatusCancelled, err)
+		return execution, result, retErr
 	}
 	if checkpoint.RunID != runID {
-		return resultWith(checkpoint, StatusFailed), invalidCheckpoint("loaded run ID does not match requested run")
+		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
+		return nil, result, errors.Join(invalidCheckpoint("loaded run ID does not match requested run"), resultErr)
 	}
 	if err = r.validateCheckpoint(checkpoint); err != nil {
-		return resultWith(checkpoint, StatusFailed), err
+		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
+		return nil, result, errors.Join(err, resultErr)
 	}
+	l := newLive(checkpoint)
+	execution = &Execution[S]{runner: r, live: l, store: store}
 	if checkpoint.Completed {
 		if len(inputs) != 0 {
-			return resultWith(checkpoint, StatusFailed), ErrRunCompleted
+			result, retErr = r.resultFromLiveOrEmpty(l, StatusFailed, ErrRunCompleted)
+			return execution, result, retErr
 		}
 		if failure := recoveredFailure(checkpoint); failure != nil {
-			return resultWith(checkpoint, StatusFailed), failure
+			result, retErr = r.resultFromLiveOrEmpty(l, StatusFailed, failure)
+			return execution, result, retErr
 		}
-		return resultWith(checkpoint, statusOf(checkpoint, false)), nil
+		status := statusOf(checkpoint.Header(), 0, false)
+		result, retErr = r.resultFromLiveOrEmpty(l, status, nil)
+		return execution, result, retErr
 	}
-	return r.resumeValidated(ctx, checkpoint, inputs, opts, obs)
+	result, retErr = r.advanceLive(ctx, l, inputs, opts, activeStore, obs)
+	return execution, result, retErr
 }

@@ -36,10 +36,12 @@ type (
 	Merge[S any]      = model.Merge[S]
 	Node[S any]       = model.Node[S]
 	NodeSpec[S any]   = model.NodeSpec[S]
-	Options[S any]    = model.Options[S]
+	Options           = model.Options
 	PanicError        = model.PanicError
+	PendingInvocation = model.PendingInvocation
 	Result[S any]     = model.Result[S]
 	ResumeInput       = model.ResumeInput
+	Execution[S any]  = executor.Execution[S]
 	Runner[S any]     = executor.Runner[S]
 	Status            = model.Status
 	Store[S any]      = model.Store[S]
@@ -161,8 +163,8 @@ func EndExecution[S any](state S) Transition[S] { return model.EndExecution(stat
 func Return[S any](state S) Transition[S] { return model.Return(state) }
 
 // Interrupt asks a node, join, or continuation handler to end the current call
-// without committing its result or applying its failure policy. The runner
-// returns StatusInterrupted and the last committed checkpoint. Recover or Resume
-// may replay pending callbacks with their original CallID. The cause is preserved
-// for errors.Is and errors.As; a nil cause returns ErrInterrupted.
+// without committing its result or applying its failure policy. The returned
+// Result reports StatusInterrupted and its last committed Header. Recover or
+// Resume may replay pending callbacks with their original CallID. The cause is
+// preserved for errors.Is and errors.As; a nil cause returns ErrInterrupted.
 func Interrupt(cause error) error { return model.Interrupt(cause) }

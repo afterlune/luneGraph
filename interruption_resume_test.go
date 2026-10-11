@@ -44,14 +44,15 @@ func TestContinuationInterruptionPreservesCommittedPrefix(t *testing.T) {
 			r := intRunner(t, g)
 			store := &interruptionStore{Store: newMemoryStore(t)}
 			override := graph.FailExecution
-			opts := graph.Options[int]{Store: store, MaxConcurrency: 1, FailureOverride: &override}
-			first, err := r.Start(context.Background(), "inputs", 0, opts)
+			opts := graph.Options{MaxConcurrency: 1, FailureOverride: &override}
+			optsStore := store
+			firstExecution, first, err := r.Start(context.Background(), "inputs", 0, optsStore, opts)
 			if err != nil || first.Status != graph.StatusWaiting {
 				t.Fatalf("first=%+v %v", first, err)
 			}
 			var inputs []graph.ResumeInput
 			var pendingID string
-			for _, inv := range first.Checkpoint.Invocations {
+			for _, inv := range mustCheckpoint(firstExecution).Invocations {
 				if inv.Status == graph.InvocationWaiting {
 					inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
 					if inv.Node == "b" {
@@ -60,12 +61,12 @@ func TestContinuationInterruptionPreservesCommittedPrefix(t *testing.T) {
 				}
 			}
 			beforeCommits := store.commits
-			out, err := r.Resume(context.Background(), first.Checkpoint, inputs, opts)
-			if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || out.Checkpoint.Revision != first.Checkpoint.Revision+1 || out.Checkpoint.Steps != first.Checkpoint.Steps || store.commits != beforeCommits+1 || len(calls) != 2 {
+			outExecution, out, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), inputs, optsStore, opts)
+			if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || out.Header.Revision != first.Header.Revision+1 || out.Header.Steps != first.Header.Steps || store.commits != beforeCommits+1 || len(calls) != 2 {
 				t.Fatalf("out=%+v calls=%+v %v", out, calls, err)
 			}
 			var remaining []graph.ResumeInput
-			for _, inv := range out.Checkpoint.Invocations {
+			for _, inv := range mustCheckpoint(outExecution).Invocations {
 				if inv.Status == graph.InvocationWaiting {
 					remaining = append(remaining, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
 					if inv.Node == "b" && (inv.CallID != pendingID || inv.State != 0) {
@@ -73,14 +74,14 @@ func TestContinuationInterruptionPreservesCommittedPrefix(t *testing.T) {
 					}
 				}
 			}
-			if len(remaining) != 2 || out.Checkpoint.HadLocalFailures || out.Checkpoint.Failure != nil {
+			if len(remaining) != 2 || out.Header.HadLocalFailures || out.Header.Failure != nil {
 				t.Fatalf("pending=%+v", out)
 			}
-			waiting, err := r.Recover(context.Background(), "inputs", nil, opts)
+			_, waiting, err := r.Recover(context.Background(), "inputs", nil, optsStore, opts)
 			if err != nil || waiting.Status != graph.StatusWaiting || len(calls) != 2 {
 				t.Fatalf("input unexpectedly replayed: %+v %v", waiting, err)
 			}
-			done, err := r.Recover(context.Background(), "inputs", remaining, opts)
+			_, done, err := r.Recover(context.Background(), "inputs", remaining, optsStore, opts)
 			if err != nil || done.Status != graph.StatusCompleted || len(calls) != 4 || calls[1].CallID != calls[2].CallID {
 				t.Fatalf("done=%+v calls=%+v %v", done, calls, err)
 			}
@@ -164,25 +165,26 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 					r := intRunner(t, g)
 					store := &interruptionStore{Store: newMemoryStore(t)}
 					override := graph.FailExecution
-					opts := graph.Options[int]{Store: store, MaxConcurrency: 1, FailureOverride: &override}
-					out, err := r.Start(context.Background(), "joins", 0, opts)
+					opts := graph.Options{MaxConcurrency: 1, FailureOverride: &override}
+					optsStore := store
+					outExecution, out, err := r.Start(context.Background(), "joins", 0, optsStore, opts)
 					if fromInput {
 						if err != nil || out.Status != graph.StatusWaiting {
 							t.Fatalf("start=%+v %v", out, err)
 						}
 						var inputs []graph.ResumeInput
-						for _, inv := range out.Checkpoint.Invocations {
+						for _, inv := range mustCheckpoint(outExecution).Invocations {
 							if inv.Status == graph.InvocationWaiting {
 								inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
 							}
 						}
-						out, err = r.Resume(context.Background(), out.Checkpoint, inputs, opts)
+						out, err = outExecution.Advance(context.Background(), inputs, opts)
 					}
-					if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || out.Checkpoint.Completed || out.Checkpoint.Failure != nil || out.Checkpoint.HadLocalFailures || len(outerCalls) != 1 {
+					if !errors.Is(err, graph.ErrInterrupted) || out.Status != graph.StatusInterrupted || out.Header.Completed || out.Header.Failure != nil || out.Header.HadLocalFailures || len(outerCalls) != 1 {
 						t.Fatalf("out=%+v %v", out, err)
 					}
 					saved, err := store.Load(context.Background(), "joins")
-					if err != nil || !reflect.DeepEqual(out.Checkpoint, saved) {
+					if err != nil || !reflect.DeepEqual(mustCheckpoint(outExecution), saved) {
 						t.Fatalf("saved=%+v %v", saved, err)
 					}
 					var remaining []graph.ResumeInput
@@ -192,12 +194,12 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 						}
 					}
 					lastTrigger := triggerCalls[len(triggerCalls)-1]
-					done, err := r.Recover(context.Background(), "joins", remaining, opts)
+					_, done, err := r.Recover(context.Background(), "joins", remaining, optsStore, opts)
 					want := 3
 					if nested {
 						want = 5
 					}
-					if err != nil || done.Status != graph.StatusCompleted || *done.Checkpoint.Final != want || len(outerCalls) != 2 || outerCalls[0] != outerCalls[1] || lastTrigger != triggerCalls[len(triggerCalls)-1] {
+					if err != nil || done.Status != graph.StatusCompleted || *done.Final != want || len(outerCalls) != 2 || outerCalls[0] != outerCalls[1] || lastTrigger != triggerCalls[len(triggerCalls)-1] {
 						t.Fatalf("done=%+v triggers=%+v outer=%+v %v", done, triggerCalls, outerCalls, err)
 					}
 					if nested && len(innerCalls) != 1 {

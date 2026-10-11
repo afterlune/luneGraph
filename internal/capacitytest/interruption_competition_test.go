@@ -62,7 +62,7 @@ func TestCapacityInterruptionRecoveryCompetition(t *testing.T) {
 					t.Fatal(err)
 				}
 				r, store := compile(t, g), openStore(t, kind)
-				seed, err := r.Start(ctx, "competition", initial("competition"), graph.Options[state]{Store: store})
+				seedExecution, seed, err := r.Start(ctx, "competition", initial("competition"), store, graph.Options{})
 				if !errors.Is(err, graph.ErrInterrupted) {
 					t.Fatal(err)
 				}
@@ -73,7 +73,7 @@ func TestCapacityInterruptionRecoveryCompetition(t *testing.T) {
 					finished[i] = make(chan competitionResult, 1)
 					callCtx := context.WithValue(ctx, competitionContextKey{}, i+1)
 					go func() {
-						out, err := r.Recover(callCtx, "competition", nil, graph.Options[state]{Store: store})
+						_, out, err := r.Recover(callCtx, "competition", nil, store, graph.Options{})
 						finished[i] <- competitionResult{out, err}
 					}()
 				}
@@ -86,7 +86,7 @@ func TestCapacityInterruptionRecoveryCompetition(t *testing.T) {
 						t.Fatal("callbacks did not overlap")
 					}
 				}
-				if calls[0].CallID != calls[1].CallID || calls[0].CallID != seed.Checkpoint.Invocations[0].CallID {
+				if calls[0].CallID != calls[1].CallID || calls[0].CallID != mustCheckpoint(seedExecution).Invocations[0].CallID {
 					t.Fatalf("identity changed: %+v", calls)
 				}
 				// Order mixed outcomes so the interrupted call returns an older revision.
@@ -114,7 +114,7 @@ func TestCapacityInterruptionRecoveryCompetition(t *testing.T) {
 							t.Fatalf("result=%+v", result)
 						}
 					}
-					if saved.Revision != seed.Checkpoint.Revision || saved.Completed {
+					if saved.Revision != seed.Header.Revision || saved.Completed {
 						t.Fatalf("interruptions wrote checkpoint: %+v", saved)
 					}
 				case "both-commit":
@@ -132,14 +132,14 @@ func TestCapacityInterruptionRecoveryCompetition(t *testing.T) {
 					}
 				default:
 					first := results[0]
-					if first.out.Status != graph.StatusInterrupted || !errors.Is(first.err, graph.ErrInterrupted) || first.out.Checkpoint.Revision != 1 || saved.Revision != 2 || !saved.Completed {
+					if first.out.Status != graph.StatusInterrupted || !errors.Is(first.err, graph.ErrInterrupted) || first.out.Header.Revision != 1 || saved.Revision != 2 || !saved.Completed {
 						t.Fatalf("stale interruption=%+v saved=%+v", first, saved)
 					}
-					_, err = r.Resume(ctx, first.out.Checkpoint, nil, graph.Options[state]{Store: store})
+					_, _, err := r.Resume(ctx, mustCheckpoint(seedExecution), nil, store, graph.Options{})
 					if !errors.Is(err, graph.ErrConflict) {
 						t.Fatalf("stale Resume=%v", err)
 					}
-					terminal, recoverErr := r.Recover(ctx, "competition", nil, graph.Options[state]{Store: store})
+					_, terminal, recoverErr := r.Recover(ctx, "competition", nil, store, graph.Options{})
 					if mode == "fail-before-interrupt" {
 						if !errors.Is(results[1].err, boom) || !errors.Is(recoverErr, graph.ErrRunFailed) || terminal.Status != graph.StatusFailed {
 							t.Fatalf("terminal=%+v %v", terminal, recoverErr)
@@ -186,7 +186,7 @@ func TestCapacityInterruptionWaitsForUncooperativeCallback(t *testing.T) {
 	done := make(chan competitionResult, 1)
 	r := compile(t, g)
 	go func() {
-		out, err := r.Start(ctx, "drain", initial("drain"), graph.Options[state]{MaxConcurrency: 2})
+		_, out, err := r.Start(ctx, "drain", initial("drain"), nil, graph.Options{MaxConcurrency: 2})
 		done <- competitionResult{out, err}
 	}()
 	select {
@@ -202,7 +202,7 @@ func TestCapacityInterruptionWaitsForUncooperativeCallback(t *testing.T) {
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case result := <-done:
-		if result.out.Status != graph.StatusInterrupted || !errors.Is(result.err, graph.ErrInterrupted) || active.Load() != 0 || result.out.Checkpoint.Revision != 2 {
+		if result.out.Status != graph.StatusInterrupted || !errors.Is(result.err, graph.ErrInterrupted) || active.Load() != 0 || result.out.Header.Revision != 2 {
 			t.Fatalf("drain=%+v active=%d", result, active.Load())
 		}
 	case <-ctx.Done():

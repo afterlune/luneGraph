@@ -77,7 +77,7 @@ func TestLimiterProcessesReturnedResultsWhileBudgetExhausted(t *testing.T) {
 		edge(t, g, "fork", name)
 	}
 	r, memory := compile(t, g), memoryStore(t)
-	seed, err := r.Start(ctx, "progress", 0, graph.Options[int]{Store: memory, MaxSteps: 1})
+	seedExecution, _, err := r.Start(ctx, "progress", 0, memory, graph.Options{MaxSteps: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestLimiterProcessesReturnedResultsWhileBudgetExhausted(t *testing.T) {
 	}
 	done := make(chan answer, 1)
 	go func() {
-		out, err := r.Resume(ctx, seed.Checkpoint, nil, graph.Options[int]{Store: store, Limiter: l, MaxConcurrency: 4, Observer: log})
+		_, out, err := r.Resume(ctx, mustCheckpoint(seedExecution), nil, store, graph.Options{Limiter: l, MaxConcurrency: 4, Observer: log})
 		done <- answer{out, err}
 	}()
 	select {
@@ -128,7 +128,7 @@ func TestLimiterProcessesReturnedResultsWhileBudgetExhausted(t *testing.T) {
 		t.Fatalf("queued callback result blocked behind capacity: %v", got.err)
 	}
 	got := <-done
-	if got.err != nil || !got.result.Checkpoint.Completed || got.result.Checkpoint.Steps != 5 {
+	if got.err != nil || !got.result.Header.Completed || got.result.Header.Steps != 5 {
 		t.Fatalf("progress=%+v %v", got.result, got.err)
 	}
 	checkCall(t, log.snapshot(), graph.OperationResume, got.result, got.err)
