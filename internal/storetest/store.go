@@ -28,6 +28,7 @@ func CloneState(value State) (State, error) {
 func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 	t.Helper()
 	deletion(t, open)
+	ordering(t, open)
 	t.Run("copies", func(t *testing.T) {
 		store := open(t)
 		ctx := context.Background()
@@ -158,6 +159,69 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 			t.Fatalf("delete already deleted = %v, want %v", err, checkpoint.ErrNotFound)
 		}
 	})
+}
+
+func ordering(t *testing.T, open func(*testing.T) graph.Store[State]) {
+	t.Helper()
+	t.Run("canonical load order", func(t *testing.T) {
+		store := open(t)
+		ctx := context.Background()
+		initial := fixture()
+		initial.Invocations = []graph.Invocation[State]{
+			{ID: "i2", State: State{Values: map[string]int{"n": 2}}},
+			{ID: "i10", State: State{Values: map[string]int{"n": 10}}},
+			{ID: "i1", State: State{Values: map[string]int{"n": 1}}},
+		}
+		initial.Groups = []graph.ActivationGroup{
+			{ID: "g2", Children: []string{"i1"}},
+			{ID: "g10", Children: []string{"i2"}},
+			{ID: "g1", Children: []string{"i2", "i10"}},
+		}
+		if err := store.Create(ctx, initial); err != nil {
+			t.Fatal(err)
+		}
+		assertLoadOrder(t, store, []string{"i1", "i10", "i2"}, []string{"g1", "g10", "g2"})
+
+		next, err := store.Load(ctx, "run")
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.Revision = 2
+		next.Invocations = append(next.Invocations, graph.Invocation[State]{
+			ID: "i0", State: State{Values: map[string]int{"n": 0}},
+		})
+		next.Groups = append(next.Groups, graph.ActivationGroup{ID: "g0", Children: []string{"i10", "i2"}})
+		if err := store.Commit(ctx, 1, next.Change()); err != nil {
+			t.Fatal(err)
+		}
+		assertLoadOrder(t, store, []string{"i0", "i1", "i10", "i2"}, []string{"g0", "g1", "g10", "g2"})
+	})
+}
+
+func assertLoadOrder(t *testing.T, store graph.Store[State], invocations, groups []string) {
+	t.Helper()
+	loaded, err := store.Load(context.Background(), "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Invocations) != len(invocations) || len(loaded.Groups) != len(groups) {
+		t.Fatalf("loaded record counts = %d invocations, %d groups", len(loaded.Invocations), len(loaded.Groups))
+	}
+	for i, id := range invocations {
+		if loaded.Invocations[i].ID != id {
+			t.Fatalf("invocation order = %+v, want IDs %v", loaded.Invocations, invocations)
+		}
+	}
+	for i, id := range groups {
+		if loaded.Groups[i].ID != id {
+			t.Fatalf("group order = %+v, want IDs %v", loaded.Groups, groups)
+		}
+	}
+	for _, group := range loaded.Groups {
+		if group.ID == "g1" && (len(group.Children) != 2 || group.Children[0] != "i2" || group.Children[1] != "i10") {
+			t.Fatalf("group child target order changed: %+v", group)
+		}
+	}
 }
 
 func fixture() graph.Checkpoint[State] {

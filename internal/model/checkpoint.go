@@ -103,6 +103,8 @@ type ResumeInput struct {
 // ErrInvalidCheckpoint. Other Store errors can leave commit outcomes unknown;
 // callers must Load before retrying. Writes own copies; Load returns an independent
 // complete checkpoint and reports missing runs with checkpoint.ErrNotFound.
+// Load sorts Invocations and Groups by ascending lexicographic ID. It preserves
+// ActivationGroup.Children order because that slice records fan-out target order.
 type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)

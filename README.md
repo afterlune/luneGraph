@@ -124,7 +124,9 @@ checkpoint/memory and requires an independent-copy Clone.
 Store.Commit(expectedRevision, Change[S]) atomically applies changed records.
 Custom Stores implement Create, Load, Commit, Delete and DeleteMany. ErrConflict
 guarantees no write; other Store errors can leave the outcome uncertain. Reload
-before replay. CAS does not grant exclusive execution ownership.
+before replay. Load returns Invocations and Groups sorted by ascending
+lexicographic ID; ActivationGroup.Children preserves fan-out target order. CAS
+does not grant exclusive execution ownership.
 
 ## Outcomes and effects
 
