@@ -1,7 +1,6 @@
 package capacitytest
 
 import (
-	"fmt"
 	"runtime"
 	"sort"
 	"sync"
@@ -85,17 +84,6 @@ func (m *measurement) snapshot(phase string, elapsed time.Duration, current reso
 	return r
 }
 
-func soakDuration(raw string) (time.Duration, error) {
-	if raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("LUNEGRAPH_SOAK_DURATION must be a positive Go duration, got %q", raw)
-	}
-	return d, nil
-}
-
 func TestMeasurementCountsWorkloadSteps(t *testing.T) {
 	var m measurement
 	m.record(time.Millisecond, false, 10)
@@ -120,15 +108,5 @@ func TestBoundedMeasurements(t *testing.T) {
 	r = m.snapshot("check", 2*time.Second, resourceSample{50, 3})
 	if r.SampledPeak.HeapBytes != 100 || r.SampledPeak.Goroutines != 7 || r.CallsPerSecond != 1024 {
 		t.Fatalf("measurement = %+v", r)
-	}
-	for _, raw := range []string{"bad", "0s", "-1s"} {
-		if _, err := soakDuration(raw); err == nil {
-			t.Fatalf("accepted %q", raw)
-		}
-	}
-	for _, raw := range []string{"", "60s"} {
-		if _, err := soakDuration(raw); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

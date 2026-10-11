@@ -22,5 +22,5 @@
 - Builder.ExportMermaid returns (string, error), uses unique deterministic IDs,
   escapes labels and rejects recursive mounts. Runner.ExportMermaid remains string.
 
-See [core change validation](docs/core-changes.md) for verification and paired
-benchmark results. There is no automatic data migration or compatibility runner.
+See [the performance guide](docs/performance.md) for benchmark methodology and
+measured trade-offs. There is no automatic data migration or compatibility runner.

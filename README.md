@@ -193,9 +193,9 @@ go run ./internal/coveragecheck -profile coverage.out
 
 Race needs CGO and a C compiler. Prefer a temporary coverage path. CI covers
 Windows/Linux and enforces at least 85% statement coverage per production
-package. [Performance methodology](docs/performance.md),
-[capacity history](docs/capacity.md) and [core change validation](docs/core-changes.md)
-distinguish measured results from unverified production capacity.
+package. [Performance and graph-level benchmark guide](docs/performance.md) records
+reproducible measurements and known trade-offs; it does not claim application-level
+production capacity.
 
 ## Format-4 migration
 
