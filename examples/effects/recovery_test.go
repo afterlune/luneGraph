@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	graph "github.com/afterlune/luneGraph"
 )
@@ -104,6 +106,146 @@ func TestCallbackRecoveryWithEffectReceipts(t *testing.T) {
 				check(t, err)
 				if len(calls) != wantCalls {
 					t.Fatal("completed recovery executed callback")
+				}
+			})
+		}
+	}
+}
+
+func TestConcurrentRecoverEffectReceipts(t *testing.T) {
+	for _, kind := range []string{"node", "continuation", "join"} {
+		for _, protected := range []bool{true, false} {
+			label := "unprotected"
+			if protected {
+				label = "receipt"
+			}
+			t.Run(kind+"/"+label, func(t *testing.T) {
+				store, l, path := openFixture(t)
+				var seeding atomic.Bool
+				seeding.Store(true)
+				entered := make(chan graph.CallInfo, 2)
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				releaseCallbacks := func() { releaseOnce.Do(func() { close(release) }) }
+				var rawEffects atomic.Int64
+				var callsMu sync.Mutex
+				var calls []graph.CallInfo
+				apply := func(ctx context.Context, call graph.CallInfo, delta int64) (int64, error) {
+					if seeding.Load() {
+						return 0, graph.Interrupt(nil)
+					}
+					callsMu.Lock()
+					calls = append(calls, call)
+					callsMu.Unlock()
+					entered <- call
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return 0, ctx.Err()
+					}
+					if protected {
+						return effect(l)(ctx, call, delta)
+					}
+					return rawEffects.Add(delta), nil
+				}
+				runner := callbackRunner(t, kind, apply)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				opts := graph.Options[state]{Store: store, MaxConcurrency: 1}
+				seedOptions := opts
+				if kind == "join" {
+					seedOptions.MaxSteps = 10
+				}
+				seed, seedErr := runner.Start(ctx, "concurrent-replay", state{Delta: 3}, seedOptions)
+				switch kind {
+				case "continuation":
+					if seedErr != nil || seed.Status != graph.StatusWaiting {
+						t.Fatalf("seed=%+v err=%v", seed, seedErr)
+					}
+				case "node":
+					if !errors.Is(seedErr, graph.ErrInterrupted) || seed.Status != graph.StatusInterrupted {
+						t.Fatalf("seed=%+v err=%v", seed, seedErr)
+					}
+				case "join":
+					if !errors.Is(seedErr, graph.ErrInterrupted) || seed.Status != graph.StatusInterrupted || len(seed.Checkpoint.Groups) != 1 {
+						t.Fatalf("seed=%+v err=%v", seed, seedErr)
+					}
+				}
+				seeding.Store(false)
+
+				type outcome struct {
+					result graph.Result[state]
+					err    error
+				}
+				results := make(chan outcome, 2)
+				var workers sync.WaitGroup
+				t.Cleanup(func() {
+					cancel()
+					releaseCallbacks()
+					workers.Wait()
+				})
+				for range 2 {
+					workers.Add(1)
+					go func() {
+						defer workers.Done()
+						var inputs []graph.ResumeInput
+						if kind == "continuation" {
+							inputs = inputsFor(seed.Checkpoint)
+						}
+						result, err := runner.Recover(ctx, "concurrent-replay", inputs, opts)
+						results <- outcome{result, err}
+					}()
+				}
+
+				var first graph.CallInfo
+				for range 2 {
+					select {
+					case call := <-entered:
+						if call.RunID != "concurrent-replay" || call.CallID == "" || (first.CallID != "" && (call.CallID != first.CallID || call.Node != first.Node)) {
+							t.Fatalf("recoveries did not enter the same logical callback: first=%+v next=%+v", first, call)
+						}
+						first = call
+					case <-ctx.Done():
+						t.Fatalf("both callbacks did not reach the barrier: %v", ctx.Err())
+					}
+				}
+				releaseCallbacks()
+
+				var succeeded, conflicted int
+				for range 2 {
+					select {
+					case got := <-results:
+						if got.err == nil && got.result.Status == graph.StatusCompleted && got.result.Checkpoint.Final != nil {
+							succeeded++
+						} else if errors.Is(got.err, graph.ErrConflict) {
+							conflicted++
+						} else {
+							t.Fatalf("unexpected recovery=%+v err=%v", got.result, got.err)
+						}
+					case <-ctx.Done():
+						t.Fatalf("recoveries did not settle: %v", ctx.Err())
+					}
+				}
+				if succeeded != 1 || conflicted != 1 {
+					t.Fatalf("recoveries: succeeded=%d conflicted=%d", succeeded, conflicted)
+				}
+				callsMu.Lock()
+				observed := append([]graph.CallInfo(nil), calls...)
+				callsMu.Unlock()
+				if len(observed) != 2 || observed[0].CallID != observed[1].CallID || observed[0].RunID != observed[1].RunID {
+					t.Fatalf("callback attempts did not reuse one id: %+v", observed)
+				}
+				stored, err := store.Load(ctx, "concurrent-replay")
+				if err != nil || !stored.Completed || stored.Final == nil {
+					t.Fatalf("authoritative position=%+v err=%v", stored, err)
+				}
+				if protected {
+					if stored.Final.Value != 3 {
+						t.Fatalf("stored receipt result=%+v", *stored.Final)
+					}
+					assertEffects(t, path, 3, 1)
+				} else if rawEffects.Load() != 6 {
+					t.Fatalf("unprotected effect count=%d want 6", rawEffects.Load())
 				}
 			})
 		}

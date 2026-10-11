@@ -34,6 +34,46 @@ The graph-scale benchmarks use fixed public-API workloads and verify results;
 they are diagnostics, not application capacity certifications. SQLite uses WAL
 and `synchronous=FULL`, so filesystem flush behavior can dominate durable cases.
 
+## Single-run checkpoint scaling (format 4)
+
+`BenchmarkSingleRunCheckpoint` seeds one valid execution outside the timer. It
+contains the stated number of waiting invocations, one activation group, one
+ready loop node, and the same 16-entry application state for every invocation.
+Each measured `load` reads the full checkpoint. Each `recover` advances exactly
+one node and accepts one Commit while preserving all waiting branches. Benchmark
+setup executes the graph through the public Runner, then creates a new run at
+revision 1; it does not hand-assemble checkpoint topology.
+
+Measurements below are medians of three samples at `-benchtime=300ms`,
+`GOMAXPROCS=1`, on Windows/amd64, Go 1.27.0, AMD Ryzen 7 8845H (8 cores, 16
+logical processors). Values are `ns/op / B/op / allocs/op`:
+
+| Waiting invocations | Memory Load | Memory Recover | SQLite Load | SQLite Recover |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 46,002 / 65,680 / 179 | 66,858 / 119,164 / 444 | 350,882 / 125,352 / 1,093 | 1,221,670 / 181,481 / 1,456 |
+| 256 | 518,644 / 410,320 / 1,301 | 889,601 / 689,573 / 3,305 | 2,115,019 / 835,076 / 8,033 | 3,704,307 / 1,117,266 / 10,135 |
+| 2,048 | 4,859,302 / 3,893,200 / 10,266 | 9,422,367 / 6,727,993 / 26,640 | 16,961,225 / 7,337,663 / 64,063 | 22,667,900 / 10,176,181 / 80,543 |
+
+The run used this reproducible command; `-cpu '1,8'` produced both CPU-count
+variants, and the table reports CPU 1:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/capacitytest
+```
+
+A separate CPU 1 profile of SQLite Recover at 2,048 waiters showed cumulative
+CPU samples concentrated in `sqlite.Store.Load` (68.6% of total samples) and
+`encoding/json.Unmarshal` (50.6%; cumulative profile entries overlap). The
+allocation profile attributed 70.2% cumulatively to `sqlite.Store.Load`, with
+JSON decoding and map construction prominent below it. These profiles include
+checkpoint materialization and state decoding; they do not measure time blocked
+waiting for a filesystem flush. They do not by themselves justify changing the
+SQLite Commit contract or predict a production SLO.
+
+The workload serializes its single ready node and keeps payload size fixed.
+It isolates record-count costs; it is not a multi-run throughput or production
+capacity test. There is no cross-machine threshold.
+
 ## Recent format-4 comparison
 
 The comparison below uses baseline `a3ad161` and format-4 candidate `ab2c8e0` on

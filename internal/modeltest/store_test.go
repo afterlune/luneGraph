@@ -91,7 +91,12 @@ func (s *faultStore[S]) Commit(ctx context.Context, expected uint64, change grap
 	}
 	s.c.mu.Lock()
 	mode := s.c.current.mode
-	fault := (mode >= 1 && mode <= 3) && s.c.triggerLocked(mode)
+	fault := false
+	if s.c.current.join != "" {
+		fault = s.c.triggerJoinConflictLocked(s.c.current.join, change.DeleteGroups, base.Groups)
+	} else {
+		fault = (mode >= 1 && mode <= 3) && s.c.triggerLocked(mode)
+	}
 	s.c.mu.Unlock()
 	if fault {
 		before, err := s.Store.Load(ctx, next.RunID)

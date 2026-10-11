@@ -9,7 +9,10 @@ import (
 	graph "github.com/afterlune/luneGraph"
 )
 
-type instruction struct{ mode, target, budget int }
+type instruction struct {
+	mode, target, budget int
+	join                 string
+}
 type eventKey struct {
 	operation uint64
 	role      graph.EventOperation
@@ -62,6 +65,62 @@ func (c *controller) triggerLocked(mode int) bool {
 	}
 	c.fired = true
 	return true
+}
+
+// triggerJoinConflictLocked selects a persisted activation by topology, not by
+// commit order. The nested sequence uses this to target only its outer join.
+func (c *controller) triggerJoinConflictLocked(join string, deleted []string, groups []graph.ActivationGroup) bool {
+	if c.fired || c.current.mode != 1 || c.current.join == "" || c.current.join != join {
+		return false
+	}
+	for _, deletedID := range deleted {
+		for _, group := range groups {
+			if group.ID == deletedID && group.JoinNode == join {
+				c.fired = true
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *controller) attemptCounts() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	counts := make(map[string]int, len(c.attempts))
+	for callID, count := range c.attempts {
+		counts[callID] = count
+	}
+	return counts
+}
+
+func (c *controller) callbackCount(role, node string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for callID, request := range c.requests {
+		if request.role == role && request.node == node {
+			count += c.attempts[callID]
+		}
+	}
+	return count
+}
+
+func (c *controller) requestCounts() map[request]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	counts := make(map[request]int, len(c.requests))
+	for callID, req := range c.requests {
+		counts[req] += c.attempts[callID]
+	}
+	return counts
+}
+
+func (c *controller) callbackRequest(callID string) (request, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	req, ok := c.requests[callID]
+	return req, ok
 }
 
 func (c *controller) attempt(_ context.Context, call graph.CallInfo, role string, value any) error {
