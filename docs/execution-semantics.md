@@ -11,6 +11,11 @@ codecs and Stores must satisfy their documented concurrency contracts.
   state. JSONClone requires a semantics-preserving JSON round trip; unexported or
   ignored fields and concrete interface types can be lost. Clone and Decode
   must not perform side effects.
+- A container copy alone does not isolate mutable values inside it: a copied
+  map can still share slices or pointers with the source. The
+  [executable Clone example](../clone_example_test.go) shows a state-specific
+  copy for nested byte slices, including nil/empty semantics. This rule applies
+  at fan-out and Merge input boundaries as well as before individual callbacks.
 - Fan-out gives each target independent state and creates one activation group.
   Merge receives only joined states, in target order, possibly empty. Ended or
   failed branches do not provide business results. Nested groups and loops are
@@ -23,9 +28,9 @@ codecs and Stores must satisfy their documented concurrency contracts.
   EndBranch discards its business result. EndExecution supplies Final. Natural
   completion can have neither Final nor Failure.
 - Returned checkpoints are immutable caller views. Callbacks transfer ownership
-  of returned state; they must not mutate retained references after returning. Stores own copies of writes
-  and return independent copies from Load. Large content belongs in external
-  storage; graph state should carry references.
+  of returned state; they must not mutate retained references after returning.
+  Stores own copies of writes and return independent copies from Load. Large
+  content belongs in external storage; graph state should carry references.
 
 ## Independent callback commits
 
@@ -67,6 +72,23 @@ before any Apply; duplicate/invalid addresses reject the batch. Decode failure
 leaves it unchanged. Inputs then commit one at a time. A later failure or
 interruption preserves the accepted prefix. Resubmit only inputs whose original
 waiting CallID remains pending in the authoritative checkpoint.
+
+Application input records should retain RunID, InvocationID, the original
+waiting CallID and their own payload bytes. After an uncertain write, Load the
+authoritative position and select only records still matching a waiting
+invocation and that original CallID. Keep unmatched records for application
+reconciliation: a path may have advanced, failed or been removed, so a mismatch
+alone is not an acknowledgement that this particular payload succeeded. Do not
+rebind an old input to a new waiting CallID at the same InvocationID.
+
+The [executable partial-input example](../resume_example_test.go) submits the
+matching records with Resume and the loaded checkpoint as its revision reference.
+Resume loads again and rejects a reference already advanced by another caller.
+This path costs two full Loads; it does not add commits or make admission
+exclusive. A conflict after a callback starts still permits replay and requires
+application effect idempotency. Terminal positions and empty matching sets are
+handled without input submission. The example performs no automatic retry,
+input deletion or success acknowledgement.
 
 Wait commits state and waits for input. Interrupt(cause), including wrapped
 signals, discards the current callback result and exits with StatusInterrupted
@@ -189,6 +211,15 @@ input cloning runs before admission. Clone, Decode, Store and Observer do not
 acquire their own permits. Callback permits release after observation, before
 submission. Limiter does not bound resident runs, waiting callers or total
 memory. Hosts own admission queues and fairness.
+
+A callback must not synchronously wait for another callback that needs a permit
+it is holding. With capacity one, driving another Runner with the same Limiter
+from Node, Merge or Apply creates such a wait. Propagate context so the nested
+call can exit on cancellation. Increasing capacity to two admits one nested
+call, but deeper or concurrent dependencies can still exhaust it. Express
+composable dependencies in topology, as in the
+[executable Limiter example](../limiter_example_test.go), or have the host drive
+independent work after the callback returns. Permits are not reentrant.
 
 Observers synchronously receive transient metadata, never state/input bytes.
 They can be concurrent and must return promptly. Delivery panics are isolated;

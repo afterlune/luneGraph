@@ -74,18 +74,13 @@ machine/checkpoint, using qualified names such as `worker/review`. A mount has
 zero/one exit. Return follows that exit or ends its invocation. Change MachineID
 when a definition is incompatible with stored execution positions.
 
-Clone must copy mutable maps, slices, pointers and other references. For example:
-
-```go
-type State struct { Values map[string]int; Data []byte }
-func clone(s State) (State, error) {
-    values := make(map[string]int, len(s.Values))
-    for key, value := range s.Values { values[key] = value }
-    s.Values = values
-    s.Data = append([]byte(nil), s.Data...)
-    return s, nil
-}
-```
+Clone must copy every mutable reference a callback can change, including values
+inside containers. Copying a `map[string][]byte` alone still shares its byte
+slices. The [runnable Clone example](clone_example_test.go) copies both levels
+and preserves nil and non-nil empty values for its state type. Choose a Clone
+that preserves your own state's required semantics. The same contract applies
+to fan-out copies and Merge inputs; callbacks must not keep modifying returned
+state after transferring its ownership to the runtime.
 
 ValueClone is for scalars/immutable state. JSONClone is convenient only when S
 survives a semantics-preserving JSON round trip: unexported and ignored fields
@@ -98,8 +93,24 @@ RegisterContinuation adapts a typed payload decoder and handler to persisted
 bytes. RegisterJSONContinuation uses JSON. Wait names that continuation.
 ResumeInput identifies a waiting invocation; all inputs decode before any Apply,
 then accepted inputs commit individually. A later error preserves the accepted
-prefix. Persist input outside the runtime until authoritative reload confirms
-its pending CallID has advanced.
+prefix. Keep input outside the runtime until the application has reconciled its
+original waiting identity against authoritative state.
+
+The [runnable partial-input example](resume_example_test.go) records RunID,
+InvocationID, original waiting CallID and an owned payload. After an uncertain
+commit, it loads the checkpoint and selects only inputs whose original waiting
+identity is still pending. Unmatched records remain available for application
+reconciliation; a changed CallID alone does not prove that a payload succeeded.
+Terminal runs and an empty matching set do not receive inputs. The example uses
+`Resume(loadedCheckpoint, matchingInputs, opts)` so its loaded revision is
+checked again. Return conflicts and uncertain errors to the caller for another
+reconciliation decision; the example adds no automatic retry or acknowledgement.
+
+This reconciliation path performs an explicit Load plus Resume's own Load.
+It can therefore load a full checkpoint twice, while preserving the existing
+Commit boundaries. The input record and selection helper are application-local
+example code, not additions to the library API or checkpoint format. Callback
+side effects still need application idempotency across concurrent replays.
 
 Start creates a run. Resume drives its supplied checkpoint, loading authoritative
 state and rejecting stale references when a Store is supplied. Recover loads by
@@ -168,6 +179,15 @@ options := graph.Options[State]{Store: store, MaxConcurrency: 8, Limiter: limite
 
 Host applications still bound resident executions, waiting callers and memory.
 Do not synchronously drive work requiring the permit held by the caller.
+
+For example, with one shared permit, a Node, Merge or Apply that synchronously
+calls another Runner with the same Limiter holds the permit while waiting for
+work that cannot acquire it. Passing context lets cancellation end this wait;
+it does not make the dependency progress without cancellation. Two permits can
+serve this single nested call, but do not guarantee progress for arbitrary
+dependency chains or concurrent nested calls. The
+[runnable Limiter example](limiter_example_test.go) expresses a dependency as
+graph edges so callbacks return and release their permits before successors run.
 
 Observer/ObserverFunc deliver synchronous concurrent metadata. Observers must
 return promptly; delivery panics are isolated. Finished does not mean committed:

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add executable contract examples and regressions for partial resume input
+  reconciliation, nested mutable state cloning and shared Limiter dependencies.
+  Public APIs, checkpoint format 4 and SQLite schema 2 are unchanged.
 - Dispatch Merge callbacks independently so other branches can progress while
   a join runs. Branch arrival, continuation application and Merge now commit
   separately. A rejected outer join does not replay committed inner work.
