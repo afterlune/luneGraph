@@ -130,8 +130,12 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 			return r.resultFromLiveOrEmpty(l, status, err)
 		}
 		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.To(updated, inv.Next...), err: err}
-		c, terminalErr, buildErr := r.resultChange(l, out)
+		c, terminalErr, buildErr := r.resultChange(l, out, opts.MaxInvocations)
 		if buildErr != nil {
+			if errors.Is(buildErr, errInvocationBudget) {
+				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, buildErr)
+				return r.resultFromLiveOrEmpty(l, StatusBudget, nil)
+			}
 			return r.resultFromLiveOrEmpty(l, errorStatus(buildErr), buildErr)
 		}
 		c.Header.Steps = l.header.Steps

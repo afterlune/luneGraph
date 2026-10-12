@@ -77,7 +77,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 	r := executorTestRunner(t, "source", []NodeSpec[int]{executorTestNode("source", executorTestEnd, FailExecution), executorTestNode("next", executorTestEnd, FailExecution)}, nil, map[string][]string{"source": {"next"}}, nil, nil)
 	cp := executorTestReadyCheckpoint("source", 1)
 	l := newLive(cp, nil, nil)
-	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(9, "missing")}); err == nil {
+	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(9, "missing")}, 0); err == nil {
 		t.Fatal("invalid transition accepted")
 	}
 	if !reflect.DeepEqual(l.snapshot(), cp) {
@@ -86,7 +86,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 	store := newExecutorTestStore()
 	store.values[cp.RunID] = cp
 	store.compareErr = ErrConflict
-	change, terminalErr, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(7, "next")})
+	change, terminalErr, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(7, "next")}, 0)
 	if err != nil || terminalErr != nil {
 		t.Fatalf("candidate: %v %v", err, terminalErr)
 	}
@@ -97,7 +97,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 		t.Fatal("rejected commit changed position")
 	}
 	store.compareErr = nil
-	change, terminalErr, err = r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(5, "next")})
+	change, terminalErr, err = r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(5, "next")}, 0)
 	if err != nil || terminalErr != nil {
 		t.Fatalf("reused candidate: %v %v", err, terminalErr)
 	}
@@ -109,7 +109,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 		t.Fatalf("accepted position = %+v", want)
 	}
 	// Building another outcome must not clear records already installed or saved.
-	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(8, "missing")}); err == nil {
+	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(8, "missing")}, 0); err == nil {
 		t.Fatal("invalid successor accepted")
 	}
 	if !reflect.DeepEqual(l.snapshot(), want) || !reflect.DeepEqual(store.values[cp.RunID], want) {

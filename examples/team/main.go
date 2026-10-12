@@ -25,8 +25,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err error) {
-	if len(args) == 0 || (args[0] != "start" && args[0] != "resume") {
-		return errors.New("usage: team {start|resume} -db runs.db -run demo [-tasks 2] [-invocation iN -call cN -approved=true]")
+	if len(args) == 0 || (args[0] != "start" && args[0] != "resume" && args[0] != "continue") {
+		return errors.New("usage: team {start|resume|continue} -db runs.db -run demo [-tasks 2] [-max-invocations N] [-invocation iN -call cN -approved=true]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("team "+command, flag.ContinueOnError)
@@ -34,6 +34,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	dbPath := flags.String("db", "runs.db", "SQLite checkpoint path (parent directory must exist)")
 	runID := flags.String("run", "team-demo", "execution ID")
 	taskCount := flags.Int("tasks", 2, "number of tasks requested from the offline Lead (start only, 0-16)")
+	maxInvocations := flags.Int("max-invocations", 0, "maximum invocation records in the execution (0 = unlimited)")
 	invocationID := flags.String("invocation", "", "original waiting invocation ID (resume)")
 	callID := flags.String("call", "", "original waiting CallID (resume)")
 	approved := flags.Bool("approved", true, "approval decision (resume)")
@@ -46,8 +47,14 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	if command == "start" && (*taskCount < 0 || *taskCount > 16) {
 		return errors.New("-tasks must be between 0 and 16")
 	}
+	if *maxInvocations < 0 {
+		return errors.New("-max-invocations must not be negative")
+	}
 	if command == "resume" && (*invocationID == "" || *callID == "") {
 		return errors.New("resume requires the original -invocation and -call values")
+	}
+	if command != "resume" && (*invocationID != "" || *callID != "") {
+		return errors.New("-invocation and -call are only accepted by resume")
 	}
 	runner, err := newTeamRunner(offlineModelRegistry())
 	if err != nil {
@@ -60,19 +67,22 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	defer func() { err = errors.Join(err, store.Close()) }()
 	var execution *graph.Execution[teamState]
 	var result graph.Result[teamState]
+	options := graph.Options{MaxInvocations: *maxInvocations}
 	if command == "start" {
 		execution, result, err = runner.Start(ctx, *runID, teamState{
 			Goal:           "Research a question and produce a concise plan.",
 			RequestedTasks: *taskCount,
 			ModelID:        modelLead,
 			MaxDepth:       1,
-		}, store, graph.Options{})
-	} else {
+		}, store, options)
+	} else if command == "resume" {
 		payload := "false"
 		if *approved {
 			payload = "true"
 		}
-		execution, result, err = runner.Recover(ctx, *runID, []graph.ResumeInput{{InvocationID: *invocationID, CallID: *callID, Payload: []byte(payload)}}, store, graph.Options{})
+		execution, result, err = runner.Recover(ctx, *runID, []graph.ResumeInput{{InvocationID: *invocationID, CallID: *callID, Payload: []byte(payload)}}, store, options)
+	} else {
+		execution, result, err = runner.Recover(ctx, *runID, nil, store, options)
 	}
 	if err != nil {
 		return err

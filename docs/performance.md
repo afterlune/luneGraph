@@ -399,6 +399,34 @@ go test -run '^$' -bench '^BenchmarkDurableFanoutJoin/storage=memory/width=32/co
 go test -run '^$' -bench '^BenchmarkDynamicFanOut/width=(32|128)/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu 1 .
 ```
 
+### Optional invocation-count budget
+
+Compared the clean `f9b0568` baseline with the working tree adding the optional
+`Options.MaxInvocations` check. Runs used Windows/amd64, Go 1.26.5, AMD Ryzen 7
+6800H, CPU 1, three serial 300 ms samples per case. Values are median
+`ns/op / B/op / allocs/op`; the new option is left at its zero/unlimited default
+in these workloads:
+
+| Workload | Base | Invocation-budget candidate |
+| --- | ---: | ---: |
+| 16-step sequential | 26,454 / 4,104 / 81 | 28,388 / 4,104 / 81 |
+| Width-32 static fan-out/join | 149,602 / 57,384 / 292 | 150,773 / 57,400 / 292 |
+| Width-32 dynamic FanOut | 139,639 / 56,576 / 257 | 140,093 / 56,592 / 257 |
+| Width-128 dynamic FanOut | 502,720 / 212,584 / 753 | 532,639 / 212,600 / 753 |
+
+Allocation counts stayed unchanged. Fan-out cases used 16 more bytes per
+operation; sequential bytes were unchanged. Timing sample ranges overlapped,
+including the wider dynamic case, so these short runs do not establish a
+repeatable latency change.
+
+Reproduce with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/steps=16$' -benchmem -benchtime=300ms -count=3 -cpu 1 .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=300ms -count=3 -cpu 1 .
+go test -run '^$' -bench '^BenchmarkDynamicFanOut/width=(32|128)/concurrency=default$' -benchmem -benchtime=300ms -count=3 -cpu 1 .
+```
+
 ## Repository checks
 
 The project checks formatting, all tests, race behavior, static analysis, and an

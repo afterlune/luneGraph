@@ -5,7 +5,7 @@ import (
 )
 
 // resultChange builds an isolated candidate containing only touched topology.
-func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], error, error) {
+func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations int) (Change[S], error, error) {
 	id := out.ref.id
 	scope := FailInvocation
 	node := ""
@@ -71,7 +71,7 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], erro
 		after.Steps++
 		if out.err != nil {
 			terminalErr = r.recordFailure(&after, &index, id, node, scope, out.err)
-		} else if _, err := r.applyTransition(&after, &index, id, out.transition); err != nil {
+		} else if _, err := r.applyTransition(&after, &index, id, out.transition, maxInvocations); err != nil {
 			return Change[S]{}, nil, err
 		}
 	}

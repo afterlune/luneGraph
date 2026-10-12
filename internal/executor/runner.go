@@ -17,7 +17,7 @@ func normalizeOptions(opts Options) (Options, error) {
 	if err := limit.Validate(opts.Limiter); err != nil {
 		return opts, err
 	}
-	if opts.MaxSteps < 0 || opts.MaxConcurrency < 0 {
+	if opts.MaxSteps < 0 || opts.MaxConcurrency < 0 || opts.MaxInvocations < 0 {
 		return opts, errors.New("limits must not be negative")
 	}
 	if opts.FailureOverride != nil && !validScope(*opts.FailureOverride) {

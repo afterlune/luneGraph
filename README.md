@@ -238,6 +238,21 @@ if err != nil { return err }
 options := graph.Options{MaxConcurrency: 8, Limiter: limiter}
 ```
 
+Set `Options.MaxInvocations` to limit the number of invocation records retained
+by one execution. Zero (the default) means unlimited; negative values are
+rejected. The limit applies before static multi-target `To` and dynamic `FanOut`
+create child invocations. It counts ready and waiting paths, group parents, and
+joined, ended, or failed branches retained until their group settles. Existing
+work can drain even when its current count is above a newly lowered limit.
+
+If a transition would exceed the limit, none of its branches are cloned or
+committed. The call returns nonterminal `StatusBudget` with the original node
+and `CallID` still pending. Raise the limit on a later `Advance`, `Resume`,
+`Recover`, or `Fork` call to retry; the callback may run again with the same
+`CallID`, so its effects must follow the usual at-least-once rules. This limits
+checkpoint invocation records, not the total tasks created over the run or
+memory already used to construct a callback's transition.
+
 Host applications still bound resident executions, waiting callers and memory.
 Do not synchronously drive work requiring the permit held by the caller.
 
@@ -271,9 +286,14 @@ are deterministic and independent of node names, and labels are escaped.
   The default adapters are deterministic and make no external LLM calls.
 
 ```sh
-go run ./examples/team start -db runs.db -run demo -tasks 2
+go run ./examples/team start -db runs.db -run demo -tasks 2 -max-invocations 1
+go run ./examples/team continue -db runs.db -run demo -max-invocations 8
 go run ./examples/team resume -db runs.db -run demo -invocation iN -call cN -approved=true
 ```
+
+`continue` recovers a run without submitting input, which lets a caller raise an
+invocation limit after `StatusBudget`. `resume` remains the input path and
+requires the original waiting invocation and CallID.
 
 The example's provider-neutral `ModelAdapter` contract is in
 `examples/team/graph.go`. Replace the offline registry with adapters that

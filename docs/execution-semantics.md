@@ -119,6 +119,21 @@ ordinary node failures; Merge and Apply do not increase Steps. MaxSteps bounds
 node starts per public call, default 10,000. After exhaustion, admitted tasks
 finish and eligible joins settle; no new nodes start. Ready nodes then produce
 StatusBudget. MaxConcurrency, default GOMAXPROCS, bounds nodes and joins together.
+`Options.MaxInvocations` optionally bounds invocation records in the current
+execution checkpoint; zero leaves it unlimited. Negative values are rejected.
+It applies to transitions that create children through static multi-target `To`
+or dynamic `FanOut`, and is checked before branch states are cloned or committed.
+The count includes all invocation records retained in the checkpoint, including
+waiting paths, group parents and resolved branches not yet removed by their join.
+If a transition would exceed the limit, the entire transition is discarded and
+the call returns nonterminal StatusBudget at the last committed position. The
+pending callback retains its CallID and can be retried by raising the limit on a
+later Start, Resume, Recover, Fork, or Advance call. This can replay the callback;
+continuation inputs must retain their original wait identity and be resubmitted
+if their Apply transition exceeded the budget. A lower limit does not prevent
+existing work from draining when it creates no new invocation records. The option is per public
+call and is not persisted; it does not limit cumulative task creation, branch
+data already constructed by callbacks, resident runs, or total process memory.
 Continuation inputs apply sequentially before the driver starts. Counter
 exhaustion returns ErrExecutionLimit and the last committed position without a
 terminal Failure.

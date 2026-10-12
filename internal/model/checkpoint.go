@@ -147,9 +147,13 @@ type Options struct {
 	Observer Observer
 	// Limiter optionally shares a callback budget across executions and runners.
 	// Node, join and continuation Apply callbacks acquire one permit each.
-	Limiter         *limit.Limiter
-	MaxSteps        int
-	MaxConcurrency  int
+	Limiter        *limit.Limiter
+	MaxSteps       int
+	MaxConcurrency int
+	// MaxInvocations limits the number of invocation records retained by one
+	// execution. Zero leaves invocation creation unbounded; negative values are
+	// invalid.
+	MaxInvocations  int
 	FailureOverride *FailureScope
 }
 

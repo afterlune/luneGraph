@@ -119,7 +119,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				break
 			}
 			if ref.join && l.groups[ref.id].JoinNode == "" {
-				c, terminalErr, err := r.resultChange(l, workResult[S]{ref: ref})
+				c, terminalErr, err := r.resultChange(l, workResult[S]{ref: ref}, opts.MaxInvocations)
 				if err != nil {
 					l.enqueue(ref)
 					return finish(errorStatus(err), err)
@@ -264,9 +264,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			l.enqueue(out.ref)
 			return finish(StatusInterrupted, out.err)
 		}
-		c, terminalErr, err := r.resultChange(l, out)
+		c, terminalErr, err := r.resultChange(l, out, opts.MaxInvocations)
 		if err != nil {
 			l.enqueue(out.ref)
+			if errors.Is(err, errInvocationBudget) {
+				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, err)
+				return finish(StatusBudget, nil)
+			}
 			return finish(errorStatus(err), err)
 		}
 		c.Header.ScheduleCursor = cursor

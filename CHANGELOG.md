@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add the optional `Options.MaxInvocations` limit for invocation records retained
+  by one execution. It applies atomically to static multi-target routing and
+  dynamic FanOut; a transition that exceeds the limit is left uncommitted and
+  returns resumable `StatusBudget`. The default remains unlimited, the value is
+  supplied per public call, and checkpoint format and SQLite schema are unchanged.
+- Add `continue` to the Team CLI to recover without submitting approval input.
+  `start`, `resume` and `continue` accept `-max-invocations` (default 0, unlimited),
+  so a budget-paused run can continue with a higher limit while approval resume
+  still requires its original invocation and CallID.
+
 - Update the offline Team example to inject synchronous provider-neutral model
   adapters. The Lead now returns structured assignments, Workers select
   adapters by persisted model ID, and Planner adapters can recursively delegate

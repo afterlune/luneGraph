@@ -37,7 +37,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("continue", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		ended, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"))
+		ended, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"), 0)
 		if err != nil || ended || checkpoint.Invocations[0].Node != "next" || checkpoint.Invocations[0].State != 7 || checkpoint.Invocations[0].CallID != "c3" {
 			t.Fatalf("continue = %+v, ended=%t err=%v", checkpoint, ended, err)
 		}
@@ -46,7 +46,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("wait", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		_, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"))
+		_, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"), 0)
 		if err != nil || checkpoint.Invocations[0].Status != InvocationWaiting || checkpoint.Invocations[0].State != 8 || checkpoint.Invocations[0].Continuation != "resume" || !reflect.DeepEqual(checkpoint.Invocations[0].Next, []string{"next"}) {
 			t.Fatalf("wait = %+v, %v", checkpoint, err)
 		}
@@ -65,7 +65,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			checkpoint := executorTestReadyCheckpoint("source", 1)
-			if _, err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition); err == nil {
+			if _, err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition, 0); err == nil {
 				t.Fatalf("invalid transition accepted: %+v", transition)
 			}
 		})
@@ -73,7 +73,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end branch", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int]())
+		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int](), 0)
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" {
 			t.Fatalf("EndBranch = %+v, %v", checkpoint, err)
 		}
@@ -81,7 +81,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end execution", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		ended, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11))
+		ended, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11), 0)
 		if err != nil || !ended || !checkpoint.Completed || checkpoint.Final == nil || *checkpoint.Final != 11 || len(checkpoint.Invocations) != 0 {
 			t.Fatalf("EndExecution = %+v, ended=%t err=%v", checkpoint, ended, err)
 		}
@@ -89,7 +89,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return with destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
+		_, err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), 0)
 		if err != nil || checkpoint.Invocations[0].Node != "done" || checkpoint.Invocations[0].State != 12 {
 			t.Fatalf("Return route = %+v, %v", checkpoint, err)
 		}
@@ -97,7 +97,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return without destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
+		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), 0)
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded {
 			t.Fatalf("terminal Return = %+v, %v", checkpoint, err)
 		}
@@ -105,7 +105,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return outside mount", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12))
+		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), 0)
 		var transitionErr *TransitionError
 		if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), "outside a subgraph") {
 			t.Fatalf("root Return error = %v", err)
@@ -114,7 +114,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("missing invocation", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		if _, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0)); err == nil {
+		if _, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0), 0); err == nil {
 			t.Fatal("transition accepted missing invocation")
 		}
 	})
@@ -184,7 +184,7 @@ func TestRouteClearsPersistedDynamicBranchTimeout(t *testing.T) {
 		{ID: "i2", Status: InvocationGroup, ChildGroupID: "g1", Node: "worker"},
 	}, Groups: []ActivationGroup{{ID: "g1", ParentID: "i2", Source: "worker", Branches: []ActivationBranch{{InvocationID: "i1", Target: "worker", Timeout: 25 * time.Millisecond}}}}}
 	index := executionTestIndex(cp)
-	if err := runner.route(&cp, index, "i1", "worker", 9, []string{"next"}); err != nil {
+	if err := runner.route(&cp, index, "i1", "worker", 9, []string{"next"}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if cp.Groups[0].Branches[0].Timeout != 0 || cp.Invocations[0].Node != "next" {
@@ -276,7 +276,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 	if err := runner.checkTargets("source", []string{"next"}); err == nil {
 		t.Fatal("unregistered edge accepted")
 	}
-	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i99", "source", 1, []string{"source"}); err == nil {
+	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i99", "source", 1, []string{"source"}, 0); err == nil {
 		t.Fatal("route accepted missing invocation")
 	}
 
@@ -289,7 +289,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 	}, nil, map[string][]string{"fork": {"a", "b"}}, nil, nil)
 	cloneFailure.clone = func(int) (int, error) { return 0, copyErr }
 	checkpoint = executorTestReadyCheckpoint("fork", 1)
-	err := cloneFailure.route(&checkpoint, executionTestIndex(checkpoint), "i1", "fork", 1, []string{"a", "b"})
+	err := cloneFailure.route(&checkpoint, executionTestIndex(checkpoint), "i1", "fork", 1, []string{"a", "b"}, 0)
 	var stateErr *stateCopyError
 	if !errors.As(err, &stateErr) || !errors.Is(err, copyErr) {
 		t.Fatalf("fan-out clone error = %v", err)
@@ -297,7 +297,7 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 
 	checkpoint = executorTestReadyCheckpoint("source", 1)
 	checkpoint.NextID = math.MaxUint64 - 1
-	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i1", "source", 1, []string{"source", "source2"}); !errors.Is(err, ErrExecutionLimit) {
+	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i1", "source", 1, []string{"source", "source2"}, 0); !errors.Is(err, ErrExecutionLimit) {
 		t.Fatalf("fan-out ID overflow = %v", err)
 	}
 

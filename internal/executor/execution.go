@@ -7,7 +7,7 @@ import (
 	"slices"
 )
 
-func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S]) (bool, error) {
+func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S], maxInvocations int) (bool, error) {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return false, &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
@@ -41,9 +41,9 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			inv.Next = append([]string(nil), tr.Targets...)
 			return false, nil
 		}
-		if err := r.route(s, index, id, source, tr.State, tr.Targets); err != nil {
+		if err := r.route(s, index, id, source, tr.State, tr.Targets, maxInvocations); err != nil {
 			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
+			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -53,9 +53,9 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if len(tr.Targets) != 0 || tr.Continuation != "" {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with FanOut")}
 		}
-		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches); err != nil {
+		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, maxInvocations); err != nil {
 			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
+			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -119,9 +119,9 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if err := r.checkJoinTargets(s, inv, targets); err != nil {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		if err := r.route(s, index, id, source, tr.State, targets); err != nil {
+		if err := r.route(s, index, id, source, tr.State, targets, maxInvocations); err != nil {
 			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) {
+			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -161,7 +161,7 @@ type stateCopyError struct{ cause error }
 func (e *stateCopyError) Error() string { return e.cause.Error() }
 func (e *stateCopyError) Unwrap() error { return e.cause }
 
-func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string) error {
+func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string, maxInvocations int) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("invocation %q disappeared", id)
@@ -181,6 +181,9 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 			}
 		}
 		return r.setTarget(s, inv, targets[0])
+	}
+	if err := checkInvocationBudget(s, len(targets), maxInvocations); err != nil {
+		return err
 	}
 	needed := uint64(1) // activation group
 	addIDs := func(count uint64) bool {
@@ -243,7 +246,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 }
 
 // fanOut creates a dynamic activation from declared, independently cloned tasks.
-func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S]) error {
+func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], maxInvocations int) error {
 	joinNode := r.joinBySource[source]
 	if joinNode == "" {
 		return errors.New("FanOut requires a JoinSpec for its source node")
@@ -258,6 +261,9 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 		if _, ok := r.nodes[branch.Target]; !ok {
 			return fmt.Errorf("branch target %q is not an executable node", branch.Target)
 		}
+	}
+	if err := checkInvocationBudget(s, len(branches), maxInvocations); err != nil {
+		return err
 	}
 	if uint64(len(branches)) > (math.MaxUint64-2)/2 {
 		return fmt.Errorf("reserve FanOut IDs: %w", ErrExecutionLimit)

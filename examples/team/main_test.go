@@ -55,6 +55,46 @@ func TestOfflineTeamStartAndApprovalRecovery(t *testing.T) {
 	}
 }
 
+func TestOfflineTeamContinuesAfterInvocationBudgetPause(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "budget.db")
+	var output, diagnostics bytes.Buffer
+	if err := run(context.Background(), []string{"start", "-db", db, "-run", "team-budget", "-tasks", "2", "-max-invocations", "1"}, &output, &diagnostics); err != nil {
+		t.Fatalf("budgeted start: %v (%s)", err, diagnostics.String())
+	}
+	if !strings.Contains(output.String(), "status=budget_exhausted run=team-budget") {
+		t.Fatalf("budgeted start output: %s", output.String())
+	}
+
+	output.Reset()
+	diagnostics.Reset()
+	if err := run(context.Background(), []string{"continue", "-db", db, "-run", "team-budget", "-max-invocations", "8"}, &output, &diagnostics); err != nil {
+		t.Fatalf("continue with larger budget: %v (%s)", err, diagnostics.String())
+	}
+	if !strings.Contains(output.String(), "status=waiting run=team-budget") {
+		t.Fatalf("continued output: %s", output.String())
+	}
+	invocation, call := teamOutputField(t, output.String(), "invocation"), teamOutputField(t, output.String(), "call")
+
+	output.Reset()
+	diagnostics.Reset()
+	if err := run(context.Background(), []string{"continue", "-db", db, "-run", "team-budget", "-max-invocations", "8"}, &output, &diagnostics); err != nil {
+		t.Fatalf("continue while approval waits: %v (%s)", err, diagnostics.String())
+	}
+	if teamOutputField(t, output.String(), "invocation") != invocation || teamOutputField(t, output.String(), "call") != call {
+		t.Fatalf("continue changed approval identity: %s", output.String())
+	}
+
+	output.Reset()
+	diagnostics.Reset()
+	args := []string{"resume", "-db", db, "-run", "team-budget", "-max-invocations", "8", "-invocation", invocation, "-call", call, "-approved=true"}
+	if err := run(context.Background(), args, &output, &diagnostics); err != nil {
+		t.Fatalf("resume approval after budget: %v (%s)", err, diagnostics.String())
+	}
+	if !strings.Contains(output.String(), "status=completed run=team-budget approved=true") {
+		t.Fatalf("completed output: %s", output.String())
+	}
+}
+
 func TestOfflineTeamEmptyPlanAndRejectedApproval(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "empty.db")
 	var output, diagnostics bytes.Buffer
@@ -94,6 +134,8 @@ func TestTeamRunRejectsInvalidArgumentsAndDatabasePaths(t *testing.T) {
 		{name: "missing command"},
 		{name: "unknown command", args: []string{"inspect"}},
 		{name: "invalid flag value", args: []string{"start", "-tasks", "many"}},
+		{name: "negative invocation budget", args: []string{"start", "-max-invocations", "-1"}},
+		{name: "continue rejects input identity", args: []string{"continue", "-invocation", "i2"}},
 		{name: "unexpected positional argument", args: []string{"start", "unexpected"}},
 		{name: "unavailable database directory", args: []string{"start", "-db", filepath.Join(t.TempDir(), "missing", "runs.db")}},
 	}
