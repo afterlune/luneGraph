@@ -5,10 +5,10 @@ nodes and allowed edges; each execution owns its evolving state. The core
 handles scheduling, branches, joins, waiting and recovery. Models, tools,
 permissions and agent policy belong to applications.
 
-**Current changes are unreleased.** Checkpoint format 7 is incompatible with
-earlier checkpoint formats; SQLite schema 2 remains in use. See [CHANGELOG](CHANGELOG.md),
-[execution contract](docs/execution-semantics.md), [Store guide](docs/store-implementation.md)
-Requires Go 1.26.5 or newer.
+**Current changes are unreleased.** Checkpoint format 7 rejects earlier formats
+without automatic migration; SQLite schema 2 remains in use. See
+[CHANGELOG](CHANGELOG.md), [execution contract](docs/execution-semantics.md),
+and [Store guide](docs/store-implementation.md). Requires Go 1.26.5 or newer.
 
 The standard-library core is imported as `graph` from
 `github.com/afterlune/luneGraph`. Optional SQLite persistence uses modernc.org/sqlite.
