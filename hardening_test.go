@@ -114,7 +114,7 @@ func TestCloneAndMergePanics(t *testing.T) {
 	node(t, fork, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "a", "b"), nil
 	})
-	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(context.Context, graph.CallInfo, []int) (int, error) { panic("merge") }}); err != nil {
+	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(context.Context, graph.CallInfo, int, []int) (int, error) { panic("merge") }}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
@@ -139,7 +139,7 @@ func TestWrongJoinIsTransitionError(t *testing.T) {
 	node(t, g, "other", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndBranch[int](), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) { return 0, nil }}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) { return 0, nil }}); err != nil {
 		t.Fatal(err)
 	}
 	edge(t, g, "start", "join")

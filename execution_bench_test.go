@@ -158,7 +158,7 @@ func benchmarkFanoutRunner(b *testing.B, width int) *graph.Runner[int] {
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, states []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
 		merged := 0
 		for _, state := range states {
 			merged += state

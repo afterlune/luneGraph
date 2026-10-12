@@ -5,7 +5,7 @@ nodes and allowed edges; each execution owns its evolving state. The core
 handles scheduling, branches, joins, waiting and recovery. Models, tools,
 permissions and agent policy belong to applications.
 
-**Current changes are unreleased.** Checkpoint format 4 and SQLite
+**Current changes are unreleased.** Checkpoint format 5 and SQLite
 schema 2 break compatibility with previous versions. See [CHANGELOG](CHANGELOG.md),
 [execution contract](docs/execution-semantics.md), [Store guide](docs/store-implementation.md)
 Requires Go 1.26.5 or newer.
@@ -60,14 +60,20 @@ concurrency safe. Treat returned checkpoints as immutable.
 | Decision | Behavior |
 | --- | --- |
 | To(state, targets...) | Follow declared edges; multiple targets create an activation |
+| FanOut(parent, branches...) | Create a dynamic zero-or-more task activation using declared targets |
+| CompleteBranch(state) | Return this task's result to its current group's Merge |
 | Wait(state, continuation, targets...) | Commit state and await invocation input |
 | EndBranch[S]() | End this path and discard its business result |
 | EndExecution(state) | Finish the run, supply Final, cancel/drain other tasks |
 | Return(state) | Leave a mounted subgraph through its sole exit |
 
-Register JoinSpec with From naming the fan-out node. Each activation joins only
-its own children. Merge receives joined states in target order; ended/failed
-branches are omitted, so its inputs can be empty. Loops and nested groups work.
+Register JoinSpec with From naming a FanOut source. Each activation joins only
+its own children. FanOut branches can repeat targets and carry independent
+states; zero and one branch still pass through a normal activation and Merge.
+Merge receives a clone of the state saved by FanOut, then successful branch
+states in target order. Ended/failed branches are omitted. Workers can dispatch
+nested tasks from the same declared graph; CompleteBranch returns to their
+immediate activation group without storing the caller's join name in state.
 Merge runs independently: branch arrivals commit before Merge starts, and other
 branches can advance while it runs. A rejected Merge replays independently with
 its original CallID. Revision includes Merge commits; Steps counts node outcomes.
@@ -236,6 +242,17 @@ are deterministic and independent of node names, and labels are escaped.
 
 - [Durable CLI](examples/durable): waiting and typed continuation across processes.
 - [Effect receipts](examples/effects): effects, uncertain outcomes and replay.
+- [Offline Team](examples/team): a deterministic Lead assigns dynamic tasks to
+  typed Workers, one Worker recursively dispatches tasks, and approval resumes
+  after SQLite recovery without an external LLM service.
+
+```sh
+go run ./examples/team start -db runs.db -run demo -tasks 2
+go run ./examples/team resume -db runs.db -run demo -invocation iN -call cN -approved=true
+```
+
+Use the invocation and CallID printed by `start`; do not replace them with the
+current waiting identity after an uncertain resume result.
 
 ```sh
 gofmt -w .
@@ -252,7 +269,21 @@ package. [Performance and graph-level benchmark guide](docs/performance.md) reco
 reproducible measurements and known trade-offs; it does not claim application-level
 production capacity.
 
-## Format-4 migration
+## Format-5 migration
+
+Merge callbacks now receive `(ctx, call, parentState, branchStates)`. Update
+custom Merge signatures. Register a JoinSpec for each FanOut source. Convert
+dynamic task lists to `FanOut(parent, graph.Branch[S]{Target, State}...)`, and
+use `CompleteBranch(state)` to deliver results to the current activation group.
+Existing `To(state, targets...)` retains its declared, distinct-target behavior.
+
+Format 5 permits joined activations with zero or one child and allows more join
+children than static outgoing edges. Format 4 checkpoints are rejected; finish
+active runs with the matching runtime and use a new database for new runs.
+SQLite schema 2 and its stored record layout are unchanged.
+
+The earlier source and schema migrations are described below for projects
+upgrading from previous releases.
 
 Replace custom Store.CompareAndSwap with Commit and preserve delta atomicity and
 ownership. Remove Store.DeleteMany implementations; repeated Delete calls are
@@ -277,5 +308,4 @@ Resume inputs now require `CallID`, obtained from the original waiting
 invocation in `Pending()` or a checkpoint. Update every input producer, including
 persisted application input records. Inputs without a matching CallID are
 rejected with `ErrInvalidResumeInput`; there is no optional legacy mode.
-Checkpoint format 4 and SQLite schema 2 are unchanged by this source and
-execution-contract update.
+Checkpoint format 5 and SQLite schema 2 are in use; format-4 checkpoints are rejected.

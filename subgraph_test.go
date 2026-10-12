@@ -33,6 +33,37 @@ func TestSubgraphEnterAndReturn(t *testing.T) {
 	}
 }
 
+func TestRuntimeFanOutTargetsMountedSubgraphEntry(t *testing.T) {
+	child := graph.New[int]("work")
+	node(t, child, "work", func(_ context.Context, _ graph.CallInfo, value int) (graph.Transition[int], error) {
+		return graph.CompleteBranch(value + 1), nil
+	})
+	parent := graph.New[int]("dispatch")
+	node(t, parent, "dispatch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.FanOut(state+10, graph.Branch[int]{Target: "worker", State: state}), nil
+	})
+	node(t, parent, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	})
+	if err := parent.AddSubgraph("worker", child); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []int) (int, error) {
+		if len(branches) != 1 {
+			return 0, errors.New("mounted branch did not reach join")
+		}
+		return parent + branches[0], nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	edge(t, parent, "dispatch", "worker")
+	edge(t, parent, "joined", "done")
+	_, result, err := intRunner(t, parent).Start(context.Background(), "subgraph-fanout", 3, nil, graph.Options{})
+	if err != nil || result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != 17 {
+		t.Fatalf("runtime fan-out into mounted entry = %+v, %v", result, err)
+	}
+}
+
 func TestSubgraphCanBeEntryAndReturnWithoutOutputEndsBranch(t *testing.T) {
 	child := graph.New[int]("work")
 	node(t, child, "work", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
@@ -173,7 +204,7 @@ func TestSubgraphReturnCanReachFanoutJoin(t *testing.T) {
 	if err := root.AddSubgraph("worker", worker); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, states []int) (int, error) {
+	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
 		if len(states) != 2 {
 			return 0, errors.New("expected both branches at join")
 		}
@@ -204,7 +235,7 @@ func TestSubgraphCanContainFanoutAndJoin(t *testing.T) {
 	node(t, child, "finish", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Return(state), nil
 	})
-	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, states []int) (int, error) {
+	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
 		return states[0] + states[1], nil
 	}}); err != nil {
 		t.Fatal(err)

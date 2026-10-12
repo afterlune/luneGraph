@@ -26,8 +26,8 @@ func TestResolvedNestedJoinInterruptionPreservesCommittedInnerJoin(t *testing.T)
 	})
 	interrupted := false
 	for _, spec := range []graph.JoinSpec[int]{
-		{Name: "innerjoin", From: "inner", Merge: func(_ context.Context, _ graph.CallInfo, v []int) (int, error) { return v[0] + v[1], nil }},
-		{Name: "outerjoin", From: "outer", Merge: func(_ context.Context, _ graph.CallInfo, v []int) (int, error) {
+		{Name: "innerjoin", From: "inner", Merge: func(_ context.Context, _ graph.CallInfo, _ int, v []int) (int, error) { return v[0] + v[1], nil }},
+		{Name: "outerjoin", From: "outer", Merge: func(_ context.Context, _ graph.CallInfo, _ int, v []int) (int, error) {
 			if !interrupted {
 				interrupted = true
 				return 0, graph.Interrupt(nil)

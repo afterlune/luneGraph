@@ -14,6 +14,8 @@ const (
 	ActionEndBranch
 	ActionEndExecution
 	ActionReturn
+	ActionFanOut
+	ActionCompleteBranch
 )
 
 // Transition contains a node's new state and its explicit control decision.
@@ -21,7 +23,14 @@ type Transition[S any] struct {
 	State        S
 	Action       Action
 	Targets      []string
+	Branches     []Branch[S]
 	Continuation string
+}
+
+// Branch describes one runtime-created child invocation.
+type Branch[S any] struct {
+	Target string
+	State  S
 }
 
 // To continues to one target or fans out to several declared targets.
@@ -32,6 +41,16 @@ func To[S any](state S, targets ...string) Transition[S] {
 // Wait suspends this invocation until a continuation receives resume input.
 func Wait[S any](state S, continuation string, targets ...string) Transition[S] {
 	return Transition[S]{State: state, Action: ActionWait, Targets: append([]string(nil), targets...), Continuation: continuation}
+}
+
+// FanOut creates an activation group with one independent child per branch.
+func FanOut[S any](parent S, branches ...Branch[S]) Transition[S] {
+	return Transition[S]{State: parent, Action: ActionFanOut, Branches: append([]Branch[S](nil), branches...)}
+}
+
+// CompleteBranch returns this invocation's state to its activation group's Merge.
+func CompleteBranch[S any](state S) Transition[S] {
+	return Transition[S]{State: state, Action: ActionCompleteBranch}
 }
 
 // EndBranch finishes the current invocation without producing a result.
@@ -77,7 +96,7 @@ type Clone[S any] func(S) (S, error)
 
 // Merge combines values that reached one activation group's join. CallInfo
 // carries the activation group's stable join callback ID.
-type Merge[S any] func(context.Context, CallInfo, []S) (S, error)
+type Merge[S any] func(context.Context, CallInfo, S, []S) (S, error)
 
 // FailureScope controls how a node or join error affects an execution.
 type FailureScope uint8

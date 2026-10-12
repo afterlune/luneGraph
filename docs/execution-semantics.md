@@ -1,4 +1,4 @@
-# Execution semantics — checkpoint format 4
+# Execution semantics — checkpoint format 5
 
 The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
@@ -41,10 +41,14 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   [executable Clone example](../clone_example_test.go) shows a state-specific
   copy for nested byte slices, including nil/empty semantics. This rule applies
   at fan-out and Merge input boundaries as well as before individual callbacks.
-- Fan-out gives each target independent state and creates one activation group.
-  Merge receives only joined states, in target order, possibly empty. Ended or
-  failed branches do not provide business results. Nested groups and loops are
-  allowed; each activation has independent callback identities.
+- Static `To(state, targets...)` keeps its declared, distinct targets.
+  `FanOut(parent, branches...)` creates one activation for zero or more declared
+  node/subgraph-entry tasks; repeated targets are valid and each branch receives
+  an independent Clone. The source requires a JoinSpec. `CompleteBranch(state)`
+  returns a child result to its immediate activation's join.
+- Merge receives a Clone of the activation parent state followed by successful
+  child states in target order, possibly empty. Ended or failed branches do not
+  provide business results. Nested task groups and loops are allowed.
 - Compile expands subgraphs into the same machine, state type, scheduler and
   checkpoint. Names are qualified by mount path. A mount has at most one exit;
   Return follows it or ends its invocation without an exit. Return outside a
@@ -232,10 +236,24 @@ quiescence and retention; do not reuse IDs while old owners can address them.
 Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
 SQLite pages reusable, without guaranteeing immediate file shrink.
 
-Format 4/schema 2 reject older versions. Finish old runs with their matching
-runtime and use a new database for new executions. No automatic migration or
+Format 5 rejects format-4 checkpoints and older versions. Existing runs require
+their matching runtime; use a new database for new executions. SQLite schema 2
+and the invocation/group record layout are unchanged. No automatic migration or
 compatibility execution machine is supplied. MachineID remains an application
 controlled definition identity; change it for incompatible graphs.
+
+FanOut atomically commits its parent, activation and child invocation IDs before
+children can start. Each child gets an independent Clone, invocation ID and
+CallID; repeated targets remain distinguishable by branch identity. Zero-child
+groups become ready for Merge immediately. CompleteBranch records a successful
+child result without selecting a fixed join node in application state.
+
+Merge receives cloned parent state plus cloned successful branch states. Clone
+errors do not trigger terminal Failure. An accepted child result stays committed
+if Merge is interrupted or its commit is rejected; only Merge replays with its
+original CallID. MaxSteps bounds node starts per public call; eligible joins
+continue to drain after the node budget is exhausted. Application code owns
+recursion-depth and aggregate task-budget policy.
 
 ## Shared admission and observation
 

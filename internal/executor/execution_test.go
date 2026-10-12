@@ -120,7 +120,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 }
 
 func TestJoinTargetValidationAndRouting(t *testing.T) {
-	join := JoinSpec[int]{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, []int) (int, error) { return 0, nil }}
+	join := JoinSpec[int]{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, int, []int) (int, error) { return 0, nil }}
 	runner := executorTestRunner(t, "fork", []NodeSpec[int]{
 		executorTestNode("fork", executorTestEnd, FailInvocation),
 		executorTestNode("a", executorTestEnd, FailInvocation),
@@ -188,7 +188,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 			executorTestNode("done", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 				return model.EndExecution(value), nil
 			}, FailInvocation),
-		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, call CallInfo, values []int) (int, error) {
+		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, call CallInfo, _ int, values []int) (int, error) {
 			if call.CallID == "" || call.RunID != "parallel-join" || len(values) != 2 || values[0] != 1 || values[1] != 2 {
 				return 0, fmt.Errorf("invalid merge call: %+v values=%v", call, values)
 			}
@@ -243,7 +243,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 		executorTestNode("b", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 			return model.To(value, "joined"), nil
 		}, FailInvocation),
-	}, []JoinSpec[int]{{Name: "joined", From: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, []int) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
+	}, []JoinSpec[int]{{Name: "joined", From: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, int, []int) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
 	_, result, err := mergeFailure.Start(context.Background(), "merge-failure", 0, nil, Options{MaxConcurrency: 1})
 	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Header.Failure == nil {
 		t.Fatalf("join failure = %+v, %v", result, err)
@@ -308,7 +308,7 @@ func TestCallbackPanicWrappers(t *testing.T) {
 	if _, err := runner.runNode(context.Background(), CallInfo{InvocationID: "i1"}, runner.nodes["node"], 1); !errors.Is(err, boom) {
 		t.Fatalf("node panic wrapper = %v", err)
 	}
-	if _, err := runner.mergeStates(context.Background(), CallInfo{InvocationID: "i1"}, JoinSpec[int]{Name: "join", Merge: func(context.Context, CallInfo, []int) (int, error) { panic(boom) }}, nil); !errors.Is(err, boom) {
+	if _, err := runner.mergeStates(context.Background(), CallInfo{InvocationID: "i1"}, JoinSpec[int]{Name: "join", Merge: func(context.Context, CallInfo, int, []int) (int, error) { panic(boom) }}, 0, nil); !errors.Is(err, boom) {
 		t.Fatalf("join panic wrapper = %v", err)
 	}
 	runner.continuations = map[string]Continuation[int]{"panic": {

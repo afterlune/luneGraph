@@ -83,7 +83,63 @@ The workload serializes its single ready node and keeps payload size fixed.
 It isolates record-count costs; it is not a multi-run throughput or production
 capacity test. There is no cross-machine threshold.
 
-## Recent format-4 comparison
+## Recent runtime changes
+
+### Runtime FanOut and checkpoint format 5
+
+Measured base `6f8381f` against the format-5 implementation on Windows/amd64,
+Go 1.26.5, AMD Ryzen 7 6800H. Runs were serial on the same machine. Values are
+median `ns/op / B/op / allocs/op`:
+
+| Existing workload | CPU | Format-4 base | Format-5 |
+| --- | ---: | ---: | ---: |
+| 16-step sequential | 1 | 30,294 / 3,992 / 81 | 32,181 / 4,008 / 81 |
+| 16-step sequential | 8 | 27,162 / 6,680 / 81 | 23,954 / 7,192 / 81 |
+| Width-32 static fan-out/join, default concurrency | 1 | 182,426 / 53,016 / 294 | 177,718 / 53,040 / 295 |
+| Width-32 static fan-out/join, default concurrency | 8 | 246,023 / 56,439 / 301 | 216,101 / 56,974 / 302 |
+| Durable width-32 Memory fan-out, default concurrency | 1 | 709,730 / 393,401 / 1,724 | 665,714 / 394,392 / 1,729 |
+| Durable width-32 Memory fan-out, default concurrency | 8 | 644,322 / 397,062 / 1,732 | 709,657 / 398,605 / 1,737 |
+| Warm Memory advance, 32 waiters | 1 | 10,401 / 4,326 / 28 | 11,279 / 4,342 / 28 |
+
+Sequential and warm Memory latency samples overlap between versions and do not
+establish a stable regression. The durable Memory FanOut benchmark runs one
+dynamic parent Merge per cycle over a 16-entry map state. Format 5 copies the
+accepted parent state before Merge and the Store clones the changed parent on
+commit; that necessary ownership boundary accounts for about 1 KB and five extra
+allocations per measured cycle here. Transition's branch descriptor also adds
+a fixed buffer-size cost to existing scheduler workloads without adding an
+allocation in the sequential case.
+
+The new `BenchmarkDynamicFanOut` exercises zero, one, two, eight, 32 and 128
+runtime branches targeting the same declared Worker, with serial and default
+concurrency. Representative CPU-1 default-concurrency medians are:
+
+| Branches | `ns/op / B/op / allocs/op` |
+| ---: | ---: |
+| 0 | 10,777 / 4,848 / 40 |
+| 1 | 20,637 / 6,280 / 55 |
+| 32 | 176,921 / 51,968 / 260 |
+| 128 | 629,623 / 194,152 / 758 |
+
+This workload has no old equivalent: the format-4 path could not express zero,
+one or repeated targets as independent children. The repeated-target case
+isolates invocation creation, per-child Clone, Join and checkpoint commits; it
+does not include a real model provider or application state beyond one integer
+per branch.
+
+Reproduce these workloads with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/steps=16$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/storage=memory/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$/storage=memory/waiters=32/mode=warm-advance$' -benchmem -benchtime=150ms -count=3 -cpu 1 ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkDynamicFanOut$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+```
+
+These are same-host diagnostics, not production throughput promises. SQLite
+continues to use schema 2; SQLite recovery benchmarks and process-kill tests
+continue to exercise durable commits.
 
 ### Executor responsibility separation
 

@@ -175,7 +175,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 			})
 			edge(t, g, "nested", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", From: "nested", OnError: graph.FailGroup, Merge: func(_ context.Context, _ graph.CallInfo, _ []int) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", From: "nested", OnError: graph.FailGroup, Merge: func(_ context.Context, _ graph.CallInfo, _ int, _ []int) (int, error) {
 			// Merge runs on the scheduler: prerequisites must already be met.
 			for _, prerequisite := range []<-chan struct{}{aCommitted, blockedStarted} {
 				select {
@@ -193,7 +193,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 			edge(t, g, name, "innerjoin")
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outerjoin", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outerjoin", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
 		f.joins.Add(1)
 		if len(values) != 1 || values[0] != 17 {
 			return 0, fmt.Errorf("failed branch reached outer join: %v", values)

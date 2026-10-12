@@ -6,6 +6,7 @@ type (
 	Change[S any]       = model.Change[S]
 	Action              = model.Action
 	ActivationGroup     = model.ActivationGroup
+	Branch[S any]       = model.Branch[S]
 	CallInfo            = model.CallInfo
 	Checkpoint[S any]   = model.Checkpoint[S]
 	Clone[S any]        = model.Clone[S]
@@ -30,11 +31,13 @@ type (
 )
 
 const (
-	ActionContinue     = model.ActionContinue
-	ActionWait         = model.ActionWait
-	ActionEndBranch    = model.ActionEndBranch
-	ActionEndExecution = model.ActionEndExecution
-	ActionReturn       = model.ActionReturn
+	ActionContinue       = model.ActionContinue
+	ActionWait           = model.ActionWait
+	ActionFanOut         = model.ActionFanOut
+	ActionCompleteBranch = model.ActionCompleteBranch
+	ActionEndBranch      = model.ActionEndBranch
+	ActionEndExecution   = model.ActionEndExecution
+	ActionReturn         = model.ActionReturn
 
 	FailInvocation = model.FailInvocation
 	FailGroup      = model.FailGroup

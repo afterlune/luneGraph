@@ -145,7 +145,10 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		if group.JoinNode != r.joinBySource[group.Source] {
 			return invalidCheckpoint("group %q has incompatible join", group.ID)
 		}
-		if len(group.Children) < 2 || len(group.Children) > len(r.edges[group.Source]) {
+		if group.JoinNode == "" && (len(group.Children) < 2 || len(group.Children) > len(r.edges[group.Source])) {
+			return invalidCheckpoint("group %q has invalid unjoined child count", group.ID)
+		}
+		if group.JoinNode != "" && len(group.Children) == 0 {
 			return invalidCheckpoint("group %q has invalid child count", group.ID)
 		}
 		for index, childID := range group.Children {

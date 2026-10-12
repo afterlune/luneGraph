@@ -11,7 +11,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 4
+const CheckpointFormatVersion uint32 = 5
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string

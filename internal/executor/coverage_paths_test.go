@@ -84,7 +84,7 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 			return model.EndExecution(state), nil
 		}, FailInvocation),
 	}, []JoinSpec[int]{
-		{Name: "join", From: "fork", Merge: func(_ context.Context, _ CallInfo, states []int) (int, error) { return states[0], nil }},
+		{Name: "join", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, states []int) (int, error) { return states[0], nil }},
 	}, nil, map[string]Continuation[int]{
 		"resume": {
 			Decode: func(payload []byte) (any, error) {
@@ -130,12 +130,12 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 	}
 
 	merge := runner.joins["join"]
-	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, []int{6}); err != nil {
+	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []int{6}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(model.OperationJoin, nil)
-	merge.Merge = func(context.Context, CallInfo, []int) (int, error) { return 0, boom }
-	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, []int{6}); !errors.Is(err, boom) {
+	merge.Merge = func(context.Context, CallInfo, int, []int) (int, error) { return 0, boom }
+	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []int{6}); !errors.Is(err, boom) {
 		t.Fatalf("merge error = %v", err)
 	}
 	checkEvents(model.OperationJoin, boom)
@@ -171,7 +171,7 @@ func TestMachineExportMermaidAndWideTargetValidation(t *testing.T) {
 		nodes = append(nodes, executorTestNode(name, executorTestEnd, FailInvocation))
 	}
 	runner := executorTestRunner(t, "root", nodes, []JoinSpec[int]{
-		{Name: "join", From: "root", Merge: func(_ context.Context, _ CallInfo, states []int) (int, error) { return states[0], nil }},
+		{Name: "join", From: "root", Merge: func(_ context.Context, _ CallInfo, _ int, states []int) (int, error) { return states[0], nil }},
 	}, edges, nil, map[string]string{"child/return": "target-a"})
 	if err := runner.checkTargets("root", targets); err != nil {
 		t.Fatalf("valid wide target list: %v", err)

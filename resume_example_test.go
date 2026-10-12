@@ -70,7 +70,7 @@ func resumeExampleRunner(applied func(graph.CallInfo)) (*graph.Runner[int], erro
 		}
 	}
 	if err := g.AddJoin(graph.JoinSpec[int]{Name: "sum", From: "fork", OnError: graph.FailExecution,
-		Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+		Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
 			if len(values) != 2 {
 				return 0, fmt.Errorf("expected two inputs, got %d", len(values))
 			}

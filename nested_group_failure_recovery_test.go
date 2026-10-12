@@ -74,7 +74,7 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 	if err := g.AddJoin(graph.JoinSpec[int]{
 		Name: "outer-join",
 		From: "root",
-		Merge: func(_ context.Context, _ graph.CallInfo, states []int) (int, error) {
+		Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
 			mergeCallCount.Add(1)
 			mergedStates = append(mergedStates, append([]int(nil), states...))
 			if len(states) != 1 {

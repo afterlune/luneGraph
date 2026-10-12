@@ -40,7 +40,7 @@ func nestedPopulation(t testing.TB, count int) *graph.Runner[state] {
 			})
 			addEdge(t, g, fork, leaf)
 		}
-		if err := g.AddJoin(graph.JoinSpec[state]{Name: join, From: fork, Merge: func(_ context.Context, _ graph.CallInfo, values []state) (state, error) {
+		if err := g.AddJoin(graph.JoinSpec[state]{Name: join, From: fork, Merge: func(_ context.Context, _ graph.CallInfo, _ state, values []state) (state, error) {
 			if len(values) != 8 {
 				return state{}, fmt.Errorf("inner count %d", len(values))
 			}
@@ -60,7 +60,7 @@ func nestedPopulation(t testing.TB, count int) *graph.Runner[state] {
 			addEdge(t, g, leaf, join)
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[state]{Name: "all", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, values []state) (state, error) {
+	if err := g.AddJoin(graph.JoinSpec[state]{Name: "all", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ state, values []state) (state, error) {
 		if len(values) != count {
 			return state{}, fmt.Errorf("outer count %d", len(values))
 		}

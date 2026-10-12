@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add runtime `FanOut(parent, branches...)` for zero, one, or many branch states
+  and `CompleteBranch(state)` to return a child result to its current activation
+  group. FanOut targets must be declared nodes or mounted subgraph entries and
+  the source must have a JoinSpec. Merge now receives a cloned parent state
+  before its ordered successful branch results. This source and checkpoint
+  contract change emits format 5; SQLite schema 2 and its record layout remain
+  unchanged. Format 4 checkpoints are rejected; finish active old runs with the
+  matching runtime and use a new database for new runs.
+- Add an offline Team example with deterministic Lead/Worker model substitutes,
+  nested task dispatch, approval wait and SQLite recovery.
+- Reuse the Merge task's existing input-state slot for the cloned parent state,
+  so node callback queue entries do not carry an extra copy.
+- Record format 5 as the explicit rejection boundary for format-4 checkpoints.
+
 - Separate the executor's accepted live position, FIFO ready queue and reusable
   candidate workspace. Nodes, joins and group failures now share local topology
   collection; wide joins reuse the workspace's ID map for collection and diffing.

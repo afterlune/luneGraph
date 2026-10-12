@@ -152,7 +152,7 @@ func interruptionRunner(t testing.TB, width int, c *interruptionController) *gra
 		})
 		addEdge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, values []state) (state, error) {
+	if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, _ state, values []state) (state, error) {
 		c.begin(call.RunID)
 		defer c.finish(call.RunID)
 		if len(values) != width {

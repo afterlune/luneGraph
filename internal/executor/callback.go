@@ -32,13 +32,13 @@ func (r *Runner[S]) runNode(ctx context.Context, call CallInfo, spec NodeSpec[S]
 	return spec.Run(ctx, call, state)
 }
 
-func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpec[S], states []S) (out S, err error) {
+func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpec[S], parent S, states []S) (out S, err error) {
 	defer func() {
 		if value := recover(); value != nil {
 			err = panicAsError("join "+spec.Name, call.InvocationID, value)
 		}
 	}()
-	return spec.Merge(ctx, call, states)
+	return spec.Merge(ctx, call, parent, states)
 }
 
 func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err error) {

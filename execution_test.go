@@ -54,7 +54,7 @@ func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 		})
 		edge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, values []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
 		return values[0] + values[1], nil
 	}}); err != nil {
 		t.Fatal(err)

@@ -131,7 +131,7 @@ func TestJoinExecutionFailureIsPersisted(t *testing.T) {
 	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "a", "b"), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(context.Context, graph.CallInfo, []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(context.Context, graph.CallInfo, int, []int) (int, error) {
 		return 0, boom
 	}}); err != nil {
 		t.Fatal(err)

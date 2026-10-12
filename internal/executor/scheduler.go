@@ -289,7 +289,7 @@ func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 	out := workResult[S]{ref: t.ref, callID: t.call.CallID}
 	if t.ref.join {
 		if t.join.Merge != nil {
-			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.values)
+			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.state, t.values)
 		}
 	} else if t.obs == nil {
 		out.transition, out.err = r.runNode(t.ctx, t.call, t.spec, t.state)
@@ -304,6 +304,11 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 	if ref.join {
 		g := l.groups[ref.id]
 		parent, _ := l.invocation(g.ParentID)
+		parentState, err := r.cloneState(parent.State, parent.ID)
+		if err != nil {
+			return t, fmt.Errorf("clone join parent: %w", err)
+		}
+		t.state = parentState
 		t.join = r.joins[g.JoinNode]
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
 		for _, id := range g.Children {

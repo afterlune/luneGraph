@@ -71,7 +71,7 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 				})
 				addEdge(t, g, "fork", name)
 			}
-			if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, values []state) (state, error) {
+			if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ state, values []state) (state, error) {
 				joinCalls = append(joinCalls, call.CallID)
 				if len(values) != 15 {
 					return state{}, fmt.Errorf("join received %d branches", len(values))

@@ -124,7 +124,7 @@ func TestResolvedJoinBatch(t *testing.T) {
 				})
 				edge(t, g, "fork", name)
 			}
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, v []int) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, v []int) (int, error) {
 				if mode == "interrupt" {
 					return 0, graph.Interrupt(nil)
 				}

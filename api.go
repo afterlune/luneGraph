@@ -23,6 +23,7 @@ type (
 	ObserverFunc      = model.ObserverFunc
 	Action            = model.Action
 	ActivationGroup   = model.ActivationGroup
+	Branch[S any]     = model.Branch[S]
 	CallInfo          = model.CallInfo
 	Checkpoint[S any] = model.Checkpoint[S]
 	Clone[S any]      = model.Clone[S]
@@ -68,11 +69,13 @@ const (
 	OutcomeDiscarded = model.OutcomeDiscarded
 	OutcomeUnknown   = model.OutcomeUnknown
 
-	ActionContinue     = model.ActionContinue
-	ActionWait         = model.ActionWait
-	ActionEndBranch    = model.ActionEndBranch
-	ActionEndExecution = model.ActionEndExecution
-	ActionReturn       = model.ActionReturn
+	ActionContinue       = model.ActionContinue
+	ActionWait           = model.ActionWait
+	ActionFanOut         = model.ActionFanOut
+	ActionCompleteBranch = model.ActionCompleteBranch
+	ActionEndBranch      = model.ActionEndBranch
+	ActionEndExecution   = model.ActionEndExecution
+	ActionReturn         = model.ActionReturn
 
 	FailInvocation = model.FailInvocation
 	FailGroup      = model.FailGroup
@@ -152,6 +155,14 @@ func To[S any](state S, targets ...string) Transition[S] {
 
 func Wait[S any](state S, continuation string, targets ...string) Transition[S] {
 	return model.Wait(state, continuation, targets...)
+}
+
+func FanOut[S any](parent S, branches ...Branch[S]) Transition[S] {
+	return model.FanOut(parent, branches...)
+}
+
+func CompleteBranch[S any](state S) Transition[S] {
+	return model.CompleteBranch(state)
 }
 
 // EndBranch finishes the current invocation without producing a result.
