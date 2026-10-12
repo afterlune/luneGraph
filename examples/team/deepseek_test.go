@@ -57,6 +57,7 @@ func TestDeepSeekAdapterUsesChatCompletionsJSONMode(t *testing.T) {
 	})
 	result, err := adapter.Generate(context.Background(), graph.CallInfo{RunID: "run-1", CallID: "call-2"}, ModelRequest{
 		Role: roleLead, Goal: "answer a question", RequestedTasks: 1,
+		AvailableModels: []ModelOption{{ModelID: modelDeepSeekFlash, Provider: "deepseek", Model: deepSeekProviderModel}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -246,6 +246,9 @@ func TestTeamUsesInjectedModelsAndStableCallInfo(t *testing.T) {
 	if calls["test/lead"][0].req.Role != roleLead || calls["test/search"][0].req.Role != roleSearch || calls["test/planner"][0].req.Role != rolePlanner {
 		t.Fatalf("adapter roles = %+v", calls)
 	}
+	if len(calls["test/lead"][0].req.AvailableModels) != 3 || len(calls["test/planner"][0].req.AvailableModels) != 3 || len(calls["test/search"][0].req.AvailableModels) != 0 {
+		t.Fatalf("role model options = lead:%+v planner:%+v search:%+v", calls["test/lead"][0].req.AvailableModels, calls["test/planner"][0].req.AvailableModels, calls["test/search"][0].req.AvailableModels)
+	}
 }
 
 func TestTeamValidatesAssignmentsAndRegistry(t *testing.T) {
@@ -271,6 +274,19 @@ func TestTeamValidatesAssignmentsAndRegistry(t *testing.T) {
 	}
 	if _, err := copyModelRegistry(ModelRegistry{"broken": nil}); err == nil {
 		t.Fatal("nil model adapter was accepted")
+	}
+	allowed := map[string]struct{}{modelSearch: {}}
+	if err := validateAssignmentsForModels([]TaskAssignment{{Target: roleSearch, ID: "outside", ModelID: modelPlan}}, models, allowed); err == nil || !strings.Contains(err.Error(), "outside the worker allow-list") {
+		t.Fatalf("outside allow-list assignment error = %v", err)
+	}
+	for _, options := range [][]ModelOption{
+		{},
+		{{ModelID: modelSearch}, {ModelID: modelSearch}},
+		{{ModelID: "missing"}},
+	} {
+		if _, err := newTeamRunnerWithModelOptions(models, "invalid-model-options", options); err == nil {
+			t.Fatalf("accepted worker model options %+v", options)
+		}
 	}
 }
 

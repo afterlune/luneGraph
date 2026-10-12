@@ -284,7 +284,8 @@ are deterministic and independent of node names, and labels are escaped.
   Lead assign tasks to different model IDs; a Planner can recursively delegate,
   Workers aggregate partial results, and approval resumes after SQLite recovery.
   The default adapters are deterministic and make no external LLM calls. An
-  optional DeepSeek Flash provider uses Chat Completions with JSON Output.
+  optional DeepSeek Flash provider uses Chat Completions with JSON Output; a
+  registry mode can combine DeepSeek and OpenAI Responses adapters.
 
 ```sh
 go run ./examples/team start -db runs.db -run demo -tasks 2 -max-invocations 1
@@ -311,6 +312,51 @@ It does not include prompts, model output, or the API key. Calls are at-least-on
 so replay may produce another usage record with the same CallID. CI and automated
 tests use a local HTTP test server; a live smoke test is manual and requires a
 valid key. A missing key is rejected before opening the checkpoint database.
+
+For a mixed Team, use `-provider registry -config models.json`. `ModelID` is the
+stable checkpoint value; `model` is the provider's API model name. Lead and
+Planner choose only from `worker_model_ids`; `description` helps them match a
+model to a task. The model name is required rather than defaulted, and keys stay
+in provider-specific environment variables.
+
+```json
+{
+  "lead_model_id": "openai/lead",
+  "worker_model_ids": ["deepseek/research", "openai/planner"],
+  "models": {
+    "openai/lead": {
+      "provider": "openai",
+      "model": "<OpenAI API model name>",
+      "description": "Delegates tasks"
+    },
+    "deepseek/research": {
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "description": "Fast research tasks"
+    },
+    "openai/planner": {
+      "provider": "openai",
+      "model": "<OpenAI API model name>",
+      "description": "Planning and synthesis"
+    }
+  }
+}
+```
+
+```powershell
+$env:OPENAI_API_KEY = "your-openai-api-key"
+$env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
+go run ./examples/team start -provider registry -config models.json -db runs.db -run mixed-demo -tasks 2
+go run ./examples/team continue -provider registry -config models.json -db runs.db -run mixed-demo
+go run ./examples/team resume -provider registry -config models.json -db runs.db -run mixed-demo -invocation iN -call cN -approved=true
+```
+
+Use the same registry configuration for `continue` and `resume`. Its MachineID
+fingerprint covers the Lead, worker allow-list, model mappings, and descriptions;
+changing those values rejects recovery. API keys and request limits are excluded
+from the fingerprint. OpenAI calls use the Responses API with structured JSON
+output; the shared `-max-tokens` limit maps to OpenAI `max_output_tokens` and
+DeepSeek `max_tokens`.
 
 `continue` recovers a run without submitting input, which lets a caller raise an
 invocation limit after `StatusBudget`. `resume` remains the input path and

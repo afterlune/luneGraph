@@ -32,17 +32,28 @@ type TaskAssignment struct {
 	Instruction string `json:"instruction"`
 }
 
+// ModelOption describes one configured worker that a Lead or Planner may
+// assign. ModelID is the stable value stored in execution state; Model is the
+// provider-specific API model name.
+type ModelOption struct {
+	ModelID     string `json:"model_id"`
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 // ModelRequest contains only serializable application data. Adapter instances
 // are injected into the runner and are never stored in checkpoints.
 type ModelRequest struct {
-	Role           string   `json:"role"`
-	Goal           string   `json:"goal"`
-	TaskID         string   `json:"task_id"`
-	Instruction    string   `json:"instruction"`
-	Depth          int      `json:"depth"`
-	MaxDepth       int      `json:"max_depth"`
-	RequestedTasks int      `json:"requested_tasks"`
-	Results        []string `json:"results"`
+	Role            string        `json:"role"`
+	Goal            string        `json:"goal"`
+	TaskID          string        `json:"task_id"`
+	Instruction     string        `json:"instruction"`
+	Depth           int           `json:"depth"`
+	MaxDepth        int           `json:"max_depth"`
+	RequestedTasks  int           `json:"requested_tasks"`
+	Results         []string      `json:"results"`
+	AvailableModels []ModelOption `json:"available_models,omitempty"`
 }
 
 // ModelResponse is normalized by each provider adapter. Assignments are used
@@ -87,6 +98,10 @@ func newTeamRunner(models ModelRegistry) (*graph.Runner[teamState], error) {
 }
 
 func newTeamRunnerWithID(models ModelRegistry, machineID string) (*graph.Runner[teamState], error) {
+	return newTeamRunnerWithModelOptions(models, machineID, modelOptionsFromRegistry(models))
+}
+
+func newTeamRunnerWithModelOptions(models ModelRegistry, machineID string, workerModels []ModelOption) (*graph.Runner[teamState], error) {
 	if strings.TrimSpace(machineID) == "" {
 		return nil, errors.New("team MachineID must not be empty")
 	}
@@ -95,10 +110,48 @@ func newTeamRunnerWithID(models ModelRegistry, machineID string) (*graph.Runner[
 		return nil, err
 	}
 	g := graph.New[teamState](roleLead)
-	if err := addTeamDefinition(g, registry); err != nil {
+	workerModels = slices.Clone(workerModels)
+	slices.SortFunc(workerModels, func(a, b ModelOption) int { return strings.Compare(a.ModelID, b.ModelID) })
+	if err := validateModelOptions(registry, workerModels); err != nil {
+		return nil, err
+	}
+	if err := addTeamDefinitionWithModels(g, registry, workerModels); err != nil {
 		return nil, err
 	}
 	return g.Compile(graph.Config[teamState]{MachineID: machineID, Clone: cloneTeamState})
+}
+
+func modelOptionsFromRegistry(models ModelRegistry) []ModelOption {
+	ids := make([]string, 0, len(models))
+	for id := range models {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	options := make([]ModelOption, len(ids))
+	for index, id := range ids {
+		options[index] = ModelOption{ModelID: id}
+	}
+	return options
+}
+
+func validateModelOptions(models ModelRegistry, workerModels []ModelOption) error {
+	if len(workerModels) == 0 {
+		return errors.New("worker model allow-list must not be empty")
+	}
+	seen := make(map[string]struct{}, len(workerModels))
+	for _, option := range workerModels {
+		if strings.TrimSpace(option.ModelID) == "" {
+			return errors.New("worker model allow-list contains an empty ModelID")
+		}
+		if _, exists := seen[option.ModelID]; exists {
+			return fmt.Errorf("worker model allow-list contains duplicate ModelID %q", option.ModelID)
+		}
+		seen[option.ModelID] = struct{}{}
+		if _, exists := models[option.ModelID]; !exists {
+			return fmt.Errorf("worker model allow-list references unknown ModelID %q", option.ModelID)
+		}
+	}
+	return nil
 }
 
 func copyModelRegistry(models ModelRegistry) (ModelRegistry, error) {
@@ -116,6 +169,14 @@ func copyModelRegistry(models ModelRegistry) (ModelRegistry, error) {
 }
 
 func addTeamDefinition(g *graph.Graph[teamState], models ModelRegistry) error {
+	return addTeamDefinitionWithModels(g, models, modelOptionsFromRegistry(models))
+}
+
+func addTeamDefinitionWithModels(g *graph.Graph[teamState], models ModelRegistry, workerModels []ModelOption) error {
+	allowedModels := make(map[string]struct{}, len(workerModels))
+	for _, model := range workerModels {
+		allowedModels[model.ModelID] = struct{}{}
+	}
 	if err := g.AddNode(graph.NodeSpec[teamState]{Name: roleLead, Run: func(ctx context.Context, call graph.CallInfo, s teamState) (graph.Transition[teamState], error) {
 		if s.RequestedTasks < 0 || s.RequestedTasks > maxTasks {
 			return graph.Transition[teamState]{}, fmt.Errorf("requested task count must be between 0 and %d", maxTasks)
@@ -123,11 +184,11 @@ func addTeamDefinition(g *graph.Graph[teamState], models ModelRegistry) error {
 		if s.MaxDepth < 0 {
 			return graph.Transition[teamState]{}, errors.New("maximum task depth must not be negative")
 		}
-		response, err := generate(ctx, call, models, s.ModelID, modelRequest(roleLead, s))
+		response, err := generate(ctx, call, models, s.ModelID, modelRequest(roleLead, s, workerModels))
 		if err != nil {
 			return graph.Transition[teamState]{}, err
 		}
-		if err := validateAssignments(response.Assignments, models); err != nil {
+		if err := validateAssignmentsForModels(response.Assignments, models, allowedModels); err != nil {
 			return graph.Transition[teamState]{}, fmt.Errorf("Lead returned invalid assignments: %w", err)
 		}
 		return graph.FanOut(s, assignmentBranches(s, response.Assignments, 0)...), nil
@@ -135,7 +196,7 @@ func addTeamDefinition(g *graph.Graph[teamState], models ModelRegistry) error {
 		return err
 	}
 	if err := g.AddNode(graph.NodeSpec[teamState]{Name: roleSearch, Run: func(ctx context.Context, call graph.CallInfo, s teamState) (graph.Transition[teamState], error) {
-		response, err := generate(ctx, call, models, s.ModelID, modelRequest(roleSearch, s))
+		response, err := generate(ctx, call, models, s.ModelID, modelRequest(roleSearch, s, nil))
 		if err != nil {
 			return graph.Transition[teamState]{}, err
 		}
@@ -148,7 +209,7 @@ func addTeamDefinition(g *graph.Graph[teamState], models ModelRegistry) error {
 		return err
 	}
 	if err := g.AddNode(graph.NodeSpec[teamState]{Name: rolePlanner, Run: func(ctx context.Context, call graph.CallInfo, s teamState) (graph.Transition[teamState], error) {
-		response, err := generate(ctx, call, models, s.ModelID, modelRequest(rolePlanner, s))
+		response, err := generate(ctx, call, models, s.ModelID, modelRequest(rolePlanner, s, workerModels))
 		if err != nil {
 			return graph.Transition[teamState]{}, err
 		}
@@ -156,7 +217,7 @@ func addTeamDefinition(g *graph.Graph[teamState], models ModelRegistry) error {
 			if s.Depth >= s.MaxDepth {
 				return graph.Transition[teamState]{}, fmt.Errorf("Planner exceeded maximum depth %d", s.MaxDepth)
 			}
-			if err := validateAssignments(response.Assignments, models); err != nil {
+			if err := validateAssignmentsForModels(response.Assignments, models, allowedModels); err != nil {
 				return graph.Transition[teamState]{}, fmt.Errorf("Planner returned invalid assignments: %w", err)
 			}
 			return graph.FanOut(s, assignmentBranches(s, response.Assignments, s.Depth+1)...), nil
@@ -217,20 +278,25 @@ func generate(ctx context.Context, call graph.CallInfo, models ModelRegistry, mo
 	return response, nil
 }
 
-func modelRequest(role string, s teamState) ModelRequest {
+func modelRequest(role string, s teamState, availableModels []ModelOption) ModelRequest {
 	return ModelRequest{
-		Role:           role,
-		Goal:           s.Goal,
-		TaskID:         s.TaskID,
-		Instruction:    s.Instruction,
-		Depth:          s.Depth,
-		MaxDepth:       s.MaxDepth,
-		RequestedTasks: s.RequestedTasks,
-		Results:        slices.Clone(s.Results),
+		Role:            role,
+		Goal:            s.Goal,
+		TaskID:          s.TaskID,
+		Instruction:     s.Instruction,
+		Depth:           s.Depth,
+		MaxDepth:        s.MaxDepth,
+		RequestedTasks:  s.RequestedTasks,
+		Results:         slices.Clone(s.Results),
+		AvailableModels: slices.Clone(availableModels),
 	}
 }
 
 func validateAssignments(assignments []TaskAssignment, models ModelRegistry) error {
+	return validateAssignmentsForModels(assignments, models, nil)
+}
+
+func validateAssignmentsForModels(assignments []TaskAssignment, models ModelRegistry, allowedModels map[string]struct{}) error {
 	if len(assignments) > maxTasks {
 		return fmt.Errorf("assignment count exceeds %d", maxTasks)
 	}
@@ -248,6 +314,11 @@ func validateAssignments(assignments []TaskAssignment, models ModelRegistry) err
 		}
 		if _, exists := models[assignment.ModelID]; !exists {
 			return fmt.Errorf("assignment %q selects unknown model %q", assignment.ID, assignment.ModelID)
+		}
+		if allowedModels != nil {
+			if _, allowed := allowedModels[assignment.ModelID]; !allowed {
+				return fmt.Errorf("assignment %q selects ModelID %q outside the worker allow-list", assignment.ID, assignment.ModelID)
+			}
 		}
 	}
 	return nil

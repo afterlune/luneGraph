@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a multi-provider Team registry mode. A JSON config maps stable ModelIDs to
+  OpenAI Responses or DeepSeek Chat Completions models, sets the Lead, and
+  allow-lists models that Leads and Planners may assign. OpenAI Responses uses
+  structured JSON output; provider keys remain environment-only. Registry
+  MachineIDs fingerprint model routing so changed configurations cannot resume
+  incompatible runs. Offline and the single-provider DeepSeek CLI modes remain.
 - Add an opt-in DeepSeek Flash provider to the Team example using Chat Completions
   and JSON Output. Offline remains the default; `-provider deepseek` selects the
   provider, with configurable request timeout and output-token limit. The API key

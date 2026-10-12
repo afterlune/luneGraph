@@ -27,6 +27,7 @@ const (
 
 type deepSeekConfig struct {
 	baseURL        string
+	providerModel  string
 	requestTimeout time.Duration
 	maxTokens      int
 	client         *http.Client
@@ -43,6 +44,7 @@ type deepSeekUsage struct {
 // prompts, model output, and credentials so it can be written to stderr.
 type UsageRecord struct {
 	Provider         string `json:"provider"`
+	ModelID          string `json:"model_id"`
 	Model            string `json:"model"`
 	Role             string `json:"role"`
 	RunID            string `json:"run_id"`
@@ -58,6 +60,8 @@ type UsageRecord struct {
 type deepSeekAdapter struct {
 	apiKey         string
 	endpoint       string
+	modelID        string
+	providerModel  string
 	requestTimeout time.Duration
 	maxTokens      int
 	client         *http.Client
@@ -72,6 +76,9 @@ func newDeepSeekAdapter(apiKey string, config deepSeekConfig) (*deepSeekAdapter,
 	}
 	if config.baseURL == "" {
 		config.baseURL = deepSeekDefaultBaseURL
+	}
+	if config.providerModel == "" {
+		config.providerModel = deepSeekProviderModel
 	}
 	if config.requestTimeout == 0 {
 		config.requestTimeout = deepSeekDefaultTimeout
@@ -97,10 +104,12 @@ func newDeepSeekAdapter(apiKey string, config deepSeekConfig) (*deepSeekAdapter,
 	return &deepSeekAdapter{
 		apiKey:         apiKey,
 		endpoint:       strings.TrimRight(config.baseURL, "/") + deepSeekChatCompletionsURL,
+		modelID:        modelDeepSeekFlash,
 		requestTimeout: config.requestTimeout,
 		maxTokens:      config.maxTokens,
 		client:         client,
 		usageWriter:    config.usageWriter,
+		providerModel:  config.providerModel,
 	}, nil
 }
 
@@ -142,7 +151,7 @@ func (a *deepSeekAdapter) Generate(ctx context.Context, call graph.CallInfo, req
 		return ModelResponse{}, err
 	}
 	requestBody := deepSeekRequest{
-		Model:     deepSeekProviderModel,
+		Model:     a.providerModel,
 		Messages:  messages,
 		MaxTokens: a.maxTokens,
 	}
@@ -199,7 +208,7 @@ func (a *deepSeekAdapter) Generate(ctx context.Context, call graph.CallInfo, req
 }
 
 func deepSeekMessages(request ModelRequest) ([]deepSeekMessage, error) {
-	system, err := deepSeekSystemPrompt(request.Role)
+	system, err := teamSystemPrompt(request.Role, request.AvailableModels)
 	if err != nil {
 		return nil, err
 	}
@@ -211,21 +220,7 @@ func deepSeekMessages(request ModelRequest) ([]deepSeekMessage, error) {
 	return []deepSeekMessage{{Role: "system", Content: system}, {Role: "user", Content: user}}, nil
 }
 
-func deepSeekSystemPrompt(role string) (string, error) {
-	const modelID = modelDeepSeekFlash
-	switch role {
-	case roleLead:
-		return "You are the Lead in a task team. Break the requested goal into the requested number of independent tasks, unless the requested count is zero. Return JSON only with an assignments array. Every assignment must include target (search or planner), a unique id, model_id set to \"" + modelID + "\", and a concise instruction. Example JSON: {\"assignments\":[{\"target\":\"search\",\"id\":\"research-1\",\"model_id\":\"" + modelID + "\",\"instruction\":\"Find reliable evidence\"}]}. The output must be a JSON object.", nil
-	case rolePlanner:
-		return "You are a Planner worker. Either complete this task with a non-empty text field, or delegate smaller tasks with a non-empty assignments array. Return JSON only. Every assignment must include target (search or planner), a unique id, model_id set to \"" + modelID + "\", and an instruction. Respect the provided current depth and maximum depth; do not delegate when current depth is at the maximum. Examples: {\"text\":\"A concise plan\"} or {\"assignments\":[{\"target\":\"search\",\"id\":\"evidence\",\"model_id\":\"" + modelID + "\",\"instruction\":\"Find supporting evidence\"}]}. The output must be a JSON object.", nil
-	case roleSearch:
-		return "You are a Search worker. Complete the assigned research task and return JSON only with a non-empty text field containing findings. Do not delegate tasks. Example JSON: {\"text\":\"Relevant findings with concise evidence\"}. The output must be a JSON object.", nil
-	default:
-		return "", fmt.Errorf("unknown DeepSeek role %q", role)
-	}
-}
-
-func parseDeepSeekContent(role, content string) (ModelResponse, error) {
+func parseTeamModelContent(role, content string) (ModelResponse, error) {
 	var decoded struct {
 		Text        string          `json:"text"`
 		Assignments json.RawMessage `json:"assignments"`
@@ -280,12 +275,16 @@ func parseDeepSeekContent(role, content string) (ModelResponse, error) {
 	return ModelResponse{Text: text, Assignments: assignments}, nil
 }
 
+func parseDeepSeekContent(role, content string) (ModelResponse, error) {
+	return parseTeamModelContent(role, content)
+}
+
 func (a *deepSeekAdapter) writeUsage(call graph.CallInfo, role string, usage *deepSeekUsage) {
 	if a.usageWriter == nil {
 		return
 	}
 	record := UsageRecord{
-		Provider: "deepseek", Model: deepSeekProviderModel, Role: role,
+		Provider: "deepseek", ModelID: a.modelID, Model: a.providerModel, Role: role,
 		RunID: call.RunID, CallID: call.CallID, UsageAvailable: usage != nil,
 	}
 	if usage != nil {

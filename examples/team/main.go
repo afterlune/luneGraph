@@ -26,18 +26,19 @@ func main() {
 
 func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err error) {
 	if len(args) == 0 || (args[0] != "start" && args[0] != "resume" && args[0] != "continue") {
-		return errors.New("usage: team {start|resume|continue} -db runs.db -run demo [-provider offline|deepseek] [-tasks 2] [-max-invocations N] [-invocation iN -call cN -approved=true]")
+		return errors.New("usage: team {start|resume|continue} -db runs.db -run demo [-provider offline|deepseek|registry] [-config models.json] [-tasks 2] [-max-invocations N] [-invocation iN -call cN -approved=true]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("team "+command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	dbPath := flags.String("db", "runs.db", "SQLite checkpoint path (parent directory must exist)")
 	runID := flags.String("run", "team-demo", "execution ID")
-	provider := flags.String("provider", "offline", "model provider: offline or deepseek")
+	provider := flags.String("provider", "offline", "model mode: offline, deepseek, or registry")
+	modelConfigPath := flags.String("config", "", "JSON model registry config (required by provider=registry)")
 	taskCount := flags.Int("tasks", 2, "number of tasks requested from the Lead (start only, 0-16)")
 	maxInvocations := flags.Int("max-invocations", 0, "maximum invocation records in the execution (0 = unlimited)")
-	requestTimeout := flags.Duration("request-timeout", deepSeekDefaultTimeout, "DeepSeek HTTP request timeout")
-	maxTokens := flags.Int("max-tokens", deepSeekDefaultMaxTokens, "DeepSeek maximum output tokens per call")
+	requestTimeout := flags.Duration("request-timeout", deepSeekDefaultTimeout, "provider HTTP request timeout")
+	maxTokens := flags.Int("max-tokens", deepSeekDefaultMaxTokens, "maximum output tokens per provider call")
 	invocationID := flags.String("invocation", "", "original waiting invocation ID (resume)")
 	callID := flags.String("call", "", "original waiting CallID (resume)")
 	approved := flags.Bool("approved", true, "approval decision (resume)")
@@ -65,11 +66,19 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	if command != "resume" && (*invocationID != "" || *callID != "") {
 		return errors.New("-invocation and -call are only accepted by resume")
 	}
+	if *provider == "registry" && *modelConfigPath == "" {
+		return errors.New("-provider registry requires -config")
+	}
+	if *provider != "registry" && *modelConfigPath != "" {
+		return errors.New("-config is only accepted with -provider registry")
+	}
 	var models ModelRegistry
+	var workerModels []ModelOption
 	var machineID, startModelID string
 	switch *provider {
 	case "offline":
 		models = offlineModelRegistry()
+		workerModels = modelOptionsFromRegistry(models)
 		machineID = "team-model-adapters-v2"
 		startModelID = modelLead
 	case "deepseek":
@@ -85,12 +94,23 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 		if err != nil {
 			return err
 		}
+		workerModels = []ModelOption{{ModelID: modelDeepSeekFlash, Provider: "deepseek", Model: deepSeekProviderModel}}
 		machineID = "team-deepseek-flash-v1"
 		startModelID = modelDeepSeekFlash
+	case "registry":
+		config, configErr := loadTeamRegistryConfig(*modelConfigPath)
+		if configErr != nil {
+			return configErr
+		}
+		models, workerModels, machineID, err = buildTeamModelRegistry(config, *requestTimeout, *maxTokens, diagnostics)
+		if err != nil {
+			return err
+		}
+		startModelID = config.LeadModelID
 	default:
-		return fmt.Errorf("unknown provider %q; expected offline or deepseek", *provider)
+		return fmt.Errorf("unknown provider %q; expected offline, deepseek, or registry", *provider)
 	}
-	runner, err := newTeamRunnerWithID(models, machineID)
+	runner, err := newTeamRunnerWithModelOptions(models, machineID, workerModels)
 	if err != nil {
 		return err
 	}
