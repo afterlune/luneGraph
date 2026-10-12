@@ -6,3 +6,4 @@ coverage
 *.out
 
 /artifacts/
+AGENTS.md
