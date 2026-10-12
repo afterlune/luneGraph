@@ -109,7 +109,7 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inputs := []graph.ResumeInput{{InvocationID: waiting.ID, Payload: []byte("6")}}
+	inputs := []graph.ResumeInput{{InvocationID: waiting.ID, CallID: waiting.CallID, Payload: []byte("6")}}
 	_, completed, err := recoveredRunner.Recover(ctx, runID, inputs, store, graph.Options{})
 	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 10 {
 		t.Fatalf("recover subgraph run = %+v, %v", completed, err)

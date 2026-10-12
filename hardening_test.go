@@ -183,7 +183,7 @@ func TestContinuationPanics(t *testing.T) {
 				t.Fatal(err)
 			}
 			var observed panicRecorder
-			outExecution, out, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("x")}}, nil, graph.Options{Observer: &observed})
+			outExecution, out, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID, Payload: []byte("x")}}, nil, graph.Options{Observer: &observed})
 			if panicPhase == "decode" {
 				var panicErr *graph.PanicError
 				if !errors.As(err, &panicErr) || out.Header.Revision != first.Header.Revision || mustCheckpoint(outExecution).Invocations[0].Status != graph.InvocationWaiting {
@@ -218,7 +218,7 @@ func TestStoreCheckpointIsAuthoritative(t *testing.T) {
 	forged.Invocations = append([]graph.Invocation[int](nil), forged.Invocations...)
 	forged.Invocations[0].State = 900
 	forged.Invocations[0].Node = "bogus"
-	_, out, err := r.Resume(context.Background(), forged, []graph.ResumeInput{{InvocationID: "i1"}}, store, graph.Options{})
+	_, out, err := r.Resume(context.Background(), forged, []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID}}, store, graph.Options{})
 	if err != nil || out.Final == nil || *out.Final != 5 {
 		t.Fatalf("authoritative store = %+v, %v", out, err)
 	}

@@ -92,8 +92,12 @@ completion is promised.
 
 ## Waiting, interruption and cancellation
 
-ResumeInput addresses a waiting invocation. Inputs are validated and decoded
-before any Apply; duplicate/invalid addresses reject the batch. Decode failure
+ResumeInput addresses a specific wait with InvocationID and its original
+waiting CallID. Both are required. An empty/mismatched CallID, duplicate
+invocation, or unknown/non-waiting address returns ErrInvalidResumeInput
+(inspect with errors.Is) and StatusFailed without a terminal Failure.
+Inputs are validated and decoded before any Apply; invalid identities reject
+the batch without applying or committing any input. Decode failure
 leaves it unchanged. Inputs then commit one at a time. A later failure or
 interruption preserves the accepted prefix. Resubmit only inputs whose original
 waiting CallID remains pending in the authoritative checkpoint.
@@ -105,6 +109,10 @@ invocation and that original CallID. Keep unmatched records for application
 reconciliation: a path may have advanced, failed or been removed, so a mismatch
 alone is not an acknowledgement that this particular payload succeeded. Do not
 rebind an old input to a new waiting CallID at the same InvocationID.
+Pass that original waiting CallID in ResumeInput.CallID. Identity checking does
+not acknowledge successful delivery, deduplicate external effects, or grant a
+lease; concurrent recoveries can still execute the same Apply before one loses
+its revision check.
 
 The [executable partial-input example](../resume_example_test.go) submits the
 matching records with Resume and the loaded checkpoint as its revision reference.

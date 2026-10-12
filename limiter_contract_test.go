@@ -72,7 +72,7 @@ func TestSharedLimiterSynchronousDependencyContract(t *testing.T) {
 					var result graph.Result[int]
 					var err error
 					if role == "apply" {
-						_, result, err = outer.Resume(ctx, waiting, []graph.ResumeInput{{InvocationID: waiting.Invocations[0].ID, Payload: []byte("1")}}, nil, opts)
+						_, result, err = outer.Resume(ctx, waiting, []graph.ResumeInput{{InvocationID: waiting.Invocations[0].ID, CallID: waiting.Invocations[0].CallID, Payload: []byte("1")}}, nil, opts)
 					} else {
 						_, result, err = outer.Start(ctx, "outer", 0, nil, opts)
 					}

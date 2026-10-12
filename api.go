@@ -97,12 +97,13 @@ const (
 )
 
 var (
-	ErrConflict          = model.ErrConflict
-	ErrExecutionLimit    = model.ErrExecutionLimit
-	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
-	ErrRunCompleted      = model.ErrRunCompleted
-	ErrRunFailed         = model.ErrRunFailed
-	ErrInterrupted       = model.ErrInterrupted
+	ErrConflict           = model.ErrConflict
+	ErrExecutionLimit     = model.ErrExecutionLimit
+	ErrInvalidCheckpoint  = model.ErrInvalidCheckpoint
+	ErrInvalidResumeInput = model.ErrInvalidResumeInput
+	ErrRunCompleted       = model.ErrRunCompleted
+	ErrRunFailed          = model.ErrRunFailed
+	ErrInterrupted        = model.ErrInterrupted
 )
 
 // New creates a graph builder with the given entry vertex name.
@@ -114,8 +115,7 @@ func New[S any](entry string) *Graph[S] { return definition.New[S](entry) }
 func NewLimiter(capacity int) (*Limiter, error) { return limit.New(capacity) }
 
 // RegisterContinuation adapts a typed continuation handler to persisted bytes.
-// Apply receives a stable CallInfo that remains the same if recovery replays
-// the application.
+// Apply receives a CallInfo whose CallID remains stable across recovery replays.
 func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, CallInfo, S, P) (S, error)) error {
 	return definition.RegisterContinuation(g, key, decode, apply)
 }

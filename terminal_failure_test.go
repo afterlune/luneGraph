@@ -116,7 +116,7 @@ func TestContinuationExecutionFailureIsPersisted(t *testing.T) {
 	if err != nil || first.Status != graph.StatusWaiting || first.Header.Steps != 1 {
 		t.Fatalf("wait = %+v, %v", first, err)
 	}
-	_, failed, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: "i1"}}, store, graph.Options{})
+	_, failed, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID}}, store, graph.Options{})
 	if !errors.Is(err, boom) || failed.Status != graph.StatusFailed || failed.Header.Revision != first.Header.Revision+1 || failed.Header.Steps != first.Header.Steps || !failed.Header.Completed || failed.Header.Failure == nil || failed.Header.Failure.Node != "wait" {
 		t.Fatalf("apply failure = %+v, %v", failed, err)
 	}

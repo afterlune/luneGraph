@@ -172,7 +172,7 @@ func TestInterruptionDoesNotChangeOtherErrorBoundaries(t *testing.T) {
 				want = graph.StatusInterrupted
 			}
 			if kind == "decode" {
-				out, err = outExecution.Advance(ctx, []graph.ResumeInput{{InvocationID: mustCheckpoint(outExecution).Invocations[0].ID}}, graph.Options{})
+				out, err = outExecution.Advance(ctx, []graph.ResumeInput{{InvocationID: mustCheckpoint(outExecution).Invocations[0].ID, CallID: mustCheckpoint(outExecution).Invocations[0].CallID}}, graph.Options{})
 				want = graph.StatusWaiting
 			}
 			if err == nil || out.Status != want {
@@ -243,7 +243,7 @@ func TestCloneInterruptionMarkerAtResumeAndJoin(t *testing.T) {
 				if len(pending) != 2 {
 					t.Fatalf("waiting invocations=%+v", pending)
 				}
-				input = graph.ResumeInput{InvocationID: pending[0].InvocationID, Payload: []byte("1")}
+				input = graph.ResumeInput{InvocationID: pending[0].InvocationID, CallID: pending[0].CallID, Payload: []byte("1")}
 				armed.Store(true)
 				out, err = outExecution.Advance(context.Background(), []graph.ResumeInput{input}, opts)
 			}

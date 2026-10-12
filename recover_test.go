@@ -57,11 +57,11 @@ func TestRecoverWaitingRunAndCompletedResult(t *testing.T) {
 	}
 	runner := intRunner(t, g)
 	store := &countingLoadStore{Store: newMemoryStore(t)}
-	_, first, err := runner.Start(ctx, "waiting-recover", 2, store, graph.Options{})
+	firstExecution, first, err := runner.Start(ctx, "waiting-recover", 2, store, graph.Options{})
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	input := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("3")}}
+	input := []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID, Payload: []byte("3")}}
 	_, completed, err := runner.Recover(ctx, "waiting-recover", input, store, graph.Options{})
 	if err != nil || completed.Status != graph.StatusCompleted || completed.Header.Revision != 4 || completed.Final == nil || *completed.Final != 5 || store.loads != 1 || calls != 2 {
 		t.Fatalf("recovered = %+v, %v; loads=%d calls=%d", completed, err, store.loads, calls)

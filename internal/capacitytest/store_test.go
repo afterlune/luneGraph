@@ -42,10 +42,11 @@ func openStore(t testing.TB, kind string) graph.Store[state] {
 
 // Persisted slots retain only bookkeeping, not a second copy of user state.
 type slot struct {
-	id         string
-	round      int
-	revision   uint64
-	checkpoint graph.Checkpoint[state] // used only without a Store
+	id            string
+	waitingCallID string
+	round         int
+	revision      uint64
+	checkpoint    graph.Checkpoint[state] // used only without a Store
 }
 
 func population(t testing.TB, r *graph.Runner[state], store graph.Store[state], count int) []slot {
@@ -57,7 +58,7 @@ func population(t testing.TB, r *graph.Runner[state], store graph.Store[state], 
 		if err != nil || out.Status != graph.StatusWaiting || out.Header.Steps != 1 {
 			t.Fatalf("seed %s = %+v, %v", id, out, err)
 		}
-		slots[i] = slot{id: id, round: 1, revision: out.Header.Revision}
+		slots[i] = slot{id: id, round: 1, revision: out.Header.Revision, waitingCallID: outExecution.Pending()[0].CallID}
 		if store == nil {
 			slots[i].checkpoint = mustCheckpoint(outExecution)
 		}
@@ -66,7 +67,7 @@ func population(t testing.TB, r *graph.Runner[state], store graph.Store[state], 
 }
 
 func advance(ctx context.Context, r *graph.Runner[state], store graph.Store[state], s *slot) error {
-	input := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}
+	input := []graph.ResumeInput{{InvocationID: "i1", CallID: s.waitingCallID, Payload: []byte("1")}}
 	opts := graph.Options{MaxSteps: 2, MaxConcurrency: 1}
 	optsStore := store
 
@@ -81,7 +82,8 @@ func advance(ctx context.Context, r *graph.Runner[state], store graph.Store[stat
 	if err != nil {
 		return err
 	}
-	value, stateErr := rootState(mustCheckpoint(outExecution))
+	position := mustCheckpoint(outExecution)
+	value, stateErr := rootState(position)
 	if stateErr != nil {
 		return stateErr
 	}
@@ -89,8 +91,9 @@ func advance(ctx context.Context, r *graph.Runner[state], store graph.Store[stat
 		return fmt.Errorf("advance %s mixed state or counters: %+v", s.id, out)
 	}
 	s.round, s.revision = value.Round, out.Header.Revision
+	s.waitingCallID = position.Invocations[0].CallID
 	if store == nil {
-		s.checkpoint = mustCheckpoint(outExecution)
+		s.checkpoint = position
 	}
 	return nil
 }

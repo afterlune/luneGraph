@@ -272,7 +272,7 @@ func TestSubgraphContinuationRecovers(t *testing.T) {
 		t.Fatalf("waiting invocation = %+v", invocation)
 	}
 
-	inputs := []graph.ResumeInput{{InvocationID: invocation.ID, Payload: []byte("6")}}
+	inputs := []graph.ResumeInput{{InvocationID: invocation.ID, CallID: invocation.CallID, Payload: []byte("6")}}
 	if _, _, err := runner.Resume(context.Background(), mustCheckpoint(pausedExecution), inputs, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("first resume error = %v", err)
 	}

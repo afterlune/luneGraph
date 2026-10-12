@@ -77,7 +77,7 @@ func runSequence(t testing.TB, parallel bool, kind string, data []byte, requireF
 		var inputs []graph.ResumeInput
 		for _, inv := range cp.Invocations {
 			if inv.Status == graph.InvocationWaiting {
-				inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("1")})
+				inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("1")})
 			}
 		}
 		gotExecution, got, callErr := r.Recover(callCtx, "model-run", inputs, optsStore, opts)

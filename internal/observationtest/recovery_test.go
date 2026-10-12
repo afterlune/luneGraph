@@ -47,7 +47,7 @@ func TestMountedContinuationAndTerminalRecoveryEvents(t *testing.T) {
 	if len(waitNode) != 1 || waitNode[0].Node != "worker/wait" || waitNode[0].Action != graph.ActionWait {
 		t.Fatalf("wait node = %+v", waitNode)
 	}
-	inputs := []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, Payload: []byte("3")}}
+	inputs := []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, CallID: mustCheckpoint(firstExecution).Invocations[0].CallID, Payload: []byte("3")}}
 	_, result, err := r.Recover(context.Background(), "mounted", inputs, optsStore, opts)
 	if err != nil || result.Status != graph.StatusCompleted || *result.Final != 3 {
 		t.Fatalf("recover = %+v, %v", result, err)
@@ -145,7 +145,7 @@ func TestDecodeErrorAndMissingLoadEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, result, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, Payload: []byte("invalid")}}, store, graph.Options{Observer: log})
+	_, result, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: mustCheckpoint(firstExecution).Invocations[0].ID, CallID: mustCheckpoint(firstExecution).Invocations[0].CallID, Payload: []byte("invalid")}}, store, graph.Options{Observer: log})
 	if err == nil || result.Status != graph.StatusWaiting || result.Header.Revision != first.Header.Revision {
 		t.Fatalf("decode outcome = %+v, %v", result, err)
 	}

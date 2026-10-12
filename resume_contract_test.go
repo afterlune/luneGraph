@@ -70,7 +70,7 @@ func TestPendingResumeInputExample(t *testing.T) {
 				if err != nil || before.Revision != seed.Header.Revision+1 {
 					t.Fatalf("authoritative prefix=%+v err=%v", before, err)
 				}
-				if _, _, err := r.Recover(ctx, "prefix", batch, optsStore, opts); err == nil {
+				if _, _, err := r.Recover(ctx, "prefix", batch, optsStore, opts); !errors.Is(err, graph.ErrInvalidResumeInput) {
 					t.Fatal("original batch with an advanced address was accepted")
 				}
 				after, err := store.Load(ctx, "prefix")

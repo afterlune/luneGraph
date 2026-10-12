@@ -7,6 +7,9 @@ import (
 
 var ErrConflict = errors.New("checkpoint revision conflict")
 var ErrInvalidCheckpoint = errors.New("invalid checkpoint")
+
+// ErrInvalidResumeInput reports a duplicate or non-matching waiting identity.
+var ErrInvalidResumeInput = errors.New("invalid resume input")
 var ErrExecutionLimit = errors.New("execution counter exhausted")
 
 // ErrRunCompleted reports that Recover was given inputs for a terminal run.

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Require ResumeInput.CallID to match the original waiting callback identity.
+  Empty/mismatched CallIDs, duplicate invocation inputs and unknown/non-waiting
+  addresses return ErrInvalidResumeInput (errors.Is) before any Apply or input
+  commit. This is a breaking input-contract change: migrate producers and
+  application input records using Pending() or the original checkpoint. Do not
+  rebind old payloads to a newer waiting CallID. Checkpoint format 4 and SQLite
+  schema 2 remain unchanged; at-least-once and partial-input commits still apply.
+- Preserve nil interface and typed nil continuation payloads through the typed
+  registration adapter, including JSON null. Clarify that CallID, rather than
+  all CallInfo fields, is stable across replay.
+
 - Add executable contract examples and regressions for partial resume input
   reconciliation, nested mutable state cloning and shared Limiter dependencies.
 - Add live `Execution` handles for repeated in-process advances. Start, Resume,

@@ -61,7 +61,7 @@ func TestFanoutIDReservationDoesNotWrap(t *testing.T) {
 	}
 	limited := mustCheckpoint(firstExecution)
 	limited.NextID = math.MaxUint64 - 1
-	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, nil, graph.Options{})
+	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1", CallID: limited.Invocations[0].CallID}}, nil, graph.Options{})
 	if !errors.Is(err, graph.ErrExecutionLimit) || out.Status != graph.StatusFailed || out.Header.Revision != limited.Revision || out.Header.NextID != limited.NextID {
 		t.Fatalf("ID limit = %+v, %v", out, err)
 	}
@@ -145,7 +145,7 @@ func TestResumeInputsRejectExhaustedRevisionBeforeDecode(t *testing.T) {
 	}
 	limited := mustCheckpoint(firstExecution)
 	limited.Revision = math.MaxUint64
-	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1"}}, nil, graph.Options{})
+	_, out, err := r.Resume(context.Background(), limited, []graph.ResumeInput{{InvocationID: "i1", CallID: limited.Invocations[0].CallID}}, nil, graph.Options{})
 	if !errors.Is(err, graph.ErrExecutionLimit) || decoded != 0 || out.Header.Revision != limited.Revision {
 		t.Fatalf("revision limit = %+v, %v", out, err)
 	}

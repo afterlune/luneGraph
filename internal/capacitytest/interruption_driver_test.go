@@ -23,7 +23,7 @@ func (s *interruptionSlot) remember(cp graph.Checkpoint[state], persisted bool) 
 	reference := graph.Checkpoint[state]{RunID: cp.RunID, Revision: cp.Revision, Steps: cp.Steps}
 	for _, inv := range cp.Invocations {
 		if inv.Status == graph.InvocationWaiting {
-			reference.Invocations = append(reference.Invocations, graph.Invocation[state]{ID: inv.ID, Status: inv.Status})
+			reference.Invocations = append(reference.Invocations, graph.Invocation[state]{ID: inv.ID, CallID: inv.CallID, Status: inv.Status})
 		}
 	}
 	s.checkpoint = reference
@@ -33,7 +33,7 @@ func interruptionInputs(cp graph.Checkpoint[state]) []graph.ResumeInput {
 	var inputs []graph.ResumeInput
 	for _, inv := range cp.Invocations {
 		if inv.Status == graph.InvocationWaiting {
-			inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("1")})
+			inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("1")})
 		}
 	}
 	return inputs

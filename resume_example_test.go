@@ -40,7 +40,7 @@ func pendingResumeInputs[S any](position graph.Checkpoint[S], saved []recordedRe
 	for _, input := range saved {
 		callID, ok := waiting[input.InvocationID]
 		if input.RunID == position.RunID && ok && callID == input.WaitingCallID {
-			matching = append(matching, graph.ResumeInput{InvocationID: input.InvocationID, Payload: input.Payload})
+			matching = append(matching, graph.ResumeInput{InvocationID: input.InvocationID, CallID: input.WaitingCallID, Payload: input.Payload})
 		} else {
 			review = append(review, input)
 		}

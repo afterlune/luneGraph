@@ -102,7 +102,7 @@ func TestContinuationCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 	if err != nil || first.Status != graph.StatusWaiting {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
-	inputs := []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("3")}}
+	inputs := []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID, Payload: []byte("3")}}
 	if _, _, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), inputs, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("first resume error = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestCallInfoMetadata(t *testing.T) {
 		t.Fatalf("start failed: %+v, %v", res, err)
 	}
 	res, err = resExecution.Advance(context.Background(), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`5`)},
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, CallID: mustCheckpoint(resExecution).Invocations[0].CallID, Payload: []byte(`5`)},
 	}, graph.Options{MaxConcurrency: 1})
 	if err != nil || res.Status != graph.StatusCompleted || res.Final == nil || *res.Final != 10+1+10+2+5 {
 		t.Fatalf("resume failed: %+v, %v", res, err)

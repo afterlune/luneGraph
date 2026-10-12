@@ -71,17 +71,17 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 		if result.Header.Completed {
 			return graph.ErrRunCompleted
 		}
-		var id string
+		var id, callID string
 		for _, waiting := range execution.Pending() {
 			if waiting.Continuation == "value" {
-				id = waiting.InvocationID
+				id, callID = waiting.InvocationID, waiting.CallID
 				break
 			}
 		}
 		if id == "" {
 			return fmt.Errorf("run %q has no waiting value invocation", *runID)
 		}
-		result, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: id, Payload: []byte(strconv.Itoa(value))}}, opts)
+		result, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: id, CallID: callID, Payload: []byte(strconv.Itoa(value))}}, opts)
 	}
 	if err != nil {
 		return err

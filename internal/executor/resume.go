@@ -88,12 +88,15 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 	seen := make(map[string]bool)
 	for _, input := range inputs {
 		if seen[input.InvocationID] {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("duplicate resume input for %q", input.InvocationID))
+			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: duplicate input for %q", ErrInvalidResumeInput, input.InvocationID))
 		}
 		seen[input.InvocationID] = true
 		inv, ok := l.invocation(input.InvocationID)
 		if !ok || inv.Status != InvocationWaiting {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("invocation %q is not waiting", input.InvocationID))
+			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is not waiting", ErrInvalidResumeInput, input.InvocationID))
+		}
+		if input.CallID == "" || input.CallID != inv.CallID {
+			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: waiting call does not match invocation %q", ErrInvalidResumeInput, input.InvocationID))
 		}
 		value, err := r.observedDecode(ctx, obs, l.header.Revision, inv, input.Payload)
 		if err != nil {
@@ -107,7 +110,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 		}
 		inv, ok := l.invocation(input.id)
 		if !ok || inv.Status != InvocationWaiting {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("invocation %q is no longer waiting", input.id))
+			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is no longer waiting", ErrInvalidResumeInput, input.id))
 		}
 		state, err := r.cloneState(inv.State, inv.ID)
 		if err != nil {

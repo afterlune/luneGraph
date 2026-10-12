@@ -136,7 +136,7 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	_, last, err := runner.Recover(ctx, "waiting", []graph.ResumeInput{{InvocationID: "i1"}}, store, graph.Options{})
+	_, last, err := runner.Recover(ctx, "waiting", []graph.ResumeInput{{InvocationID: "i1", CallID: firstExecution.Pending()[0].CallID}}, store, graph.Options{})
 	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 5 {
 		t.Fatalf("recover after reopen = %+v, %v", last, err)
 	}

@@ -59,12 +59,13 @@ const (
 )
 
 var (
-	ErrConflict          = model.ErrConflict
-	ErrExecutionLimit    = model.ErrExecutionLimit
-	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
-	ErrRunCompleted      = model.ErrRunCompleted
-	ErrRunFailed         = model.ErrRunFailed
-	ErrInterrupted       = model.ErrInterrupted
+	ErrConflict           = model.ErrConflict
+	ErrExecutionLimit     = model.ErrExecutionLimit
+	ErrInvalidCheckpoint  = model.ErrInvalidCheckpoint
+	ErrInvalidResumeInput = model.ErrInvalidResumeInput
+	ErrRunCompleted       = model.ErrRunCompleted
+	ErrRunFailed          = model.ErrRunFailed
+	ErrInterrupted        = model.ErrInterrupted
 )
 
 func validName(name string) bool         { return model.ValidName(name) }

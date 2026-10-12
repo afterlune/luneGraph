@@ -138,7 +138,7 @@ func TestSharedLimiterAcrossCallbackKindsAndRunners(t *testing.T) {
 						var out graph.Result[int]
 						var err error
 						if role == "apply" {
-							_, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, nil, opts)
+							_, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", CallID: cp.Invocations[0].CallID, Payload: []byte("1")}}, nil, opts)
 						} else {
 							_, out, err = r.Start(ctx, id, 1, nil, opts)
 						}
@@ -217,7 +217,7 @@ func TestLimiterWaitCancellationPreservesPosition(t *testing.T) {
 				var out graph.Result[int]
 				var err error
 				if role == "apply" {
-					outExecution, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, nil, opts)
+					outExecution, out, err = r.Resume(ctx, cp, []graph.ResumeInput{{InvocationID: "i1", CallID: cp.Invocations[0].CallID, Payload: []byte("1")}}, nil, opts)
 				} else if role == "join" {
 					outExecution, out, err = r.Resume(ctx, cp, nil, nil, opts)
 				} else {
@@ -282,7 +282,7 @@ func TestLimiterReleasesAfterCallbackFailures(t *testing.T) {
 					if startErr != nil {
 						t.Fatal(startErr)
 					}
-					out, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, opts)
+					out, err = execution.Advance(ctx, []graph.ResumeInput{{InvocationID: "i1", CallID: execution.Pending()[0].CallID, Payload: []byte("1")}}, opts)
 				} else {
 					_, out, err = r.Start(ctx, "first", 0, nil, opts)
 				}

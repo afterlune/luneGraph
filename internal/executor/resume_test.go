@@ -54,7 +54,7 @@ func TestResumeWaitingInvocationAndDecodeBoundaries(t *testing.T) {
 		t.Fatalf("waiting invocation = %+v", inv)
 	}
 
-	decoded := []ResumeInput{{InvocationID: inv.ID, Payload: []byte("bad")}}
+	decoded := []ResumeInput{{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("bad")}}
 	resultExecution, result, err := runner.Resume(context.Background(), checkpoint, decoded, nil, Options{})
 	if err == nil || result.Status != StatusWaiting || result.Header.Revision != checkpoint.Revision || mustCheckpoint(resultExecution).Invocations[0].State != 7 {
 		t.Fatalf("decode failure changed checkpoint: %+v, %v", result, err)
@@ -70,7 +70,7 @@ func TestResumeWaitingInvocationAndDecodeBoundaries(t *testing.T) {
 			}
 		})
 	}
-	_, result, err = runner.Resume(context.Background(), checkpoint, []ResumeInput{{InvocationID: inv.ID, Payload: []byte("5")}}, nil, Options{})
+	_, result, err = runner.Resume(context.Background(), checkpoint, []ResumeInput{{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("5")}}, nil, Options{})
 	if err != nil || result.Status != StatusCompleted || result.Final == nil || *result.Final != 12 {
 		t.Fatalf("resumed execution = %+v, %v", result, err)
 	}
@@ -79,7 +79,7 @@ func TestResumeWaitingInvocationAndDecodeBoundaries(t *testing.T) {
 func TestResumeValidationStoreAndCommitErrors(t *testing.T) {
 	runner := executorTestWaitingRunner(t, nil)
 	checkpoint := executorTestWaitingCheckpoint(t, runner)
-	input := []ResumeInput{{InvocationID: checkpoint.Invocations[0].ID, Payload: []byte("1")}}
+	input := []ResumeInput{{InvocationID: checkpoint.Invocations[0].ID, CallID: checkpoint.Invocations[0].CallID, Payload: []byte("1")}}
 
 	if _, _, err := runner.Resume(nil, checkpoint, nil, nil, Options{}); err == nil {
 		t.Fatal("Resume accepted nil context")
@@ -133,7 +133,7 @@ func TestResumeInputApplyFailureAndRevisionLimit(t *testing.T) {
 	boom := errors.New("continuation failed")
 	runner := executorTestWaitingRunner(t, func(context.Context, CallInfo, int, int) (int, error) { return 0, boom })
 	checkpoint := executorTestWaitingCheckpoint(t, runner)
-	input := []ResumeInput{{InvocationID: checkpoint.Invocations[0].ID, Payload: []byte("3")}}
+	input := []ResumeInput{{InvocationID: checkpoint.Invocations[0].ID, CallID: checkpoint.Invocations[0].CallID, Payload: []byte("3")}}
 	_, local, err := runner.Resume(context.Background(), checkpoint, input, nil, Options{})
 	if err != nil || local.Status != StatusCompletedWithFailures || (!local.Header.HadLocalFailures || local.Header.Failure != nil) {
 		t.Fatalf("local continuation failure = %+v, %v", local, err)
@@ -227,7 +227,7 @@ func TestRecoverValidationAndTerminalCheckpoints(t *testing.T) {
 	if err != nil || result.Status != StatusCompleted || result.Header.Revision != completed.Header.Revision {
 		t.Fatalf("completed recovery = %+v, %v", result, err)
 	}
-	if _, _, err := completedRunner.Recover(context.Background(), "terminal-run", []ResumeInput{{InvocationID: "i1"}}, store, Options{}); !errors.Is(err, ErrRunCompleted) {
+	if _, _, err := completedRunner.Recover(context.Background(), "terminal-run", []ResumeInput{{InvocationID: "i1", CallID: "unused"}}, store, Options{}); !errors.Is(err, ErrRunCompleted) {
 		t.Fatalf("completed run accepted inputs: %v", err)
 	}
 
@@ -254,7 +254,7 @@ func TestRecoverResumesActiveCheckpoint(t *testing.T) {
 	initial := executorTestWaitingCheckpoint(t, runner)
 	store := newExecutorTestStore()
 	store.values[initial.RunID] = copyCheckpoint(initial)
-	_, result, err := runner.Recover(context.Background(), initial.RunID, []ResumeInput{{InvocationID: initial.Invocations[0].ID, Payload: []byte("2")}}, store, Options{})
+	_, result, err := runner.Recover(context.Background(), initial.RunID, []ResumeInput{{InvocationID: initial.Invocations[0].ID, CallID: initial.Invocations[0].CallID, Payload: []byte("2")}}, store, Options{})
 	if err != nil || result.Status != StatusCompleted || result.Final == nil || *result.Final != 9 {
 		t.Fatalf("active recovery = %+v, %v", result, err)
 	}

@@ -204,17 +204,19 @@ func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
 	ids := map[string]string{}
+	callIDs := map[string]string{}
 	for _, inv := range mustCheckpoint(firstExecution).Invocations {
 		if inv.Status == graph.InvocationWaiting {
 			ids[inv.Node] = inv.ID
+			callIDs[inv.Node] = inv.CallID
 		}
 	}
-	bad := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("bad")}}
+	bad := []graph.ResumeInput{{InvocationID: ids["a"], CallID: callIDs["a"], Payload: []byte("3")}, {InvocationID: ids["b"], CallID: callIDs["b"], Payload: []byte("bad")}}
 	_, rejected, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), bad, optsStore, opts)
 	if err == nil || rejected.Header.Revision != first.Header.Revision || applyCalls != 0 {
 		t.Fatalf("predecode rejection = %+v, %v", rejected, err)
 	}
-	inputs := []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}, {InvocationID: ids["b"], Payload: []byte("4")}}
+	inputs := []graph.ResumeInput{{InvocationID: ids["a"], CallID: callIDs["a"], Payload: []byte("3")}, {InvocationID: ids["b"], CallID: callIDs["b"], Payload: []byte("4")}}
 	_, partial, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), inputs, optsStore, opts)
 	if !errors.Is(err, boom) || partial.Header.Revision != first.Header.Revision+2 || !partial.Header.Completed || partial.Header.Failure == nil || applyCalls != 2 {
 		t.Fatalf("partial resume = %+v, %v", partial, err)

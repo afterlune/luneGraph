@@ -66,7 +66,7 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 			if err != nil || out.Status != graph.StatusBudget || len(mustCheckpoint(outExecution).Invocations) != 17 {
 				t.Fatalf("fork: %+v, %v", out, err)
 			}
-			var waitingID string
+			var waitingID, waitingCallID string
 			for step := range 17 {
 				outExecution, out, err = r.Recover(context.Background(), "rotation", nil, optsStore, opts)
 				want := step
@@ -78,14 +78,14 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 				}
 				for _, inv := range mustCheckpoint(outExecution).Invocations {
 					if inv.Status == graph.InvocationWaiting {
-						waitingID = inv.ID
+						waitingID, waitingCallID = inv.ID, inv.CallID
 					}
 				}
 			}
 			if out.Status != graph.StatusWaiting || waitingID == "" {
 				t.Fatalf("expected one waiting branch: %+v", out)
 			}
-			outExecution, out, err = r.Recover(context.Background(), "rotation", []graph.ResumeInput{{InvocationID: waitingID, Payload: []byte("1")}}, optsStore, opts)
+			outExecution, out, err = r.Recover(context.Background(), "rotation", []graph.ResumeInput{{InvocationID: waitingID, CallID: waitingCallID, Payload: []byte("1")}}, optsStore, opts)
 			if err != nil || out.Status != graph.StatusCompleted || len(visits) != 18 || visits[17].branch != 1 || len(mustCheckpoint(outExecution).Invocations) != 0 || len(mustCheckpoint(outExecution).Groups) != 0 {
 				t.Fatalf("continued branch: %+v visits=%v, %v", out, visits, err)
 			}

@@ -74,9 +74,11 @@ func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	ids := make(map[string]string)
+	callIDs := map[string]string{}
 	for _, inv := range mustCheckpoint(firstExecution).Invocations {
 		if inv.Status == graph.InvocationWaiting {
 			ids[inv.Node] = inv.ID
+			callIDs[inv.Node] = inv.CallID
 		}
 	}
 	if len(ids) != 2 {
@@ -88,11 +90,11 @@ func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 	if _, _, err := r.Resume(context.Background(), corrupt, nil, nil, graph.Options{}); err == nil {
 		t.Fatal("invalid group checkpoint accepted")
 	}
-	middleExecution, middle, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("3")}}, nil, graph.Options{})
+	middleExecution, middle, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: ids["a"], CallID: callIDs["a"], Payload: []byte("3")}}, nil, graph.Options{})
 	if err != nil || middle.Status != graph.StatusWaiting {
 		t.Fatalf("middle = %+v, %v", middle, err)
 	}
-	_, last, err := r.Resume(context.Background(), mustCheckpoint(middleExecution), []graph.ResumeInput{{InvocationID: ids["b"], Payload: []byte("4")}}, nil, graph.Options{})
+	_, last, err := r.Resume(context.Background(), mustCheckpoint(middleExecution), []graph.ResumeInput{{InvocationID: ids["b"], CallID: callIDs["b"], Payload: []byte("4")}}, nil, graph.Options{})
 	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 7 {
 		t.Fatalf("last = %+v, %v", last, err)
 	}

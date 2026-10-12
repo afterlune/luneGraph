@@ -85,6 +85,49 @@ capacity test. There is no cross-machine threshold.
 
 ## Recent format-4 comparison
 
+### Continuation identity and nil-input changes
+
+Compared base `721e087` with the continuation fix and required ResumeInput.CallID
+on Windows/amd64, Go 1.26.5, AMD Ryzen 7 6800H. Runs were serial on the same
+machine with CPU 1. Values below are median `ns/op / B/op / allocs/op`:
+
+| Workload | Base | Changed |
+| --- | ---: | ---: |
+| Scalar continuation adapter | 10.94 / 0 / 0 | 10.69 / 0 / 0 |
+| Three-int struct adapter | 32.96 / 24 / 1 | 34.15 / 24 / 1 |
+| Nil-interface adapter | Unsupported | 48.16 / 16 / 1 |
+| 128 paused runs, Memory advance | 22,557 / 11,286 / 73 | 21,929 / 11,286 / 73 |
+| 128 paused runs, SQLite advance | 5,039,992 / 24,145 / 459 | 4,854,618 / 24,139 / 459 |
+
+Adapter measurements used three 300 ms samples. The adapter benchmark file was
+also run against the base implementation for scalar/struct cases; nil interface
+inputs previously panicked and have no valid latency baseline. Wrapping the
+decoded value preserves its generic type and nil semantics; an interface wrapper
+uses a 16-byte allocation here. Scalar and struct allocation counts are unchanged.
+
+Paused advances used 150 ms samples. SQLite used three samples. An initial Memory
+comparison measured 20,491 versus 24,496 ns/op; isolated five-sample repeats on
+the changed tree and a clean base checkout produced the Memory medians above,
+with overlapping ranges (base 20,811–24,860; changed 20,535–24,353 ns/op).
+These samples do not establish a repeatable latency regression or a throughput
+improvement. Recovery allocation counts stayed unchanged. The fixture now keeps
+each run's original waiting CallID as application bookkeeping and supplies it on
+resume; this does not add a Store read.
+
+Reproduce the changed measurements with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkContinuationAdapter$' -benchmem -benchtime=300ms -count=3 -cpu 1 ./internal/definition
+go test -run '^$' -bench '^BenchmarkCapacityPaused$/store=memory/runs=128/mode=advance$' -benchmem -benchtime=150ms -count=5 -cpu 1 ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkCapacityPaused$/store=sqlite/runs=128/mode=advance$' -benchmem -benchtime=150ms -count=3 -cpu 1 ./internal/capacitytest
+```
+
+The adapter benchmark isolates Decode/Apply adaptation. The paused workload
+includes recovery, state copying and two commits; SQLite also includes durable
+flushes. Neither is an application production-capacity claim.
+
+### Earlier format-4 comparison
+
 The comparison below uses baseline `a3ad161` and format-4 candidate `ab2c8e0` on
 Windows/amd64, Go 1.27.0, AMD Ryzen 7 8845H. Baselines used three 300 ms samples.
 Candidate sequential and non-persistent fan-out cases used five samples; durable

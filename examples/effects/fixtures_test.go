@@ -49,7 +49,7 @@ func assertEffects(t *testing.T, path string, wantValue, wantReceipts int64) {
 func inputsFor(cp graph.Checkpoint[state]) []graph.ResumeInput {
 	for _, inv := range cp.Invocations {
 		if inv.Status == graph.InvocationWaiting {
-			return []graph.ResumeInput{{InvocationID: inv.ID, Payload: []byte("3")}}
+			return []graph.ResumeInput{{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("3")}}
 		}
 	}
 	return nil

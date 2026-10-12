@@ -73,7 +73,7 @@ func TestRepeatedBudgetWaitAndRecovery(t *testing.T) {
 				}
 				var payloads []graph.ResumeInput
 				if out.Status == graph.StatusWaiting {
-					payloads = []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}
+					payloads = []graph.ResumeInput{{InvocationID: "i1", CallID: outExecution.Pending()[0].CallID, Payload: []byte("1")}}
 					inputs++
 				}
 				outExecution, out, err = r.Recover(ctx, "loop", payloads, optsStore, opts)

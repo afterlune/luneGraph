@@ -188,11 +188,11 @@ func TestPauseResumeAndPayloadValidation(t *testing.T) {
 		t.Fatalf("start = %+v, %v", first, err)
 	}
 	id := mustCheckpoint(firstExecution).Invocations[0].ID
-	badExecution, bad, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, Payload: []byte("bad")}}, nil, graph.Options{})
+	badExecution, bad, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, CallID: firstExecution.Pending()[0].CallID, Payload: []byte("bad")}}, nil, graph.Options{})
 	if err == nil || bad.Header.Revision != first.Header.Revision || mustCheckpoint(badExecution).Invocations[0].Status != graph.InvocationWaiting {
 		t.Fatalf("bad resume = %+v, %v", bad, err)
 	}
-	_, last, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, Payload: []byte("5")}}, nil, graph.Options{})
+	_, last, err := r.Resume(context.Background(), mustCheckpoint(firstExecution), []graph.ResumeInput{{InvocationID: id, CallID: firstExecution.Pending()[0].CallID, Payload: []byte("5")}}, nil, graph.Options{})
 	if err != nil || last.Status != graph.StatusCompleted || last.Final == nil || *last.Final != 9 {
 		t.Fatalf("resume = %+v, %v", last, err)
 	}
@@ -391,7 +391,7 @@ func TestRegisterJSONContinuation(t *testing.T) {
 		t.Fatalf("start = %+v, %v", res, err)
 	}
 	res, err = resExecution.Advance(context.Background(), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`{"delta": 5}`)},
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, CallID: mustCheckpoint(resExecution).Invocations[0].CallID, Payload: []byte(`{"delta": 5}`)},
 	}, graph.Options{})
 	if err != nil || res.Status != graph.StatusCompleted || res.Final == nil || *res.Final != 15 {
 		t.Fatalf("resume = %+v, %v", res, err)
@@ -430,14 +430,14 @@ func TestRunnerFork(t *testing.T) {
 	}
 	// Advance original with +100
 	_, origFinal, err := r.Resume(context.Background(), mustCheckpoint(resExecution), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, Payload: []byte(`100`)},
+		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, CallID: mustCheckpoint(resExecution).Invocations[0].CallID, Payload: []byte(`100`)},
 	}, store, graph.Options{})
 	if err != nil || origFinal.Status != graph.StatusCompleted || *origFinal.Final != 111 {
 		t.Fatalf("orig final = %+v, %v", origFinal, err)
 	}
 	// Advance forked with +500
 	_, forkFinal, err := r.Resume(context.Background(), mustCheckpoint(forkedResExecution), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(forkedResExecution).Invocations[0].ID, Payload: []byte(`500`)},
+		{InvocationID: mustCheckpoint(forkedResExecution).Invocations[0].ID, CallID: mustCheckpoint(forkedResExecution).Invocations[0].CallID, Payload: []byte(`500`)},
 	}, store, graph.Options{})
 	if err != nil || forkFinal.Status != graph.StatusCompleted || *forkFinal.Final != 511 {
 		t.Fatalf("fork final = %+v, %v", forkFinal, err)

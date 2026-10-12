@@ -54,7 +54,7 @@ func TestContinuationInterruptionPreservesCommittedPrefix(t *testing.T) {
 			var pendingID string
 			for _, inv := range mustCheckpoint(firstExecution).Invocations {
 				if inv.Status == graph.InvocationWaiting {
-					inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
+					inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("2")})
 					if inv.Node == "b" {
 						pendingID = inv.CallID
 					}
@@ -68,7 +68,7 @@ func TestContinuationInterruptionPreservesCommittedPrefix(t *testing.T) {
 			var remaining []graph.ResumeInput
 			for _, inv := range mustCheckpoint(outExecution).Invocations {
 				if inv.Status == graph.InvocationWaiting {
-					remaining = append(remaining, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
+					remaining = append(remaining, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("2")})
 					if inv.Node == "b" && (inv.CallID != pendingID || inv.State != 0) {
 						t.Fatalf("pending=%+v", inv)
 					}
@@ -175,7 +175,7 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 						var inputs []graph.ResumeInput
 						for _, inv := range mustCheckpoint(outExecution).Invocations {
 							if inv.Status == graph.InvocationWaiting {
-								inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
+								inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("2")})
 							}
 						}
 						out, err = outExecution.Advance(context.Background(), inputs, opts)
@@ -190,7 +190,7 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 					var remaining []graph.ResumeInput
 					for _, inv := range saved.Invocations {
 						if inv.Status == graph.InvocationWaiting {
-							remaining = append(remaining, graph.ResumeInput{InvocationID: inv.ID, Payload: []byte("2")})
+							remaining = append(remaining, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: []byte("2")})
 						}
 					}
 					lastTrigger := triggerCalls[len(triggerCalls)-1]

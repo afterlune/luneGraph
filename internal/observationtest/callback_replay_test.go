@@ -27,7 +27,7 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 				if seedErr != nil {
 					t.Fatal(seedErr)
 				}
-				inputs = []graph.ResumeInput{{InvocationID: mustCheckpoint(seedExecution).Invocations[0].ID, Payload: []byte("3")}}
+				inputs = []graph.ResumeInput{{InvocationID: mustCheckpoint(seedExecution).Invocations[0].ID, CallID: mustCheckpoint(seedExecution).Invocations[0].CallID, Payload: []byte("3")}}
 				_, first, err = r.Resume(context.Background(), mustCheckpoint(seedExecution), inputs, optsStore, opts)
 				checkCall(t, log.snapshot(), graph.OperationResume, first, err)
 			} else {

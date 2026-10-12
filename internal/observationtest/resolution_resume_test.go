@@ -121,7 +121,7 @@ func TestResolvedApplyInputPrefix(t *testing.T) {
 			if len(inputs) == 1 {
 				payload = []byte("2")
 			}
-			inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, Payload: payload})
+			inputs = append(inputs, graph.ResumeInput{InvocationID: inv.ID, CallID: inv.CallID, Payload: payload})
 		}
 	}
 	if len(inputs) != 2 {

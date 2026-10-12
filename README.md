@@ -94,10 +94,31 @@ paths. Keep large content externally and store references in S.
 
 RegisterContinuation adapts a typed payload decoder and handler to persisted
 bytes. RegisterJSONContinuation uses JSON. Wait names that continuation.
-ResumeInput identifies a waiting invocation; all inputs decode before any Apply,
-then accepted inputs commit individually. A later error preserves the accepted
+Nil interface payloads and typed nil values retain their decoded Go semantics.
+ResumeInput identifies a specific wait using InvocationID and its original
+waiting CallID; both fields are required. Empty or mismatched CallIDs, duplicate
+invocations and non-waiting addresses return ErrInvalidResumeInput (check with
+errors.Is) with StatusFailed, without an execution-level Failure or an input
+commit. All inputs decode before any Apply; accepted inputs then commit
+individually. A later error preserves the accepted
 prefix. Keep input outside the runtime until the application has reconciled its
 original waiting identity against authoritative state.
+
+Capture the identity when the input is created, and reuse that identity on retry:
+
+```go
+waiting := execution.Pending()[0] // Select the intended waiting invocation.
+input := graph.ResumeInput{
+    InvocationID: waiting.InvocationID,
+    CallID: waiting.CallID,
+    Payload: payload,
+}
+result, err := execution.Advance(ctx, []graph.ResumeInput{input}, graph.Options{})
+```
+
+Never replace an old input's CallID with the latest waiting CallID. Identity
+checks prevent rebinding to another wait; they do not grant exclusive execution
+or acknowledge external input delivery.
 
 The [runnable partial-input example](resume_example_test.go) records RunID,
 InvocationID, original waiting CallID and an owned payload. After an uncertain
@@ -251,3 +272,10 @@ and capture their `(execution, result, error)` returns. Read `result.Header` and
 `result.Final`; call `execution.Checkpoint()` for a full snapshot or reuse the
 handle with `execution.Advance(...)` for another in-process call. Custom Store
 implementations must add `LoadHeader` while leaving checkpoint encoding intact.
+
+Resume inputs now require `CallID`, obtained from the original waiting
+invocation in `Pending()` or a checkpoint. Update every input producer, including
+persisted application input records. Inputs without a matching CallID are
+rejected with `ErrInvalidResumeInput`; there is no optional legacy mode.
+Checkpoint format 4 and SQLite schema 2 are unchanged by this source and
+execution-contract update.

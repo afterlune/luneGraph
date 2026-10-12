@@ -100,7 +100,7 @@ func checkHistory(cp graph.Checkpoint[state], mode string, round int) error {
 func advanceHistory(ctx context.Context, r *graph.Runner[state], cp graph.Checkpoint[state], store graph.Store[state], opts graph.Options) (*graph.Execution[state], graph.Result[state], error) {
 	var inputs []graph.ResumeInput
 	if cp.Invocations[0].Status == graph.InvocationWaiting {
-		inputs = []graph.ResumeInput{{InvocationID: cp.Invocations[0].ID, Payload: []byte("1")}}
+		inputs = []graph.ResumeInput{{InvocationID: cp.Invocations[0].ID, CallID: cp.Invocations[0].CallID, Payload: []byte("1")}}
 	}
 	if store == nil {
 		return r.Resume(ctx, cp, inputs, nil, opts)

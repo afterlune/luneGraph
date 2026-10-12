@@ -70,16 +70,18 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 					t.Fatalf("seed: %+v %v", seed, err)
 				}
 				ids := map[string]string{}
+				callIDs := map[string]string{}
 				for _, inv := range mustCheckpoint(seedExecution).Invocations {
 					if inv.Status == graph.InvocationWaiting {
 						ids[inv.Node] = inv.ID
+						callIDs[inv.Node] = inv.CallID
 					}
 				}
 				if fault == "cas" {
 					store = &revisionConflictStore{Store: store, revision: seed.Header.Revision + 1}
 				}
 				armed = true
-				_, out, runErr := r.Recover(ctx, "batch", []graph.ResumeInput{{InvocationID: ids["a"], Payload: []byte("a")}, {InvocationID: ids["b"], Payload: []byte("b")}}, store, graph.Options{MaxConcurrency: 1})
+				_, out, runErr := r.Recover(ctx, "batch", []graph.ResumeInput{{InvocationID: ids["a"], CallID: callIDs["a"], Payload: []byte("a")}, {InvocationID: ids["b"], CallID: callIDs["b"], Payload: []byte("b")}}, store, graph.Options{MaxConcurrency: 1})
 				if fault == "join" {
 					if !errors.Is(runErr, boom) || !out.Header.Completed || out.Header.Revision != seed.Header.Revision+3 || out.Header.Failure == nil {
 						t.Fatalf("join failure: %+v %v", out, runErr)
@@ -107,7 +109,7 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 				armed = false
 				var replay []graph.ResumeInput
 				if fault == "cas" {
-					replay = []graph.ResumeInput{{InvocationID: ids["b"], Payload: []byte("b")}}
+					replay = []graph.ResumeInput{{InvocationID: ids["b"], CallID: callIDs["b"], Payload: []byte("b")}}
 				}
 				_, out, err = r.Recover(ctx, "batch", replay, store, graph.Options{MaxConcurrency: 1})
 				if err != nil || out.Final == nil || out.Final.Total != 2 || (fault == "cas" && (len(applies) != 3 || applies[1] != applies[2])) || (fault == "clone" && len(applies) != 2) {

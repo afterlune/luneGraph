@@ -132,8 +132,7 @@ func (g *Graph[S]) AddEdge(from, to string) error {
 
 // RegisterContinuation keeps the external payload as bytes and makes each
 // handler's decoded value statically typed. Decode errors leave it waiting.
-// Apply receives a stable CallInfo that remains the same if recovery replays
-// the application.
+// Apply receives a CallInfo whose CallID remains stable across recovery replays.
 func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte) (P, error), apply func(context.Context, model.CallInfo, S, P) (S, error)) error {
 	if g == nil {
 		return errors.New("graph is nil")
@@ -148,13 +147,19 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 		return fmt.Errorf("duplicate continuation %q", key)
 	}
 	g.continuations[key] = model.Continuation[S]{
-		Decode: func(payload []byte) (any, error) { return decode(payload) },
+		Decode: func(payload []byte) (any, error) {
+			value, err := decode(payload)
+			return continuationValue[P]{value: value}, err
+		},
 		Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
-			return apply(ctx, call, state, value.(P))
+			return apply(ctx, call, state, value.(continuationValue[P]).value)
 		},
 	}
 	return nil
 }
+
+// continuationValue preserves nil interface payloads through type erasure.
+type continuationValue[P any] struct{ value P }
 
 // RegisterJSONContinuation registers a continuation whose payload is JSON-decoded into type P.
 func RegisterJSONContinuation[S, P any](g *Graph[S], key string, apply func(context.Context, model.CallInfo, S, P) (S, error)) error {

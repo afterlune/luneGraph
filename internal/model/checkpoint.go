@@ -99,10 +99,12 @@ type PendingInvocation struct {
 	Continuation string
 }
 
-// ResumeInput addresses exactly one waiting invocation. A continuation decodes
-// Payload before applying it to the invocation's state.
+// ResumeInput addresses one specific wait of an invocation. CallID must match
+// the original waiting CallID; never rebind an old payload to a new wait.
+// A continuation decodes Payload before applying it to the invocation's state.
 type ResumeInput struct {
 	InvocationID string
+	CallID       string
 	Payload      []byte
 }
 

@@ -75,7 +75,7 @@ func BenchmarkCheckpointCAS(b *testing.B) {
 func BenchmarkSQLiteReopenRecover(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "recover.db")
 	runner := benchmarkRecoveryRunner(b)
-	seedSQLiteWaitingRun(b, path, runner)
+	input := seedSQLiteWaitingRun(b, path, runner)
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -84,7 +84,7 @@ func BenchmarkSQLiteReopenRecover(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		_, result, recoverErr := runner.Recover(context.Background(), "cold-recovery", []graph.ResumeInput{{InvocationID: "i1", Payload: []byte("1")}}, store, graph.Options{})
+		_, result, recoverErr := runner.Recover(context.Background(), "cold-recovery", []graph.ResumeInput{input}, store, graph.Options{})
 		closeErr := store.Close()
 		if recoverErr != nil || result.Status != graph.StatusCompleted || result.Final == nil || (*result.Final).Values["value-0"] != 1 {
 			b.Fatalf("recovered result = status %s, checkpoint revision %d, error %v", result.Status, result.Header.Revision, recoverErr)
@@ -100,7 +100,7 @@ func BenchmarkSQLiteReopenRecover(b *testing.B) {
 		if err := removeSQLiteFiles(path); err != nil {
 			b.Fatal(err)
 		}
-		seedSQLiteWaitingRun(b, path, runner)
+		input = seedSQLiteWaitingRun(b, path, runner)
 		b.StartTimer()
 	}
 }
@@ -177,13 +177,13 @@ func benchmarkRecoveryRunner(b *testing.B) *graph.Runner[benchmarkState] {
 	return runner
 }
 
-func seedSQLiteWaitingRun(b *testing.B, path string, runner *graph.Runner[benchmarkState]) {
+func seedSQLiteWaitingRun(b *testing.B, path string, runner *graph.Runner[benchmarkState]) graph.ResumeInput {
 	b.Helper()
 	store, err := sqlite.Open(context.Background(), path, checkpoint.JSON[benchmarkState]{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	_, result, runErr := runner.Start(context.Background(), "cold-recovery", newBenchmarkState(), store, graph.Options{})
+	execution, result, runErr := runner.Start(context.Background(), "cold-recovery", newBenchmarkState(), store, graph.Options{})
 	closeErr := store.Close()
 	if runErr != nil || result.Status != graph.StatusWaiting || result.Header.Revision != 2 {
 		b.Fatalf("seed waiting run = status %s, revision %d, error %v", result.Status, result.Header.Revision, runErr)
@@ -191,6 +191,8 @@ func seedSQLiteWaitingRun(b *testing.B, path string, runner *graph.Runner[benchm
 	if closeErr != nil {
 		b.Fatal(closeErr)
 	}
+	waiting := execution.Pending()[0]
+	return graph.ResumeInput{InvocationID: waiting.InvocationID, CallID: waiting.CallID, Payload: []byte("1")}
 }
 
 func removeSQLiteFiles(path string) error {
