@@ -141,6 +141,92 @@ These are same-host diagnostics, not production throughput promises. SQLite
 continues to use schema 2; SQLite recovery benchmarks and process-kill tests
 continue to exercise durable commits.
 
+### Format 6 and runtime control-flow follow-ups
+
+As a follow-up, the pre-FanOut base `f483b01` was compared with the cumulative
+format-6 candidate `f426a3c`, which also includes runtime branch timeouts,
+speculative joins and branch pruning. Runs used Windows/amd64, Go 1.26.5, AMD
+Ryzen 7 6800H, and three serial 150 ms samples per case. Values are median
+`ns/op / B/op / allocs/op`:
+
+| Workload | CPU | Base | Candidate |
+| --- | ---: | ---: | ---: |
+| 16-step sequential | 1 | 25,378 / 3,992 / 81 | 28,379 / 4,200 / 81 |
+| 16-step sequential | 8 | 28,138 / 6,680 / 81 | 27,304 / 7,736 / 81 |
+| Width-32 fan-out/join, default concurrency | 1 | 147,093 / 53,016 / 294 | 146,727 / 67,112 / 292 |
+| Width-32 fan-out/join, default concurrency | 8 | 166,652 / 56,466 / 301 | 192,790 / 71,428 / 299 |
+| Durable width-32 Memory fan-out, default concurrency | 1 | 549,937 / 393,407 / 1,724 | 646,222 / 431,345 / 1,726 |
+| Durable width-32 Memory fan-out, default concurrency | 8 | 661,681 / 397,073 / 1,732 | 731,146 / 435,910 / 1,735 |
+| Warm Memory advance, 32 waiters | 1 | 9,394 / 4,326 / 28 | 13,148 / 4,534 / 28 |
+
+The cumulative candidate keeps sequential allocation counts stable and reduces
+the static fan-out counts by two, while increasing bytes per operation for the
+fan-out and warm-checkpoint cases. CPU-8 and durable timings vary across samples;
+these short runs do not establish a broad latency conclusion.
+
+To locate the warm Memory change, the 32-waiter benchmark was run at each commit
+with five serial 300 ms samples, CPU 1. Values are median
+`ns/op / B/op / allocs/op`:
+
+| Commit | Change | Warm Memory advance |
+| --- | --- | ---: |
+| `f483b01` | Pre-FanOut base | 9,271 / 4,327 / 28 |
+| `bff31d3` | Runtime FanOut, format 5 | 10,859 / 4,343 / 28 |
+| `aedc648` | Branch outcomes, format 6 | 11,394 / 4,503 / 28 |
+| `58c1681` | Timeout controls | 10,977 / 4,535 / 28 |
+| `f426a3c` | Speculative joins and pruning | 11,150 / 4,535 / 28 |
+
+The base samples ranged from 8,644 to 9,633 ns/op; the FanOut samples ranged
+from 10,148 to 11,915 ns/op. This run first shows the change at `bff31d3`, which
+adds the branch slice to the public `Transition`; `B/op` rises by 16 while the
+allocation count stays fixed. Format 6 adds persisted branch error and target
+metadata to `Invocation`, and timeout controls add its deadline field. The
+current candidate uses 208 more bytes per operation than the base, still with
+28 allocations.
+
+Five-second CPU and allocation profiles of the base and candidate show the same
+broad path through `driveLive`, task preparation, state cloning and Memory Store
+commit. The allocation profile includes invocation-slice resizing in both
+versions, with the candidate carrying the larger persisted `Invocation` value;
+the CPU comparison does not identify a single new algorithmic hotspot. The
+measured cost follows the larger transition and checkpoint values needed by
+the added runtime behavior. No runtime representation change is made from these
+profiles alone because reducing the persisted footprint would require a
+separate checkpoint representation design.
+
+An internal compact worker-result experiment changed the warm Memory median from
+12,207 to 11,606 ns/op and reduced it by 16 B/op, but the five-sample latency
+ranges overlapped. Width-32 dynamic FanOut's default-concurrency median changed
+from 145,749 to 151,545 ns/op, with one extra allocation and 8 more bytes per
+operation. The experiment showed no repeatable latency gain and was not
+retained.
+
+The current format-6 `BenchmarkDynamicFanOut` run covers zero, one, two, eight,
+32 and 128 repeated-target branches. The table gives CPU-1 default-concurrency
+medians from three 150 ms samples, in `ns/op / B/op / allocs/op`:
+
+| Branches | Format-6 candidate |
+| ---: | ---: |
+| 0 | 13,495 / 5,328 / 42 |
+| 1 | 21,608 / 6,984 / 56 |
+| 2 | 28,198 / 9,336 / 66 |
+| 8 | 54,421 / 18,160 / 117 |
+| 32 | 181,349 / 66,304 / 257 |
+| 128 | 763,040 / 254,057 / 753 |
+
+Format 4 has no equivalent for runtime-created groups, so these numbers have no
+pre-FanOut latency comparison. Run the first four commands below in both the
+`f483b01` and `f426a3c` checkouts to reproduce the cumulative comparison; the
+dynamic benchmark is available only in the candidate checkout:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/steps=16$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/storage=memory/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$/storage=memory/waiters=32/mode=warm-advance$' -benchmem -benchtime=150ms -count=3 -cpu 1 ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkDynamicFanOut$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+```
+
 ### Executor responsibility separation
 
 Compared base `3bf2e69` with the ready-queue/candidate-workspace refactor on
