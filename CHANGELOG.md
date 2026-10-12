@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Separate the executor's accepted live position, FIFO ready queue and reusable
+  candidate workspace. Nodes, joins and group failures now share local topology
+  collection; wide joins reuse the workspace's ID map for collection and diffing.
+  Public APIs, checkpoint formats, scheduling and commit boundaries are unchanged.
+
 - Require ResumeInput.CallID to match the original waiting callback identity.
   Empty/mismatched CallIDs, duplicate invocation inputs and unknown/non-waiting
   addresses return ErrInvalidResumeInput (errors.Is) before any Apply or input

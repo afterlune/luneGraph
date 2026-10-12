@@ -25,33 +25,11 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], erro
 	if l.failureOverride != nil {
 		scope = *l.failureOverride
 	}
-	before := l.candidate(id, out.err != nil && scope == FailGroup)
+	joinGroupID := ""
 	if out.ref.join {
-		g := l.groups[out.ref.id]
-		seenI := make(map[string]bool)
-		seenG := make(map[string]bool)
-		for _, v := range before.Invocations {
-			seenI[v.ID] = true
-		}
-		for _, v := range before.Groups {
-			seenG[v.ID] = true
-		}
-		if !seenG[g.ID] {
-			before.Groups = append(before.Groups, g)
-		}
-		for _, child := range g.Children {
-			if !seenI[child] {
-				inv, _ := l.invocation(child)
-				before.Invocations = append(before.Invocations, inv)
-			}
-		}
+		joinGroupID = out.ref.id
 	}
-	l.beforeInv, l.beforeGroups = before.Invocations, before.Groups
-	after := before
-	clear(l.afterInv)
-	clear(l.afterGroups)
-	after.Invocations = append(l.afterInv[:0], before.Invocations...)
-	after.Groups = append(l.afterGroups[:0], before.Groups...)
+	before, after := l.workspace.prepare(l, id, out.err != nil && scope == FailGroup, joinGroupID)
 	index := newInvocationIndex(after)
 	var terminalErr error
 	if out.ref.join {
@@ -100,7 +78,5 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], erro
 	if terminalErr != nil && after.Failure == nil {
 		return Change[S]{}, nil, fmt.Errorf("record failure: %w", terminalErr)
 	}
-	l.afterInv = after.Invocations
-	l.afterGroups = after.Groups
-	return l.localChange(before, after), terminalErr, nil
+	return l.workspace.change(before, after), terminalErr, nil
 }

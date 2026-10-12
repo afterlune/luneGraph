@@ -85,6 +85,62 @@ capacity test. There is no cross-machine threshold.
 
 ## Recent format-4 comparison
 
+### Executor responsibility separation
+
+Compared base `3bf2e69` with the ready-queue/candidate-workspace refactor on
+Windows/amd64, Go 1.26.5, AMD Ryzen 7 6800H. Benchmarks ran serially on the same
+machine. Values are medians of `ns/op / B/op / allocs/op`:
+
+| Workload | CPU | Base | Refactor |
+| --- | ---: | ---: | ---: |
+| 16-step sequential | 1 | 26,615 / 3,992 / 81 | 27,722 / 3,992 / 81 |
+| 16-step sequential | 8 | 30,765 / 6,680 / 81 | 25,831 / 6,680 / 81 |
+| Width-32 fan-out/join, default concurrency | 1 | 161,138 / 53,016 / 294 | 137,506 / 53,016 / 294 |
+| Width-32 fan-out/join, default concurrency | 8 | 187,966 / 56,454 / 301 | 169,437 / 56,465 / 301 |
+| Durable width-32 Memory fan-out, default concurrency | 1 | 548,255 / 393,406 / 1,724 | 494,061 / 393,416 / 1,724 |
+| Durable width-32 Memory fan-out, default concurrency | 8 | 834,697 / 397,143 / 1,733 | 801,515 / 397,140 / 1,733 |
+| Durable width-32 SQLite fan-out, default concurrency | 1 | 82,255,600 / 617,536 / 9,630 | 84,965,400 / 617,608 / 9,634 |
+| Durable width-32 SQLite fan-out, default concurrency | 8 | 84,669,900 / 622,488 / 9,633 | 86,168,750 / 626,208 / 9,644 |
+| Warm Memory advance, 32 waiters | 1 | 10,362 / 4,326 / 28 | 10,172 / 4,326 / 28 |
+| Warm Memory advance, 2,048 waiters | 1 | 15,601 / 4,327 / 28 | 12,145 / 4,327 / 28 |
+| Warm SQLite advance, 32 waiters | 1 | 2,503,381 / 9,374 / 179 | 2,332,837 / 9,374 / 179 |
+| Warm SQLite advance, 2,048 waiters | 1 | 2,506,685 / 9,419 / 179 | 2,346,057 / 9,437 / 179 |
+
+Sequential measurements used five 300 ms samples after an initial noisy batch;
+CPU-8 durable Memory used five 1 s samples from the already compiled binaries.
+The remaining rows used three 150 ms samples. Sequential, non-persistent
+fan-out, durable Memory fan-out and warm advances preserve their allocation
+counts. Timing ranges overlap, so these medians are not a claim of throughput
+improvement. SQLite fan-out had only two iterations per sample and the base
+included a 388 ms outlier; its small allocation/timing differences are inconclusive.
+
+The initial CPU-8 durable Memory medians were 609,807 versus 667,627 ns/op. A
+five-sample 300 ms repeat later measured 849,030 versus 1,101,479 ns/op. The
+longer final binary runs produced the table above, with overlapping ranges
+(base 812,868–933,164; refactor 675,834–864,958 ns/op) and identical allocations.
+Separate 1 s CPU profiles concentrated samples in runtime locking/scheduling,
+map operations, state copying and GC; candidate collection/change was a small
+part of the sampled CPU. These short profiles cannot attribute wall-time noise
+to a specific cause. The varying latency comparisons do not establish a stable
+regression or improvement; the allocation regression from separate collection
+maps was removed by workspace reuse and local capacity reservation.
+
+Candidate collection and diffing reuse one workspace ID map in sequential
+phases. A wide join reserves its known local child count when collection crosses
+the existing indexing threshold. This prevents extra map-growth allocations
+without loading or indexing unrelated invocations. The single-invocation fast
+path and queue/index thresholds are unchanged.
+
+Reproduce the focused workloads with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/steps=16$' -benchmem -benchtime=300ms -count=5 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/storage=(memory|sqlite)/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/storage=memory/width=32/concurrency=default$' -benchmem -benchtime=1s -count=5 -cpu 8 .
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$/storage=(memory|sqlite)/waiters=(32|2048)/mode=warm-advance$' -benchmem -benchtime=150ms -count=3 -cpu 1 ./internal/capacitytest
+```
+
 ### Continuation identity and nil-input changes
 
 Compared base `721e087` with the continuation fix and required ResumeInput.CallID
