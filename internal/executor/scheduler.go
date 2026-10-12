@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/afterlune/luneGraph/internal/limit"
 	"github.com/afterlune/luneGraph/internal/model"
@@ -25,6 +26,7 @@ type workerTask[S any] struct {
 	call     CallInfo
 	spec     NodeSpec[S]
 	join     JoinSpec[S]
+	timeout  time.Duration
 	state    S
 	branches []BranchResult[S]
 	obs      *observation.Session
@@ -186,7 +188,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				return finish(StatusCancelled, err)
 			}
 
-			nodeCtx, cancel := context.WithCancel(runCtx)
+			var nodeCtx context.Context
+			var cancel context.CancelFunc
+			if task.timeout > 0 {
+				nodeCtx, cancel = context.WithTimeout(runCtx, task.timeout)
+			} else {
+				nodeCtx, cancel = context.WithCancel(runCtx)
+			}
 			task.ctx = nodeCtx
 			task.call.Step = l.header.Steps
 			task.revision = l.header.Revision
@@ -310,6 +318,7 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		}
 		t.state = parentState
 		t.join = r.joins[g.JoinNode]
+		t.timeout = t.join.Timeout
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
 		t.branches = make([]BranchResult[S], 0, len(g.Children))
 		for _, id := range g.Children {
@@ -338,6 +347,10 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		}
 		t.state = state
 		t.spec = r.nodes[v.Node]
+		t.timeout = v.Timeout
+		if t.timeout <= 0 {
+			t.timeout = t.spec.Timeout
+		}
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: v.ID, CallID: v.CallID, Node: v.Node, Step: l.header.Steps, BranchIndex: v.BranchIndex}
 	}
 	return t, nil

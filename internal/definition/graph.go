@@ -49,6 +49,9 @@ func (g *Graph[S]) AddNode(spec model.NodeSpec[S]) error {
 	if !model.ValidScope(spec.OnError) {
 		return fmt.Errorf("node %q has invalid failure scope", spec.Name)
 	}
+	if spec.Timeout < 0 {
+		return fmt.Errorf("node %q timeout must not be negative", spec.Name)
+	}
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}
@@ -72,6 +75,9 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	}
 	if !model.ValidScope(spec.OnError) {
 		return fmt.Errorf("join %q has invalid failure scope", spec.Name)
+	}
+	if spec.Timeout < 0 {
+		return fmt.Errorf("join %q timeout must not be negative", spec.Name)
 	}
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)

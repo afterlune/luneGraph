@@ -29,7 +29,11 @@ func (r *Runner[S]) runNode(ctx context.Context, call CallInfo, spec NodeSpec[S]
 			err = panicAsError("node "+spec.Name, call.InvocationID, value)
 		}
 	}()
-	return spec.Run(ctx, call, state)
+	out, err = spec.Run(ctx, call, state)
+	if err == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = ctx.Err()
+	}
+	return out, err
 }
 
 func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpec[S], parent S, branches []BranchResult[S]) (out S, err error) {
@@ -38,7 +42,11 @@ func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpe
 			err = panicAsError("join "+spec.Name, call.InvocationID, value)
 		}
 	}()
-	return spec.Merge(ctx, call, parent, branches)
+	out, err = spec.Merge(ctx, call, parent, branches)
+	if err == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = ctx.Err()
+	}
+	return out, err
 }
 
 func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err error) {

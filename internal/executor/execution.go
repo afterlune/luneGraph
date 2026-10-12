@@ -169,6 +169,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		inv.State = state
 		inv.Continuation = ""
 		inv.Next = nil
+		inv.Timeout = 0
 		return r.setTarget(s, inv, targets[0])
 	}
 	needed := uint64(1) // activation group
@@ -237,7 +238,10 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 	if joinNode == "" {
 		return errors.New("FanOut requires a JoinSpec for its source node")
 	}
-	for _, branch := range branches {
+	for branchIndex, branch := range branches {
+		if branch.Timeout < 0 {
+			return fmt.Errorf("branch %d timeout must not be negative", branchIndex)
+		}
 		if _, ok := r.edges[source][branch.Target]; !ok {
 			return fmt.Errorf("node %q selected undeclared branch target %q", source, branch.Target)
 		}
@@ -280,6 +284,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			GroupID:     groupID,
 			BranchIndex: branchIndex,
 			Target:      branch.Target,
+			Timeout:     branch.Timeout,
 		}
 		activation.Children[branchIndex] = child.ID
 		childPosition := appendInvocation(index, s, child)

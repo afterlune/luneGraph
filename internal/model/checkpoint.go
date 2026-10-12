@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strconv"
+	"time"
 
 	"github.com/afterlune/luneGraph/internal/limit"
 )
@@ -41,6 +42,7 @@ type Invocation[S any] struct {
 	Next         []string
 	Error        string
 	Target       string
+	Timeout      time.Duration
 }
 
 // ActivationGroup correlates branches started by one fan-out occurrence.

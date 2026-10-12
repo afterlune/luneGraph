@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add declarative node, join, and dynamic branch timeout controls.
+  `NodeSpec[S].Timeout`, `JoinSpec[S].Timeout`, and `Branch[S].Timeout` specify
+  per-task deadlines (`time.Duration`). Negative durations are validated and rejected.
+  When a node or branch exceeds its deadline, its context is cancelled with
+  `context.DeadlineExceeded` and any escaped nil-error result is caught. Under
+  `OnError: FailInvocation`, the failure is isolated (`inv.Error = "context deadline exceeded"`),
+  enabling tolerant sibling branches and parent join aggregation. Timeouts and error
+  messages are persisted and replayed transparently via SQLite Schema 2 metadata.
+
 - Provide full branch outcome inspection in `Merge` via `[]BranchResult[S]`.
   Parents and Leads can observe not only successful branch states (`b.OK()`, `b.State`),
   but also ended branches (`b.Ended()`) and failed branches (`b.Failed()`, `b.Error`)

@@ -65,6 +65,18 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   Stores own copies of writes and return independent copies from Load. Large
   content belongs in external storage; graph state should carry references.
 
+## Per-task timeouts
+
+Declarative timeouts are supported for static nodes, join callbacks, and dynamic branches:
+- `NodeSpec.Timeout`: per-invocation deadline for the static node.
+- `JoinSpec.Timeout`: per-execution deadline for the `Merge` callback.
+- `Branch.Timeout`: per-branch deadline created by `FanOut`. Overrides the target node's default timeout for the initial step, then clears upon subsequent single-target transitions so the target node's own `NodeSpec.Timeout` applies.
+- Negative durations are rejected at graph compilation (`AddNode`, `AddJoin`) and at runtime (`FanOut`).
+- When a task has a positive timeout, the scheduler derives a context with `context.WithTimeout(runCtx, task.timeout)` and cancels it immediately upon callback completion.
+- If a callback runs past its deadline, `context.DeadlineExceeded` is propagated even if the callback returned nil.
+- Under `OnError: FailInvocation`, a timed-out branch records `inv.Error = "context deadline exceeded"` with `Status: InvocationFailed`, while other branches and the eventual join proceed normally. Under `FailGroup` or `FailExecution`, group-level or terminal execution failure semantics apply.
+- Timeouts and error strings are persisted in SQLite metadata and replayed identically during recovery.
+
 ## Independent callback commits
 
 Start creates revision 1 before invoking callbacks. Accepted node outcomes,

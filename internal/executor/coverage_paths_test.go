@@ -267,6 +267,17 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 		if err == nil || completeRes.Status != StatusFailed {
 			t.Fatalf("expected failure with CompleteBranch targets: %+v, %v", completeRes, err)
 		}
+
+		negativeTimeoutRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.FanOut(value, Branch[int]{Target: "a", State: 10, Timeout: -1}), nil
+			}, FailInvocation),
+			executorTestNode("a", executorTestEnd, FailInvocation),
+		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)
+		_, negativeRes, err := negativeTimeoutRunner.Start(context.Background(), "negative-timeout", 0, nil, Options{})
+		if err == nil || negativeRes.Status != StatusFailed {
+			t.Fatalf("expected failure with negative branch timeout: %+v, %v", negativeRes, err)
+		}
 	})
 
 	t.Run("execution handle pending advance and nil methods", func(t *testing.T) {

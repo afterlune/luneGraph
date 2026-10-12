@@ -82,6 +82,16 @@ Merge runs independently: branch arrivals commit before Merge starts, and other
 branches can advance while it runs. A rejected Merge replays independently with
 its original CallID. Revision includes Merge commits; Steps counts node outcomes.
 
+Nodes, joins and dynamic branches support declarative timeouts via
+`NodeSpec.Timeout`, `JoinSpec.Timeout` and `Branch.Timeout` (`time.Duration`).
+When configured, the runtime derives a context with `context.WithTimeout`
+for the callback execution. If a deadline expires, `context.DeadlineExceeded`
+is recorded. Under `OnError: FailInvocation`, the failure is isolated to that
+branch invocation (`inv.Error = "context deadline exceeded"`), allowing sibling
+branches and tolerant joins to proceed. Dynamic branch timeouts override the
+target node's default timeout for the initial step, then clear upon single-target
+routing so subsequent nodes use their own configured timeouts.
+
 AddSubgraph mounts a Graph with the same S. Compile expands it into the same
 machine/checkpoint, using qualified names such as `worker/review`. A mount has
 zero/one exit. Return follows that exit or ends its invocation. Change MachineID

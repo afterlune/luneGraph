@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 // Action describes the control flow produced by a node.
@@ -29,8 +30,9 @@ type Transition[S any] struct {
 
 // Branch describes one runtime-created child invocation.
 type Branch[S any] struct {
-	Target string
-	State  S
+	Target  string
+	State   S
+	Timeout time.Duration
 }
 
 // To continues to one target or fans out to several declared targets.
@@ -131,6 +133,7 @@ type NodeSpec[S any] struct {
 	Name    string
 	Run     Node[S]
 	OnError FailureScope
+	Timeout time.Duration
 }
 
 // JoinSpec consumes obligations created by fan-out at From. Its only possible
@@ -140,6 +143,7 @@ type JoinSpec[S any] struct {
 	From    string
 	Merge   Merge[S]
 	OnError FailureScope
+	Timeout time.Duration
 }
 
 // Continuation adapts an untyped persisted payload to a typed state handler.

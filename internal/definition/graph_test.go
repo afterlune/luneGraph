@@ -37,6 +37,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 		{Name: " padded", Run: validNode},
 		{Name: "missing-run"},
 		{Name: "bad-scope", Run: validNode, OnError: model.FailureScope(99)},
+		{Name: "negative-timeout", Run: validNode, Timeout: -1},
 	} {
 		if err := g.AddNode(spec); err == nil {
 			t.Fatalf("AddNode accepted %+v", spec)
@@ -53,6 +54,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 		{Name: "join", From: "", Merge: merge},
 		{Name: "join", From: "entry"},
 		{Name: "join", From: "entry", Merge: merge, OnError: model.FailureScope(99)},
+		{Name: "join", From: "entry", Merge: merge, Timeout: -1},
 	} {
 		if err := g.AddJoin(spec); err == nil {
 			t.Fatalf("AddJoin accepted %+v", spec)
