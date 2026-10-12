@@ -40,10 +40,10 @@ func TestNestedGroupFailureAndCompactionReplay(t *testing.T) {
 				inner[i] = fmt.Sprintf("inner-%d", i)
 			}
 			addNode(t, g, "fork", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-				return graph.To(s, outer...), nil
+				return graph.ToTargets(s, outer), nil
 			})
 			addNode(t, g, "nested", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-				return graph.To(s, inner...), nil
+				return graph.ToTargets(s, inner), nil
 			})
 			addEdge(t, g, "fork", "nested")
 			boom := errors.New("nested group failure")

@@ -185,8 +185,12 @@ func TestCheckpointHeaderAndSharedValidators(t *testing.T) {
 }
 
 func TestTransitionsCopyTargetsAndPreserveActions(t *testing.T) {
+	static := To(3, "first", "second")
+	if !reflect.DeepEqual(static.Targets, []string{"first", "second"}) || static.Action != ActionContinue {
+		t.Fatalf("static To transition = %+v", static)
+	}
 	targets := []string{"next"}
-	continued := To(1, targets...)
+	continued := ToTargets(1, targets)
 	continued.Targets[0] = "changed"
 	if targets[0] != "next" || continued.Action != ActionContinue {
 		t.Fatalf("To transition = %+v, source targets=%v", continued, targets)

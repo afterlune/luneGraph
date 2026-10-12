@@ -21,16 +21,18 @@ type workResult[S any] struct {
 	err        error
 }
 type workerTask[S any] struct {
-	ctx      context.Context
-	ref      taskRef
-	call     CallInfo
-	spec     NodeSpec[S]
-	join     JoinSpec[S]
-	timeout  time.Duration
-	state    S
-	branches []BranchResult[S]
-	obs      *observation.Session
-	revision uint64
+	ctx          context.Context
+	ref          taskRef
+	call         CallInfo
+	spec         NodeSpec[S]
+	join         JoinSpec[S]
+	timeout      time.Duration
+	state        S
+	branches     []BranchResult[S]
+	ready        bool
+	preflightErr error
+	obs          *observation.Session
+	revision     uint64
 }
 
 func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs *observation.Session, store Store[S]) (Result[S], error) {
@@ -63,6 +65,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 		close(tasks)
 		workers.Wait()
 	}()
+	var budgetReason BudgetReason
 	drain := func() {
 		stop()
 		for _, cancel := range running {
@@ -82,7 +85,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			status = StatusCancelled
 			err = ctx.Err()
 		}
-		result, copyErr := r.resultFromLive(l, status)
+		var result Result[S]
+		var copyErr error
+		if status == StatusBudget {
+			result, copyErr = r.resultFromLiveWithBudget(l, budgetReason)
+		} else {
+			result, copyErr = r.resultFromLive(l, status)
+		}
 		if err == nil {
 			err = copyErr
 		}
@@ -162,6 +171,16 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 						l.enqueue(ref)
 						return finish(errorStatus(err), err)
 					}
+					if !task.ready {
+						delete(l.joinEnqueued, ref.id)
+						continue
+					}
+					if task.preflightErr != nil {
+						immediateResult = workResult[S]{ref: ref, callID: task.call.CallID, err: task.preflightErr}
+						running[ref] = func() {}
+						immediate = true
+						break
+					}
 					if prepared == nil {
 						prepared = make(map[taskRef]workerTask[S])
 					}
@@ -227,7 +246,11 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			if !l.hasReadyNode() && len(l.groups) > 0 && l.waitingInvocations == 0 {
 				return finish(StatusFailed, invalidCheckpoint("unresolved execution has no runnable work"))
 			}
-			return finish(statusOf(l.header.Header(), l.readyNodes, used >= opts.MaxSteps), nil)
+			status := statusOf(l.header.Header(), l.readyNodes, used >= opts.MaxSteps)
+			if status == StatusBudget {
+				budgetReason = BudgetMaxSteps
+			}
+			return finish(status, nil)
 		}
 		var slots chan<- struct{}
 		if blocked {
@@ -269,6 +292,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			l.enqueue(out.ref)
 			if errors.Is(err, errInvocationBudget) {
 				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, err)
+				budgetReason = BudgetMaxInvocations
 				return finish(StatusBudget, nil)
 			}
 			return finish(errorStatus(err), err)
@@ -317,22 +341,52 @@ func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 }
 
 func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, obs *observation.Session) (workerTask[S], error) {
-	t := workerTask[S]{ctx: ctx, ref: ref, obs: obs, revision: l.header.Revision}
+	t := workerTask[S]{ctx: ctx, ref: ref, obs: obs, revision: l.header.Revision, ready: true}
 	if ref.join {
 		g := l.groups[ref.id]
 		parent, _ := l.invocation(g.ParentID)
+		t.join = r.joins[g.JoinNode]
+		t.timeout = t.join.Timeout
+		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
+		if t.join.CanMerge != nil && l.remaining[ref.id] > 0 {
+			canMergeParent, err := r.cloneState(parent.State, parent.ID)
+			if err != nil {
+				return t, fmt.Errorf("clone speculative join parent: %w", err)
+			}
+			canMergeBranches := make([]BranchResult[S], 0, len(g.Branches))
+			for branchIndex, branch := range g.Branches {
+				child, exists := l.invocation(branch.InvocationID)
+				if !exists {
+					return t, invalidCheckpoint("join group %q has missing branch %q", ref.id, branch.InvocationID)
+				}
+				state, err := r.cloneState(child.State, child.ID)
+				if err != nil {
+					return t, fmt.Errorf("clone speculative join branch %q: %w", child.ID, err)
+				}
+				canMergeBranches = append(canMergeBranches, BranchResult[S]{Index: branchIndex, Target: branch.Target, Node: child.Node, Status: child.Status, State: state, Error: branch.Error})
+			}
+			ready, err := canMerge(t.join, t.call, canMergeParent, canMergeBranches)
+			if err != nil {
+				t.preflightErr = err
+				return t, nil
+			}
+			if !ready {
+				t.ready = false
+				return t, nil
+			}
+		}
 		parentState, err := r.cloneState(parent.State, parent.ID)
 		if err != nil {
 			return t, fmt.Errorf("clone join parent: %w", err)
 		}
 		t.state = parentState
-		t.join = r.joins[g.JoinNode]
-		t.timeout = t.join.Timeout
-		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
 		t.branches = make([]BranchResult[S], 0, len(g.Branches))
 		for branchIndex, branch := range g.Branches {
 			id := branch.InvocationID
-			child, _ := l.invocation(id)
+			child, exists := l.invocation(id)
+			if !exists {
+				return t, invalidCheckpoint("join group %q has missing branch %q", ref.id, id)
+			}
 			res := BranchResult[S]{
 				Index:  branchIndex,
 				Target: branch.Target,

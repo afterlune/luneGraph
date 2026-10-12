@@ -59,7 +59,8 @@ concurrency safe. Treat returned checkpoints as immutable.
 
 | Decision | Behavior |
 | --- | --- |
-| To(state, targets...) | Follow declared edges; multiple targets create an activation |
+| To(state, target, moreTargets...) | Follow declared edges; multiple targets create an activation |
+| ToTargets(state, targets) | Follow a runtime-generated target slice |
 | FanOut(parent, branches...) | Create a dynamic zero-or-more task activation using declared targets |
 | CompleteBranch(state) | Return this task's result to its current group's Merge |
 | Wait(state, continuation, targets...) | Commit state and await invocation input |
@@ -93,12 +94,17 @@ target node's default timeout for the initial step, then clear upon single-targe
 routing so subsequent nodes use their own configured timeouts.
 
 Speculative joins and branch pruning are supported via `JoinSpec.Quorum` (integer
-threshold of successful branches) or `JoinSpec.CanMerge` (predicate over parent and
-available branch results). When met, `Merge` runs early; `BranchResult.Resolved()`
-reports whether a branch finished, while `BranchResult.Pending()` identifies
-uncompleted tasks. Upon join commit, remaining running and pending branches in the
-group are cancelled and pruned. If quorum cannot be met due to branch failures, the
-join safely falls back to standard execution when all branches settle.
+threshold of successful branches) or `JoinSpec.CanMerge` (predicate over parent
+and branch results); a join must choose one strategy. `CanMerge` may run
+repeatedly, so it must be fast, deterministic, side-effect-free and non-blocking.
+It receives cloned parent and branch states. Do not mutate them. A predicate
+panic follows the join's `OnError` policy; a Clone error preserves the last
+committed position without terminal failure. When the selected condition is met,
+`Merge` runs early; `BranchResult.Resolved()` reports whether a branch finished,
+while `BranchResult.Pending()` identifies uncompleted tasks. Upon join commit,
+remaining running and pending branches in the group are cancelled and pruned.
+If quorum cannot be met due to branch failures, the join safely falls back to
+standard execution when all branches settle.
 
 AddSubgraph mounts a Graph with the same S. Compile expands it into the same
 machine/checkpoint, using qualified names such as `worker/review`. A mount has
@@ -162,17 +168,21 @@ This reconciliation path performs an explicit Load plus Resume's own full Load.
 It can therefore materialize a full checkpoint twice. Callback side effects
 still need application idempotency across concurrent replays.
 
-Start, Resume, Recover and Fork return an `Execution` handle and the result of
-that call. `Execution.Advance` continues the same live scheduler state; when a
-Store is attached, it checks the persisted header revision before advancing.
+Start, Resume and Recover return an `Execution` handle and the result of that
+call. `Execution.Advance` continues the same live scheduler state; when a Store
+is attached, it checks the persisted header revision before advancing.
 `Execution.Checkpoint` creates an independent full checkpoint only when needed,
 and `Execution.Pending` lists waiting continuation identities without copying
 their state. Keep one handle on one goroutine; applications can still make
 progress from another handle, but the Store's revision check will reject a stale
-advance. Recover loads by RunID and is the cold-open path. Fork creates an
-independent run from an active checkpoint, with a new RunID and revision 1.
-Completed runs cannot be resumed or forked; Recover can inspect terminal results
-without invoking callbacks.
+advance. Recover loads by RunID and is the cold-open path. Fork validates and
+clones an active checkpoint into a new run with revision 1; it returns that
+checkpoint without invoking node, join, or continuation callbacks or emitting
+execution events. When a Store is provided, Fork creates the new run there. Call
+Recover to drive a persisted fork, or Resume the returned checkpoint without a
+Store. Observation begins with that explicit execution call. Completed runs
+cannot be resumed or forked; Recover can inspect terminal results without
+invoking callbacks.
 
 ```go
 store, err := sqlite.Open(ctx, "runs.db", checkpoint.JSON[State]{})
@@ -247,11 +257,15 @@ work can drain even when its current count is above a newly lowered limit.
 
 If a transition would exceed the limit, none of its branches are cloned or
 committed. The call returns nonterminal `StatusBudget` with the original node
-and `CallID` still pending. Raise the limit on a later `Advance`, `Resume`,
-`Recover`, or `Fork` call to retry; the callback may run again with the same
+and `CallID` still pending. Raise the limit on a later `Advance`, `Resume`, or
+`Recover` call to retry; the callback may run again with the same
 `CallID`, so its effects must follow the usual at-least-once rules. This limits
 checkpoint invocation records, not the total tasks created over the run or
 memory already used to construct a callback's transition.
+`Result.BudgetReason` identifies whether `MaxSteps` or `MaxInvocations` blocked
+progress; it is empty for other statuses. A rejected invocation-creating
+transition reports `BudgetMaxInvocations`; otherwise step exhaustion reports
+`BudgetMaxSteps` after admitted work drains.
 
 Host applications still bound resident executions, waiting callers and memory.
 Do not synchronously drive work requiring the permit held by the caller.
@@ -268,7 +282,8 @@ graph edges so callbacks return and release their permits before successors run.
 Observer/ObserverFunc deliver synchronous concurrent metadata. Observers must
 return promptly; delivery panics are isolated. Finished does not mean committed:
 Resolved reports committed/discarded/unknown per callback. OperationCommit
-observes delta submission. Nil observation allocates no session or ledger.
+observes delta submission. `OperationAdvance` distinguishes a live-handle call
+from checkpoint `OperationResume`. Nil observation allocates no session or ledger.
 The observe package provides a slog adapter; events contain no application state
 or input bytes, but errors can contain application text.
 
@@ -410,6 +425,16 @@ Format 7 rejects format-6 and older checkpoints. Finish active runs with their
 matching runtime and use a new database for new executions. SQLite schema 2
 remains in use; activation-group payloads use the new record shape.
 
+## Current API refinements
+
+`To(state, target, moreTargets...)` requires at least one static target. Use
+`ToTargets(state, targets)` for runtime-generated target slices; an empty slice
+is rejected when the transition is applied. `Result.BudgetReason` distinguishes
+step and invocation limits without changing checkpoint format. A JoinSpec must
+choose either `Quorum` or `CanMerge`; the predicate receives cloned state copies
+and must remain fast and side-effect-free. `OperationAdvance` distinguishes a
+live-handle `Advance` from checkpoint `Resume` in observer events.
+
 ## Format-6 migration
 
 Merge callbacks now receive `(ctx, call, parentState, branches []BranchResult[S])`.
@@ -427,7 +452,8 @@ Merge callbacks now receive `(ctx, call, parentState, branchStates)`. Update
 custom Merge signatures. Register a JoinSpec for each FanOut source. Convert
 dynamic task lists to `FanOut(parent, graph.Branch[S]{Target, State}...)`, and
 use `CompleteBranch(state)` to deliver results to the current activation group.
-Existing `To(state, targets...)` retains its declared, distinct-target behavior.
+The current `To` signature and dynamic-slice helper are described under
+[Current API refinements](#current-api-refinements).
 
 Format 5 permits joined activations with zero or one child and allows more join
 children than static outgoing edges. Format 4 checkpoints are rejected; finish
@@ -450,11 +476,14 @@ old runtime and use a new database for format 4; there is no automatic migration
 See [CHANGELOG](CHANGELOG.md) for the complete source and semantic changes.
 
 The execution-handle API is a separate source migration: use non-generic
-`graph.Options`, pass Store as the explicit argument to Start/Resume/Recover/Fork,
-and capture their `(execution, result, error)` returns. Read `result.Header` and
+`graph.Options`, pass Store as the explicit argument to Start/Resume/Recover, and
+capture their `(execution, result, error)` returns. Read `result.Header` and
 `result.Final`; call `execution.Checkpoint()` for a full snapshot or reuse the
-handle with `execution.Advance(...)` for another in-process call. Custom Store
-implementations must add `LoadHeader` while leaving checkpoint encoding intact.
+handle with `execution.Advance(...)` for another in-process call. `Runner.Fork`
+now returns `(checkpoint, error)` and no longer accepts Options: explicitly call
+Recover to drive a persisted fork, or Resume to drive an in-memory fork. Custom
+Store implementations must add `LoadHeader` while leaving checkpoint encoding
+intact.
 
 Resume inputs now require `CallID`, obtained from the original waiting
 invocation in `Pending()` or a checkpoint. Update every input producer, including

@@ -194,6 +194,12 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	if err != nil {
 		return nil, err
 	}
+	for _, name := range sortedKeys(definition.Joins) {
+		join := definition.Joins[name]
+		if join.Quorum > 0 && join.CanMerge != nil {
+			return nil, fmt.Errorf("join %q cannot configure both quorum and can-merge", name)
+		}
+	}
 	definition.ID = config.MachineID
 	definition.Clone = config.Clone
 	return executor.New(definition)

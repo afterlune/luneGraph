@@ -90,11 +90,11 @@ func TestRunnerStartBudgetAndInputErrors(t *testing.T) {
 		return model.To(value+1, "loop"), nil
 	}, FailInvocation)}, nil, map[string][]string{"loop": {"loop"}}, nil, nil)
 	firstExecution, first, err := runner.Start(context.Background(), "budget", 0, nil, Options{MaxSteps: 1})
-	if err != nil || first.Status != StatusBudget || first.Header.Steps != 1 || mustCheckpoint(firstExecution).Invocations[0].State != 1 {
+	if err != nil || first.Status != StatusBudget || first.BudgetReason != BudgetMaxSteps || first.Header.Steps != 1 || mustCheckpoint(firstExecution).Invocations[0].State != 1 {
 		t.Fatalf("budget start = %+v, %v", first, err)
 	}
 	_, last, err := runner.Resume(context.Background(), mustCheckpoint(firstExecution), nil, nil, Options{})
-	if err != nil || last.Status != StatusCompleted || last.Final == nil || *last.Final != 2 {
+	if err != nil || last.Status != StatusCompleted || last.BudgetReason != "" || last.Final == nil || *last.Final != 2 {
 		t.Fatalf("resumed run = %+v, %v", last, err)
 	}
 
@@ -210,7 +210,7 @@ func scopePointer(scope FailureScope) *FailureScope { return &scope }
 
 func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) *Invocation[S] {
 	s.ScheduleCursor = cursor
-	l := newLive(s, nil, nil)
+	l := newLive(s, nil)
 	active := make(map[taskRef]context.CancelFunc)
 	for id, cancel := range running {
 		active[taskRef{id: id}] = cancel

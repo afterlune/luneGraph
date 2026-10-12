@@ -69,10 +69,11 @@ func TestMaxInvocationsPausesStaticAndDynamicFanOut(t *testing.T) {
 
 			store := newMemoryStore(t)
 			execution, paused, err := runner.Start(context.Background(), "budget-"+name, 0, store, graph.Options{
+				MaxSteps:       1,
 				MaxInvocations: 1,
 				MaxConcurrency: 2,
 			})
-			if err != nil || paused.Status != graph.StatusBudget || paused.Header.Revision != 1 || paused.Header.Steps != 0 {
+			if err != nil || paused.Status != graph.StatusBudget || paused.BudgetReason != graph.BudgetMaxInvocations || paused.Header.Revision != 1 || paused.Header.Steps != 0 {
 				t.Fatalf("start at limit = %+v, %v", paused, err)
 			}
 			if got := cloneCalls.Load(); got != 2 {
@@ -91,7 +92,7 @@ func TestMaxInvocationsPausesStaticAndDynamicFanOut(t *testing.T) {
 			}
 
 			completed, err := execution.Advance(context.Background(), nil, graph.Options{MaxInvocations: 3, MaxConcurrency: 2})
-			if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 2 {
+			if err != nil || completed.Status != graph.StatusCompleted || completed.BudgetReason != "" || completed.Final == nil || *completed.Final != 2 {
 				t.Fatalf("advance with larger limit = %+v, %v", completed, err)
 			}
 			if len(forkCalls) != 2 || forkCalls[0] != "c2" || forkCalls[1] != forkCalls[0] {
@@ -191,7 +192,7 @@ func TestContinuationFanOutBudgetRetainsOriginalWait(t *testing.T) {
 	}
 	input := graph.ResumeInput{InvocationID: execution.Pending()[0].InvocationID, CallID: execution.Pending()[0].CallID, Payload: []byte("4")}
 	paused, err := execution.Advance(context.Background(), []graph.ResumeInput{input}, graph.Options{MaxInvocations: 1})
-	if err != nil || paused.Status != graph.StatusBudget || paused.Header.Revision != waiting.Header.Revision {
+	if err != nil || paused.Status != graph.StatusBudget || paused.BudgetReason != graph.BudgetMaxInvocations || paused.Header.Revision != waiting.Header.Revision {
 		t.Fatalf("advance at invocation limit = %+v, %v", paused, err)
 	}
 	pending := execution.Pending()

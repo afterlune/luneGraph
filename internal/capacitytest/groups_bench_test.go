@@ -16,7 +16,7 @@ func nestedPopulation(t testing.TB, count int) *graph.Runner[state] {
 		targets[i] = fmt.Sprintf("fork%d", i)
 	}
 	addNode(t, g, "root", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-		return graph.To(s, targets...), nil
+		return graph.ToTargets(s, targets), nil
 	})
 	for i, fork := range targets {
 		join := fmt.Sprintf("join%d", i)
@@ -26,7 +26,7 @@ func nestedPopulation(t testing.TB, count int) *graph.Runner[state] {
 		}
 		addNode(t, g, fork, func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
 			s.Values["group"] = i
-			return graph.To(s, leaves...), nil
+			return graph.ToTargets(s, leaves), nil
 		})
 		addEdge(t, g, "root", fork)
 		for j, leaf := range leaves {

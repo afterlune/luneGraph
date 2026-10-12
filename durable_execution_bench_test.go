@@ -143,7 +143,7 @@ func durableFanoutRunner(b *testing.B, width int) *graph.Runner[durableBenchmark
 	g := graph.New[durableBenchmarkState]("fork")
 	targets := make([]string, width)
 	if err := g.AddNode(graph.NodeSpec[durableBenchmarkState]{Name: "fork", Run: func(_ context.Context, _ graph.CallInfo, state durableBenchmarkState) (graph.Transition[durableBenchmarkState], error) {
-		return graph.To(state, targets...), nil
+		return graph.ToTargets(state, targets), nil
 	}}); err != nil {
 		b.Fatal(err)
 	}

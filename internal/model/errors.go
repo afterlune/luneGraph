@@ -12,13 +12,14 @@ var ErrInvalidCheckpoint = errors.New("invalid checkpoint")
 var ErrInvalidResumeInput = errors.New("invalid resume input")
 var ErrExecutionLimit = errors.New("execution counter exhausted")
 
-// ErrRunCompleted reports that Recover was given inputs for a terminal run.
+// ErrRunCompleted reports that Resume, Recover, Advance, or Fork was given a
+// terminal execution where active work is required.
 var ErrRunCompleted = errors.New("run already completed")
 
 // ErrRunFailed reports a persisted execution-level failure after recovery.
 var ErrRunFailed = errors.New("run failed")
 
-// Status describes why a call to Start, Resume, or Recover returned.
+// Status describes why a call to Start, Resume, Recover, or Advance returned.
 type Status string
 
 const (
@@ -29,6 +30,17 @@ const (
 	StatusFailed                Status = "failed"
 	StatusCancelled             Status = "cancelled"
 	StatusInterrupted           Status = "interrupted"
+)
+
+// BudgetReason identifies the per-call limit that prevented further progress.
+// It is empty for results whose Status is not StatusBudget.
+type BudgetReason string
+
+const (
+	// BudgetMaxSteps means the per-call node-start limit blocked progress.
+	BudgetMaxSteps BudgetReason = "max_steps"
+	// BudgetMaxInvocations means a transition would exceed the retained invocation limit.
+	BudgetMaxInvocations BudgetReason = "max_invocations"
 )
 
 // PanicError reports a panic raised by an execution callback.

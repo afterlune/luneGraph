@@ -6,13 +6,14 @@ codecs and Stores must satisfy their documented concurrency contracts.
 
 ## Live execution handles
 
-`Start`, `Resume`, `Recover` and `Fork` return an `Execution` handle, the result
-of the initial call, and an error. `Result` contains the call status, a metadata
+`Start`, `Resume`, and `Recover` return an `Execution` handle, the result of the
+initial call, and an error. `Result` contains the call status, a metadata
 `Header`, and an optional copied `Final` state; it does not contain the full
 invocation topology or states. Call `Execution.Checkpoint()` when an independent
 full checkpoint is needed. That operation copies all live invocation states
 with Clone. `Execution.Pending()` returns sorted waiting-invocation identities
-and continuation names without exposing or copying their state.
+and continuation names without exposing or copying their state. `Fork` returns
+an independent checkpoint and does not return a handle or execution result.
 
 `Execution.Advance(ctx, inputs, opts)` continues the same in-memory scheduler
 state. A handle is single-caller: do not call its methods concurrently. With a
@@ -41,7 +42,9 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   [executable Clone example](../clone_example_test.go) shows a state-specific
   copy for nested byte slices, including nil/empty semantics. This rule applies
   at fan-out and Merge input boundaries as well as before individual callbacks.
-- Static `To(state, targets...)` keeps its declared, distinct targets.
+- Static `To(state, target, moreTargets...)` requires at least one declared
+  target. Use `ToTargets(state, targets)` for runtime-generated slices; an empty
+  slice is rejected when the transition is applied.
   `FanOut(parent, branches...)` creates one activation for zero or more declared
   node/subgraph-entry tasks; repeated targets are valid and each branch receives
   an independent Clone. The source requires a JoinSpec. `CompleteBranch(state)`
@@ -90,7 +93,13 @@ Declarative timeouts are supported for static nodes, join callbacks, and dynamic
 
 A `JoinSpec` can declare early join thresholds:
 - `Quorum int`: positive integer specifying the minimum number of successfully joined branches (`b.OK()`) needed to trigger `Merge` early.
-- `CanMerge func(parent S, branches []BranchResult[S]) bool`: optional predicate evaluating whether `Merge` can execute early based on current parent state and branch outcomes.
+- `CanMerge func(parent S, branches []BranchResult[S]) bool`: an alternative to
+  Quorum. `Compile` rejects a JoinSpec that sets both. The predicate may be
+  called repeatedly as outcomes change, so it must be fast, deterministic,
+  side-effect-free and non-blocking. It receives cloned parent and branch
+  states; do not mutate them. Clone errors preserve the last committed position
+  without a terminal failure. Predicate panics become `PanicError` and follow
+  the join's `OnError` policy.
 - In `Merge`, `BranchResult.Resolved()` reports true for branches that joined, ended, or failed, while `BranchResult.Pending()` reports true for tasks that were still running or queued when early join triggered.
 - When `Merge` commits, the entire activation group is retired: all child branches (including running and pending ones) are deleted from the live state and checkpoint.
 - Active goroutines of pruned branches are promptly cancelled via context cancellation, and their delayed outputs are discarded upon exit.
@@ -119,6 +128,11 @@ ordinary node failures; Merge and Apply do not increase Steps. MaxSteps bounds
 node starts per public call, default 10,000. After exhaustion, admitted tasks
 finish and eligible joins settle; no new nodes start. Ready nodes then produce
 StatusBudget. MaxConcurrency, default GOMAXPROCS, bounds nodes and joins together.
+For `StatusBudget`, `Result.BudgetReason` is `BudgetMaxSteps` or
+`BudgetMaxInvocations`; otherwise it is empty. A transition rejected for
+exceeding the invocation count reports `BudgetMaxInvocations`; if no such
+transition is rejected, exhausted node admission reports `BudgetMaxSteps` after
+admitted work drains.
 `Options.MaxInvocations` optionally bounds invocation records in the current
 execution checkpoint; zero leaves it unlimited. Negative values are rejected.
 It applies to transitions that create children through static multi-target `To`
@@ -128,7 +142,7 @@ waiting paths, group parents and resolved branches not yet removed by their join
 If a transition would exceed the limit, the entire transition is discarded and
 the call returns nonterminal StatusBudget at the last committed position. The
 pending callback retains its CallID and can be retried by raising the limit on a
-later Start, Resume, Recover, Fork, or Advance call. This can replay the callback;
+later Resume, Recover, or Advance call. This can replay the callback;
 continuation inputs must retain their original wait identity and be resubmitted
 if their Apply transition exceeded the budget. A lower limit does not prevent
 existing work from draining when it creates no new invocation records. The option is per public
@@ -238,10 +252,17 @@ with ErrRunCompleted; malformed positions use ErrInvalidCheckpoint. With a Store
 Resume treats its supplied checkpoint as an identity/version/revision reference,
 loads authoritative state and rejects stale references with ErrConflict.
 
-Fork clones an active source, changes RunID, creates revision 1 in the target
-Store and drives it. It does not load/change the source run. Completed sources
-are rejected. Pending CallIDs may be retained because RunID provides a new
-namespace. Applications account for effects in speculative branches.
+Fork validates and clones an active source, changes RunID, resets Revision to 1,
+and returns the independent checkpoint. When given a Store, it creates the new
+run there but does not drive it, invoke node, join, or Apply callbacks, or emit
+execution events. Use Recover to drive a persisted fork; without a Store, pass
+the returned checkpoint to Resume. Observation starts with that explicit
+execution call. Fork does not load or change the source run. Completed sources
+and a new RunID equal to the source RunID are rejected. Pending CallIDs may be
+retained because RunID provides a new namespace. Clone remains subject to its
+pure, side-effect-free contract. If Store.Create returns an uncertain error,
+reload the target RunID before retrying. Applications account for effects after
+they explicitly resume a fork.
 
 Every node, Merge and Apply has a CallID persisted before it starts. It survives
 replay; new loop visits/activations get new IDs. An application namespace plus
@@ -332,7 +353,8 @@ Observers synchronously receive transient metadata, never state/input bytes.
 They can be concurrent and must return promptly. Delivery panics are isolated;
 blocking observers still delay work. Nil observation has no session/ledger/clock
 reads. Started/Finished pair callback work; Resolved marks its individual
-committed/discarded/unknown result. OperationCommit replaces CompareAndSwap.
+committed/discarded/unknown result. `OperationAdvance` identifies live-handle
+calls separately from checkpoint `OperationResume`. OperationCommit replaces CompareAndSwap.
 OperationID correlates one process-local public call; RunID/CallID correlate
 replay. Durations exclude their own delivery. Err can contain application text
 and must be treated read-only.

@@ -406,47 +406,90 @@ func TestRegisterJSONContinuation(t *testing.T) {
 
 func TestRunnerFork(t *testing.T) {
 	g := graph.New[int]("start")
+	startCalls := 0
+	stepCalls := 0
+	applyCalls := 0
+	finishCalls := 0
 	node(t, g, "start", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		startCalls++
 		return graph.To(state+1, "step1"), nil
 	})
 	node(t, g, "step1", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		stepCalls++
 		return graph.Wait(state, "input", "finish"), nil
 	})
 	node(t, g, "finish", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		finishCalls++
 		return graph.EndExecution(state), nil
 	})
 	edge(t, g, "start", "step1")
 	edge(t, g, "step1", "finish")
 	if err := graph.RegisterJSONContinuation(g, "input", func(_ context.Context, call graph.CallInfo, state, delta int) (int, error) {
+		applyCalls++
 		return state + delta, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	store := newMemoryStore(t)
 	r := intRunner(t, g)
-	resExecution, res, err := r.Start(context.Background(), "run-original", 10, store, graph.Options{})
-	if err != nil || res.Status != graph.StatusWaiting {
+	resExecution, res, err := r.Start(context.Background(), "run-original", 10, store, graph.Options{MaxSteps: 1})
+	if err != nil || res.Status != graph.StatusBudget {
 		t.Fatalf("start = %+v, %v", res, err)
 	}
-	// Fork off into run-forked
-	forkedResExecution,
-		forkedRes, err := r.Fork(context.Background(), "run-forked", mustCheckpoint(resExecution), store, graph.Options{})
-	if err != nil || forkedRes.Status != graph.StatusWaiting || forkedRes.Header.RunID != "run-forked" || forkedRes.Header.Revision != 1 {
-		t.Fatalf("fork = %+v, %v", forkedRes, err)
+	source := mustCheckpoint(resExecution)
+	if startCalls != 1 || stepCalls != 0 {
+		t.Fatalf("initial budget call counts = start %d, step %d", startCalls, stepCalls)
+	}
+
+	// Fork several ready recovery points without running their next callbacks.
+	forked, err := r.Fork(context.Background(), "run-forked", source, store)
+	if err != nil || forked.RunID != "run-forked" || forked.Revision != 1 {
+		t.Fatalf("fork = %+v, %v", forked, err)
+	}
+	if len(forked.Invocations) != 1 || forked.Invocations[0].Node != "step1" || forked.Invocations[0].State != 11 || forked.Invocations[0].CallID != source.Invocations[0].CallID {
+		t.Fatalf("fork did not preserve active position: %+v", forked)
+	}
+	secondFork, err := r.Fork(context.Background(), "run-forked-2", source, store)
+	if err != nil || secondFork.RunID != "run-forked-2" || secondFork.Revision != 1 {
+		t.Fatalf("second fork = %+v, %v", secondFork, err)
+	}
+	if startCalls != 1 || stepCalls != 0 || applyCalls != 0 || finishCalls != 0 {
+		t.Fatalf("Fork executed callbacks: start %d, step %d, apply %d, finish %d", startCalls, stepCalls, applyCalls, finishCalls)
+	}
+	loadedFork, err := store.Load(context.Background(), "run-forked")
+	if err != nil || loadedFork.Revision != 1 || loadedFork.Invocations[0].Node != "step1" {
+		t.Fatalf("stored fork = %+v, %v", loadedFork, err)
+	}
+	loadedSecond, err := store.Load(context.Background(), "run-forked-2")
+	if err != nil || loadedSecond.Revision != 1 || loadedSecond.Invocations[0].Node != "step1" {
+		t.Fatalf("stored second fork = %+v, %v", loadedSecond, err)
+	}
+
+	// Only explicit Recover calls begin executing each copied position.
+	forkedExecution, forkedResult, err := r.Recover(context.Background(), "run-forked", nil, store, graph.Options{})
+	if err != nil || forkedResult.Status != graph.StatusWaiting || forkedResult.Header.RunID != "run-forked" {
+		t.Fatalf("recover fork = %+v, %v", forkedResult, err)
+	}
+	originalExecution, originalResult, err := r.Recover(context.Background(), "run-original", nil, store, graph.Options{})
+	if err != nil || originalResult.Status != graph.StatusWaiting || stepCalls != 2 {
+		t.Fatalf("recover original = %+v, step calls %d, %v", originalResult, stepCalls, err)
 	}
 	// Advance original with +100
-	_, origFinal, err := r.Resume(context.Background(), mustCheckpoint(resExecution), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(resExecution).Invocations[0].ID, CallID: mustCheckpoint(resExecution).Invocations[0].CallID, Payload: []byte(`100`)},
+	_, origFinal, err := r.Resume(context.Background(), mustCheckpoint(originalExecution), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(originalExecution).Invocations[0].ID, CallID: mustCheckpoint(originalExecution).Invocations[0].CallID, Payload: []byte(`100`)},
 	}, store, graph.Options{})
 	if err != nil || origFinal.Status != graph.StatusCompleted || *origFinal.Final != 111 {
 		t.Fatalf("orig final = %+v, %v", origFinal, err)
 	}
 	// Advance forked with +500
-	_, forkFinal, err := r.Resume(context.Background(), mustCheckpoint(forkedResExecution), []graph.ResumeInput{
-		{InvocationID: mustCheckpoint(forkedResExecution).Invocations[0].ID, CallID: mustCheckpoint(forkedResExecution).Invocations[0].CallID, Payload: []byte(`500`)},
+	_, forkFinal, err := r.Resume(context.Background(), mustCheckpoint(forkedExecution), []graph.ResumeInput{
+		{InvocationID: mustCheckpoint(forkedExecution).Invocations[0].ID, CallID: mustCheckpoint(forkedExecution).Invocations[0].CallID, Payload: []byte(`500`)},
 	}, store, graph.Options{})
 	if err != nil || forkFinal.Status != graph.StatusCompleted || *forkFinal.Final != 511 {
 		t.Fatalf("fork final = %+v, %v", forkFinal, err)
+	}
+	if applyCalls != 2 || finishCalls != 2 {
+		t.Fatalf("explicit execution call counts = apply %d, finish %d", applyCalls, finishCalls)
 	}
 
 	// Verify both exist independently in store
@@ -460,7 +503,7 @@ func TestRunnerFork(t *testing.T) {
 	}
 
 	// Forking completed run fails with ErrRunCompleted
-	if _, _, err := r.Fork(context.Background(), "run-fork-completed", origLoaded, store, graph.Options{}); !errors.Is(err, graph.ErrRunCompleted) {
+	if _, err := r.Fork(context.Background(), "run-fork-completed", origLoaded, store); !errors.Is(err, graph.ErrRunCompleted) {
 		t.Fatalf("fork completed = %v, want ErrRunCompleted", err)
 	}
 }
@@ -487,27 +530,30 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	}
 
 	// 1. nil runner
-	if _, _, err := nilRunner.Fork(ctx, "run-1", cp, nil, graph.Options{}); err == nil {
+	if _, err := nilRunner.Fork(ctx, "run-1", cp, nil); err == nil {
 		t.Fatal("expected error on nil runner")
 	}
 
 	// 2. nil ctx
-	if _, _, err := r.Fork(nil, "run-1", cp, nil, graph.Options{}); err == nil {
+	if _, err := r.Fork(nil, "run-1", cp, nil); err == nil {
 		t.Fatal("expected error on nil ctx")
 	}
 
 	// 3. invalid runID
-	if _, _, err := r.Fork(ctx, "", cp, nil, graph.Options{}); err == nil {
+	if _, err := r.Fork(ctx, "", cp, nil); err == nil {
 		t.Fatal("expected error on empty runID")
 	}
-	if _, _, err := r.Fork(ctx, "  spaces  ", cp, nil, graph.Options{}); err == nil {
+	if _, err := r.Fork(ctx, "  spaces  ", cp, nil); err == nil {
 		t.Fatal("expected error on runID with spaces")
+	}
+	if _, err := r.Fork(ctx, cp.RunID, cp, nil); err == nil {
+		t.Fatal("expected error when fork run ID matches the source")
 	}
 
 	// 4. invalid checkpoint (mismatched machine ID)
 	invalidCp := cp
 	invalidCp.MachineID = "wrong-machine"
-	if _, _, err := r.Fork(ctx, "run-1", invalidCp, nil, graph.Options{}); !errors.Is(err, graph.ErrInvalidCheckpoint) {
+	if _, err := r.Fork(ctx, "run-1", invalidCp, nil); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("expected ErrInvalidCheckpoint, got: %v", err)
 	}
 
@@ -515,28 +561,23 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	if err := store.Create(ctx, cp); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.Fork(ctx, "run-cp", cp, store, graph.Options{}); !errors.Is(err, graph.ErrConflict) {
+	existingRun := cp
+	existingRun.RunID = "run-cp-fork"
+	if err := store.Create(ctx, existingRun); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Fork(ctx, "run-cp-fork", cp, store); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("expected ErrConflict, got: %v", err)
 	}
 
 	// 6. Canceled context
 	cancCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, res, err := r.Fork(cancCtx, "run-canc", cp, nil, graph.Options{}); res.Status != graph.StatusCancelled || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected StatusCancelled and context.Canceled, got: %+v, %v", res, err)
+	if _, err := r.Fork(cancCtx, "run-canc", cp, store); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
-
-	// 7. Observer on Fork
-	var observedEvents []graph.Event
-	obs := graph.ObserverFunc(func(_ context.Context, e graph.Event) {
-		observedEvents = append(observedEvents, e)
-	})
-	_, res, err := r.Fork(ctx, "run-obs", cp, nil, graph.Options{Observer: obs})
-	if err != nil || res.Status != graph.StatusCompleted {
-		t.Fatalf("fork with observer failed: %+v, %v", res, err)
-	}
-	if len(observedEvents) == 0 {
-		t.Fatal("expected observed events from fork")
+	if _, err := store.Load(ctx, "run-canc"); err == nil {
+		t.Fatalf("cancelled Fork created a run: %v", err)
 	}
 }
 

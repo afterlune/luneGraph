@@ -9,8 +9,10 @@ import (
 type EventOperation string
 
 const (
-	OperationStart   EventOperation = "start"
-	OperationResume  EventOperation = "resume"
+	OperationStart  EventOperation = "start"
+	OperationResume EventOperation = "resume"
+	// OperationAdvance identifies a call that continues an existing live handle.
+	OperationAdvance EventOperation = "advance"
 	OperationRecover EventOperation = "recover"
 	OperationNode    EventOperation = "node"
 	OperationJoin    EventOperation = "join"

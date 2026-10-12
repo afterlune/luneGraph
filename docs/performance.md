@@ -15,16 +15,35 @@ For execution and persistence contracts, see
 Run focused comparisons serially on the same machine and Go version:
 
 ```sh
-go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin|BenchmarkConcurrentRuns|BenchmarkDurableSequentialExecution|BenchmarkDurableFanoutJoin)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^(BenchmarkSequentialExecution|BenchmarkFanoutJoin|BenchmarkCanMergeJoin|BenchmarkConcurrentRuns|BenchmarkDurableSequentialExecution|BenchmarkDurableFanoutJoin)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
 go test -run '^$' -bench '^BenchmarkCapacity' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/capacitytest
 go test -run '^$' -bench '^BenchmarkObservation$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/observationtest
 go test -run '^$' -bench '^BenchmarkCheckpointCopyInto$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./internal/model
 go test -run '^$' -bench '^(BenchmarkJSONCheckpointEncoding|BenchmarkCheckpointCAS|BenchmarkSQLiteReopenRecover)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./checkpoint/...
 ```
 
+## CanMerge API audit baseline
+
+Measured on 2026-10-12 with Go 1.26.5, Windows/amd64 and AMD Ryzen 7 6800H.
+These three 300 ms samples establish a reference for the new speculative-join
+benchmark; timing ranges are diagnostics, not a cross-machine threshold.
+
+| Workload | CPU | Median ns/op | Sample range | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CanMerge early join | 1 | 29,025 | 28,498–34,809 | 14,824 | 87 |
+| CanMerge early join | 8 | 58,225 | 57,460–62,691 | 14,833 | 87 |
+| Width-32 static fan-out/join | 1 | 146,059 | 136,309–159,577 | 57,464 | 292 |
+| Width-32 static fan-out/join | 8 | 187,188 | 180,326–194,640 | 61,817 | 299 |
+
+The width-32 sample range includes the previously recorded 150,773 ns/op
+candidate median. These samples do not establish a repeatable change in ordinary
+join latency. No pre-change CanMerge benchmark existed; use this new baseline for
+future comparisons.
+
 The benchmark families cover:
 
-- Sequential and fan-out execution; independent runs sharing a compiled Runner.
+- Sequential and fan-out execution, including speculative CanMerge joins;
+  independent runs sharing a compiled Runner.
 - Repeated durable recovery with Memory and SQLite Stores.
 - Graph compilation, fan-out, nested groups, shared runs, paused populations,
   history, interruptions, and callback limiting.

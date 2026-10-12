@@ -137,7 +137,7 @@ func interruptionRunner(t testing.TB, width int, c *interruptionController) *gra
 			s.Values["uncommitted"] = 99
 			return graph.EndExecution(s), err
 		}
-		return graph.To(s, targets...), nil
+		return graph.ToTargets(s, targets), nil
 	})
 	for i, name := range targets {
 		addNode(t, g, name, func(_ context.Context, call graph.CallInfo, s state) (graph.Transition[state], error) {

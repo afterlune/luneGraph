@@ -18,15 +18,14 @@ type live[S any] struct {
 	groups             map[string]ActivationGroup
 	remaining          map[string]int
 	joins              map[string]JoinSpec[S]
-	clone              Clone[S]
 	joinEnqueued       map[string]bool
 	ready              readyQueue
 	readyNodes         int
 	waitingInvocations int
 }
 
-func newLive[S any](cp Checkpoint[S], joins map[string]JoinSpec[S], clone Clone[S]) *live[S] {
-	l := &live[S]{header: cp, joins: joins, clone: clone}
+func newLive[S any](cp Checkpoint[S], joins map[string]JoinSpec[S]) *live[S] {
+	l := &live[S]{header: cp, joins: joins}
 	if len(cp.Invocations) == 1 {
 		l.single = cp.Invocations[0]
 		l.hasSingle = true
@@ -155,7 +154,7 @@ func (l *live[S]) pending() []PendingInvocation {
 	return pending
 }
 
-func (l *live[S]) joinReady(id string) bool {
+func (l *live[S]) joinEligible(id string) bool {
 	g, ok := l.groups[id]
 	if !ok {
 		return false
@@ -171,37 +170,10 @@ func (l *live[S]) joinReady(id string) bool {
 		return false
 	}
 	if spec.CanMerge != nil {
-		defer func() { _ = recover() }()
-		branches := make([]BranchResult[S], 0, len(g.Branches))
-		for index, branch := range g.Branches {
-			childID := branch.InvocationID
-			child, _ := l.invocation(childID)
-			state := child.State
-			if l.clone != nil && child.Status == InvocationJoined {
-				if cloned, err := l.clone(child.State); err == nil {
-					state = cloned
-				}
-			}
-			branches = append(branches, BranchResult[S]{
-				Index:  index,
-				Target: branch.Target,
-				Node:   child.Node,
-				Status: child.Status,
-				State:  state,
-				Error:  branch.Error,
-			})
-		}
-		parent, _ := l.invocation(g.ParentID)
-		parentState := parent.State
-		if l.clone != nil {
-			if cloned, err := l.clone(parent.State); err == nil {
-				parentState = cloned
-			}
-		}
-		if spec.CanMerge(parentState, branches) {
-			return true
-		}
-	} else if spec.Quorum > 0 {
+		// CanMerge is evaluated by the scheduler after it has made isolated copies.
+		return true
+	}
+	if spec.Quorum > 0 {
 		var joined int
 		for _, branch := range g.Branches {
 			childID := branch.InvocationID
@@ -218,7 +190,7 @@ func (l *live[S]) joinReady(id string) bool {
 
 func (l *live[S]) valid(ref taskRef) bool {
 	if ref.join {
-		return l.joinReady(ref.id)
+		return l.joinEligible(ref.id)
 	}
 	v, ok := l.invocation(ref.id)
 	return ok && v.Status == InvocationReady
@@ -231,7 +203,7 @@ func (l *live[S]) enqueueJoinIfReady(id string) {
 	if l.joinEnqueued[id] {
 		return
 	}
-	if l.joinReady(id) {
+	if l.joinEligible(id) {
 		if l.joinEnqueued == nil {
 			l.joinEnqueued = make(map[string]bool)
 		}

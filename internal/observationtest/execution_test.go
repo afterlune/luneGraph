@@ -51,6 +51,49 @@ func TestLoopBudgetAndResumeEvents(t *testing.T) {
 	}
 }
 
+func TestAdvanceAndResumeHaveDistinctOperations(t *testing.T) {
+	g := graph.New[int]("wait")
+	node(t, g, "wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.Wait(state, "input", "done"), nil
+	})
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "wait", "done")
+	if err := graph.RegisterJSONContinuation(g, "input", func(_ context.Context, _ graph.CallInfo, state, input int) (int, error) {
+		return state + input, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := compile(t, g)
+	log := &recorder{}
+	execution, first, err := r.Start(context.Background(), "advance-operation", 4, nil, graph.Options{Observer: log})
+	if err != nil || first.Status != graph.StatusWaiting {
+		t.Fatalf("start = %+v, %v", first, err)
+	}
+	events := log.snapshot()
+	checkCall(t, events, graph.OperationStart, first, err)
+
+	advanced, err := execution.Advance(context.Background(), nil, graph.Options{Observer: log})
+	if err != nil || advanced.Status != graph.StatusWaiting {
+		t.Fatalf("advance = %+v, %v", advanced, err)
+	}
+	advanceEvents := log.snapshot()[len(events):]
+	checkCall(t, advanceEvents, graph.OperationAdvance, advanced, err)
+
+	pending := execution.Pending()[0]
+	_, completed, err := r.Resume(context.Background(), mustCheckpoint(execution), []graph.ResumeInput{{
+		InvocationID: pending.InvocationID,
+		CallID:       pending.CallID,
+		Payload:      []byte("3"),
+	}}, nil, graph.Options{Observer: log})
+	if err != nil || completed.Status != graph.StatusCompleted {
+		t.Fatalf("resume = %+v, %v", completed, err)
+	}
+	resumeEvents := log.snapshot()[len(events)+len(advanceEvents):]
+	checkCall(t, resumeEvents, graph.OperationResume, completed, err)
+}
+
 func TestObserverPanicsDoNotChangeExecution(t *testing.T) {
 	r := singleRunner(t)
 	_, baseline, baseErr := r.Start(context.Background(), "same", 4, memoryStore(t), graph.Options{})

@@ -379,6 +379,25 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsJoinWithBothEarlyMergeStrategies(t *testing.T) {
+	g := New[int]("source")
+	addDefinitionNode(t, g, "source", model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+		return model.EndExecution(0), nil
+	}))
+	addDefinitionJoin(t, g, model.JoinSpec[int]{
+		Name:     "joined",
+		From:     "source",
+		Quorum:   1,
+		CanMerge: func(int, []model.BranchResult[int]) bool { return true },
+		Merge: func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) {
+			return 0, nil
+		},
+	})
+	if _, err := g.Compile(model.Config[int]{MachineID: "ambiguous-join", Clone: func(value int) (int, error) { return value, nil }}); err == nil {
+		t.Fatal("Compile accepted both Quorum and CanMerge")
+	}
+}
+
 func TestRewriteNodePreservesNonRoutingActionsAndErrors(t *testing.T) {
 	boom := errors.New("node error")
 	run := model.Node[int](func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {

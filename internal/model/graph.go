@@ -35,8 +35,17 @@ type Branch[S any] struct {
 	Timeout time.Duration
 }
 
-// To continues to one target or fans out to several declared targets.
-func To[S any](state S, targets ...string) Transition[S] {
+// To continues to the required target or fans out to additional declared targets.
+func To[S any](state S, target string, additionalTargets ...string) Transition[S] {
+	targets := make([]string, 1, len(additionalTargets)+1)
+	targets[0] = target
+	targets = append(targets, additionalTargets...)
+	return Transition[S]{State: state, Action: ActionContinue, Targets: targets}
+}
+
+// ToTargets continues to the supplied runtime-generated targets. At least one
+// target is required; an empty slice is rejected when the transition is applied.
+func ToTargets[S any](state S, targets []string) Transition[S] {
 	return Transition[S]{State: state, Action: ActionContinue, Targets: append([]string(nil), targets...)}
 }
 
@@ -145,12 +154,16 @@ type NodeSpec[S any] struct {
 // JoinSpec consumes obligations created by fan-out at From. Its only possible
 // successor is its sole outgoing edge; without one it ends the parent branch.
 type JoinSpec[S any] struct {
-	Name     string
-	From     string
-	Merge    Merge[S]
-	OnError  FailureScope
-	Timeout  time.Duration
-	Quorum   int
+	Name    string
+	From    string
+	Merge   Merge[S]
+	OnError FailureScope
+	Timeout time.Duration
+	Quorum  int
+	// CanMerge is a fast, deterministic, side-effect-free predicate. It may be
+	// called repeatedly as branch outcomes change. It receives cloned parent
+	// and branch states; it must not mutate them or block. A panic is handled as
+	// a join failure according to OnError.
 	CanMerge func(parent S, branches []BranchResult[S]) bool
 }
 

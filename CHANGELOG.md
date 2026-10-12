@@ -6,8 +6,8 @@
 
 - Add dynamic `FanOut` and `CompleteBranch` for zero-or-more tasks, nested task
   groups, ordered branch outcomes, and tolerant joins. Joins can run early with
-  a quorum or predicate and prune unfinished branches; node, join, and branch
-  callbacks support deadlines.
+  a quorum or predicate and prune unfinished branches; node and Merge
+  callbacks plus dynamic branches support deadlines.
 - Add live `Execution` handles for repeated advances, pending-wait inspection,
   recovery, and forks. Add resumable step and invocation budgets, interruption,
   shared callback limiting, and callback observation.
@@ -22,9 +22,18 @@
 
 - `Merge` receives the cloned parent state and ordered `[]BranchResult[S]`,
   including successful, ended, failed, and pending branch outcomes.
-- `Start`, `Resume`, `Recover`, and `Fork` return a live execution handle,
-  per-call result, and error. `Options` is non-generic, Store is passed
-  explicitly, and full checkpoints are materialized through the handle.
+- `Start`, `Resume`, and `Recover` return a live execution handle, per-call
+  result, and error. `Options` is non-generic, Store is passed explicitly, and
+  full checkpoints are materialized through the handle.
+- Change `Runner.Fork` to return a cloned active checkpoint without executing
+  callbacks or emitting execution events. It optionally persists the copy; use
+  Recover or Resume to drive it. Fork no longer accepts execution Options or
+  returns an execution Result.
+- `To` now requires its first target; runtime-generated target slices use
+  `ToTargets`. `Result.BudgetReason` distinguishes step and invocation limits,
+  and `OperationAdvance` distinguishes live-handle advances from checkpoint
+  resumes. `CanMerge` and `Quorum` are exclusive; `CanMerge` receives cloned
+  state copies, and predicate panics follow the join failure policy.
 - Stores use revision-checked delta commits and expose `LoadHeader`; checkpoint
   state codecs encode application state only. `Store.DeleteMany` was removed.
 - Resume inputs require the original waiting `CallID`. A mismatch is rejected

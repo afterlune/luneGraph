@@ -118,7 +118,7 @@ func fanoutRunner(t testing.TB, width int) *graph.Runner[int] {
 		targets[i] = strconv.Itoa(i)
 	}
 	node(t, g, "fork", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
-		return graph.To(s, targets...), nil
+		return graph.ToTargets(s, targets), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		values := graph.BranchValues(branches)

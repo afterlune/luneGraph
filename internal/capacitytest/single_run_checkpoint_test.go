@@ -28,7 +28,7 @@ func singleRunCheckpoint(t testing.TB, waiters int, clones ...graph.Clone[state]
 
 	g := graph.New[state]("root")
 	addNode(t, g, "root", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-		return graph.To(s, targets...), nil
+		return graph.ToTargets(s, targets), nil
 	})
 	addNode(t, g, "done", func(_ context.Context, _ graph.CallInfo, _ state) (graph.Transition[state], error) {
 		return graph.EndBranch[state](), nil

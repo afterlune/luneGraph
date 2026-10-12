@@ -52,6 +52,12 @@ func (r *Runner[S]) resultFromLive(l *live[S], status Status) (Result[S], error)
 	return r.resultWithHeader(l.header.Header(), l.header.Final, status)
 }
 
+func (r *Runner[S]) resultFromLiveWithBudget(l *live[S], reason BudgetReason) (Result[S], error) {
+	result, err := r.resultFromLive(l, StatusBudget)
+	result.BudgetReason = reason
+	return result, err
+}
+
 func (r *Runner[S]) resultFromCheckpoint(cp Checkpoint[S], status Status) (Result[S], error) {
 	return r.resultWithHeader(cp.Header(), cp.Final, status)
 }
@@ -137,67 +143,54 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store St
 			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
-	l := newLive(s, r.joins, r.clone)
+	l := newLive(s, r.joins)
 	execution = &Execution[S]{runner: r, live: l, store: rawStore}
 	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
 	return execution, result, retErr
 }
 
-// Fork creates an independent execution from source, assigning it newRunID and
-// resetting its Revision to 1. State values are cloned using the runner's Clone
-// function. If store is non-nil, the initial checkpoint is created there. Fork
-// returns the live handle and this call's Result.
-func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint[S], store Store[S], opts Options) (execution *Execution[S], result Result[S], retErr error) {
+// Fork creates an independent checkpoint from an active source, assigning it
+// newRunID and resetting its Revision to 1. State values are cloned using the
+// runner's Clone function. If store is non-nil, the checkpoint is created there.
+// Fork does not execute callbacks or emit execution events; use Recover or
+// Resume to drive the fork.
+func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint[S], store Store[S]) (Checkpoint[S], error) {
 	if r == nil {
-		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
+		return Checkpoint[S]{}, errors.New("runner is nil")
 	}
 	if ctx == nil {
-		return nil, Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
+		return Checkpoint[S]{}, errors.New("context must not be nil")
 	}
 	if !validName(newRunID) {
-		return nil, Result[S]{Status: StatusFailed}, errors.New("run ID must be non-empty and have no surrounding whitespace")
+		return Checkpoint[S]{}, errors.New("run ID must be non-empty and have no surrounding whitespace")
 	}
 	if err := r.validateCheckpoint(source); err != nil {
-		return nil, Result[S]{Status: StatusFailed}, err
+		return Checkpoint[S]{}, err
 	}
 	if source.Completed {
-		return nil, Result[S]{Status: StatusFailed}, ErrRunCompleted
+		return Checkpoint[S]{}, ErrRunCompleted
 	}
-	rawStore := store
-	activeStore := store
-	obs := observation.New(opts.Observer, r.id, newRunID)
-	if obs != nil {
-		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
-		defer func() {
-			if result.Status != "" {
-				obs.DiscardPending(ctx, retErr)
-				span.End(ctx, model.Event{Revision: result.Header.Revision, Status: result.Status, Err: retErr})
-			}
-		}()
-		activeStore = observation.WrapStore(store, obs)
+	if newRunID == source.RunID {
+		return Checkpoint[S]{}, errors.New("fork run ID must differ from source run ID")
 	}
-	var err error
-	if opts, err = normalizeOptions(opts); err != nil {
-		return nil, Result[S]{Status: StatusFailed}, err
-	}
-	if err = ctx.Err(); err != nil {
-		return nil, Result[S]{Status: StatusCancelled}, err
+	if err := ctx.Err(); err != nil {
+		return Checkpoint[S]{}, err
 	}
 	forked, err := source.Clone(r.clone)
 	if err != nil {
-		return nil, Result[S]{Status: StatusFailed}, fmt.Errorf("clone forked checkpoint: %w", err)
+		return Checkpoint[S]{}, fmt.Errorf("clone forked checkpoint: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Checkpoint[S]{}, err
 	}
 	forked.RunID = newRunID
 	forked.Revision = 1
-	if activeStore != nil {
-		if err := activeStore.Create(ctx, forked); err != nil {
-			return nil, Result[S]{Status: errorStatus(err)}, err
+	if store != nil {
+		if err := store.Create(ctx, forked); err != nil {
+			return Checkpoint[S]{}, err
 		}
 	}
-	l := newLive(forked, r.joins, r.clone)
-	execution = &Execution[S]{runner: r, live: l, store: rawStore}
-	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
-	return execution, result, retErr
+	return forked, nil
 }
 
 func (r *Runner[S]) scope(declared FailureScope, opts Options) FailureScope {

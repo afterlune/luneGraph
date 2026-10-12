@@ -53,7 +53,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	for name, transition := range map[string]Transition[int]{
-		"no target":             model.To(0),
+		"no target":             model.ToTargets(0, nil),
 		"bad edge":              model.To(0, "missing"),
 		"duplicate target":      model.To(0, "next", "next"),
 		"unknown continuation":  model.Wait(0, "missing", "next"),

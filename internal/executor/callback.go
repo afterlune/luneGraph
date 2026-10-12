@@ -49,6 +49,15 @@ func (r *Runner[S]) mergeStates(ctx context.Context, call CallInfo, spec JoinSpe
 	return out, err
 }
 
+func canMerge[S any](spec JoinSpec[S], call CallInfo, parent S, branches []BranchResult[S]) (ready bool, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			err = panicAsError("can-merge "+spec.Name, call.InvocationID, value)
+		}
+	}()
+	return spec.CanMerge(parent, branches), nil
+}
+
 func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err error) {
 	defer func() {
 		if value := recover(); value != nil {

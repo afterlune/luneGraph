@@ -19,7 +19,7 @@ func TestWideRotationAcrossBudgetAndWait(t *testing.T) {
 				targets[i] = fmt.Sprintf("branch-%d", i)
 			}
 			addNode(t, g, "fork", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-				return graph.To(s, targets...), nil
+				return graph.ToTargets(s, targets), nil
 			})
 			type visit struct {
 				branch int

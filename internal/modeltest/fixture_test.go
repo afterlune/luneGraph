@@ -55,7 +55,7 @@ func runner(t testing.TB, m model, c *controller) *graph.Runner[state] {
 			targets[i] = fmt.Sprintf("b%d", i)
 		}
 		add("fork", func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {
-			return graph.To(s, targets...), nil
+			return graph.ToTargets(s, targets), nil
 		})
 		for i, name := range targets {
 			add(name, func(_ context.Context, _ graph.CallInfo, s state) (graph.Transition[state], error) {

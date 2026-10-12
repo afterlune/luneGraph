@@ -101,9 +101,12 @@ type Checkpoint[S any] struct {
 // Result describes one public execution call without materializing its full
 // checkpoint. Use Execution.Checkpoint when a full independent snapshot is needed.
 type Result[S any] struct {
+	// Status is the outcome of this public call.
 	Status Status
-	Header Header
-	Final  *S
+	// BudgetReason identifies the limit when Status is StatusBudget; otherwise it is empty.
+	BudgetReason BudgetReason
+	Header       Header
+	Final        *S
 }
 
 // PendingInvocation identifies one waiting continuation without exposing its state.

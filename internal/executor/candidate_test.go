@@ -33,7 +33,7 @@ func nestedCandidatePosition() Checkpoint[int] {
 }
 
 func TestCandidateCollectsOnlyAffectedNestedTopology(t *testing.T) {
-	l := newLive(nestedCandidatePosition(), nil, nil)
+	l := newLive(nestedCandidatePosition(), nil)
 	for _, test := range []struct {
 		name        string
 		subtree     bool
@@ -76,7 +76,7 @@ func sortedPosition[S any](cp Checkpoint[S]) Checkpoint[S] {
 func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 	r := executorTestRunner(t, "source", []NodeSpec[int]{executorTestNode("source", executorTestEnd, FailExecution), executorTestNode("next", executorTestEnd, FailExecution)}, nil, map[string][]string{"source": {"next"}}, nil, nil)
 	cp := executorTestReadyCheckpoint("source", 1)
-	l := newLive(cp, nil, nil)
+	l := newLive(cp, nil)
 	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(9, "missing")}, 0); err == nil {
 		t.Fatal("invalid transition accepted")
 	}
@@ -124,7 +124,7 @@ func TestCandidateWideCollectionAndDifferenceReuse(t *testing.T) {
 		cp.Invocations = append(cp.Invocations, Invocation[int]{ID: id, Status: InvocationJoined, GroupID: "wide"})
 		cp.Groups[0].Branches = append(cp.Groups[0].Branches, ActivationBranch{InvocationID: id})
 	}
-	l := newLive(cp, nil, nil)
+	l := newLive(cp, nil)
 	for range 2 {
 		before, after := l.workspace.prepare(l, "parent", false, "wide")
 		if len(before.Invocations) != 33 || len(before.Groups) != 1 {

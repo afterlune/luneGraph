@@ -58,6 +58,85 @@ func BenchmarkFanoutJoin(b *testing.B) {
 	}
 }
 
+func BenchmarkCanMergeJoin(b *testing.B) {
+	runner := benchmarkCanMergeRunner(b)
+	options := graph.Options{MaxSteps: 6, MaxConcurrency: 4}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_, result, err := runner.Start(context.Background(), "can-merge-benchmark", 0, nil, options)
+		if err != nil || result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != 1 {
+			b.Fatalf("CanMerge result = %+v, %v", result, err)
+		}
+	}
+}
+
+func benchmarkCanMergeRunner(b *testing.B) *graph.Runner[int] {
+	b.Helper()
+	g := graph.New[int]("dispatch")
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "dispatch", Run: func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
+		return graph.FanOut(parent,
+			graph.Branch[int]{Target: "fast", State: 1},
+			graph.Branch[int]{Target: "slow", State: 2},
+			graph.Branch[int]{Target: "slow", State: 3},
+			graph.Branch[int]{Target: "slow", State: 4},
+		), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "fast", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.CompleteBranch(state), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "slow", Run: func(ctx context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
+		<-ctx.Done()
+		return graph.Transition[int]{}, ctx.Err()
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddJoin(graph.JoinSpec[int]{
+		Name: "joined", From: "dispatch",
+		CanMerge: func(_ int, branches []graph.BranchResult[int]) bool {
+			for _, branch := range branches {
+				if branch.OK() {
+					return true
+				}
+			}
+			return false
+		},
+		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+			for _, branch := range branches {
+				if branch.OK() {
+					parent += branch.State
+				}
+			}
+			return parent, nil
+		},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "done", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("dispatch", "fast"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("dispatch", "slow"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("joined", "done"); err != nil {
+		b.Fatal(err)
+	}
+	runner, err := g.Compile(graph.Config[int]{MachineID: "can-merge-benchmark-v1", Clone: graph.ValueClone[int]})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return runner
+}
+
 func BenchmarkConcurrentRuns(b *testing.B) {
 	for _, persistence := range []string{"none", "memory", "sqlite"} {
 		b.Run(persistence, func(b *testing.B) {
@@ -154,7 +233,7 @@ func benchmarkFanoutRunner(b *testing.B, width int) *graph.Runner[int] {
 	g := graph.New[int]("fork")
 	targets := make([]string, width)
 	if err := g.AddNode(graph.NodeSpec[int]{Name: "fork", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
-		return graph.To(state, targets...), nil
+		return graph.ToTargets(state, targets), nil
 	}}); err != nil {
 		b.Fatal(err)
 	}

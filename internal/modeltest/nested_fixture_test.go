@@ -52,7 +52,7 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 		for i := range targets {
 			targets[i] = fmt.Sprintf("leaf%d", i)
 		}
-		return graph.To(s, targets...), nil
+		return graph.ToTargets(s, targets), nil
 	})
 	for i := range m.width {
 		index := i

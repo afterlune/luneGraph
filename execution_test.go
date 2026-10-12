@@ -30,11 +30,11 @@ func TestStaleExecutionHandleChecksHeaderBeforeCallbacks(t *testing.T) {
 	}
 	ctx := context.Background()
 	stale, first, err := runner.Start(ctx, "stale-handle", 0, store, graph.Options{MaxSteps: 1, MaxConcurrency: 1})
-	if err != nil || first.Status != graph.StatusBudget || first.Header.Revision != 2 || calls != 1 {
+	if err != nil || first.Status != graph.StatusBudget || first.BudgetReason != graph.BudgetMaxSteps || first.Header.Revision != 2 || calls != 1 {
 		t.Fatalf("start = %+v, %v, calls=%d", first, err, calls)
 	}
 	_, external, err := runner.Recover(ctx, "stale-handle", nil, store, graph.Options{MaxSteps: 1, MaxConcurrency: 1})
-	if err != nil || external.Status != graph.StatusBudget || external.Header.Revision != 3 || calls != 2 {
+	if err != nil || external.Status != graph.StatusBudget || external.BudgetReason != graph.BudgetMaxSteps || external.Header.Revision != 3 || calls != 2 {
 		t.Fatalf("external advance = %+v, %v, calls=%d", external, err, calls)
 	}
 	out, err := stale.Advance(ctx, nil, graph.Options{MaxSteps: 1, MaxConcurrency: 1})

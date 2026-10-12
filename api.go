@@ -26,35 +26,42 @@ type (
 	ActivationBranch    = model.ActivationBranch
 	Branch[S any]       = model.Branch[S]
 	BranchResult[S any] = model.BranchResult[S]
-	CallInfo            = model.CallInfo
-	Checkpoint[S any]   = model.Checkpoint[S]
-	Clone[S any]        = model.Clone[S]
-	Config[S any]       = model.Config[S]
-	Failure             = model.Failure
-	FailureScope        = model.FailureScope
-	Graph[S any]        = definition.Graph[S]
-	Invocation[S any]   = model.Invocation[S]
-	InvocationStatus    = model.InvocationStatus
-	JoinSpec[S any]     = model.JoinSpec[S]
-	Merge[S any]        = model.Merge[S]
-	Node[S any]         = model.Node[S]
-	NodeSpec[S any]     = model.NodeSpec[S]
-	Options             = model.Options
-	PanicError          = model.PanicError
-	PendingInvocation   = model.PendingInvocation
-	Result[S any]       = model.Result[S]
-	ResumeInput         = model.ResumeInput
-	Execution[S any]    = executor.Execution[S]
-	Runner[S any]       = executor.Runner[S]
-	Status              = model.Status
-	Store[S any]        = model.Store[S]
-	Transition[S any]   = model.Transition[S]
-	TransitionError     = model.TransitionError
+	// BudgetReason identifies the per-call limit that prevented further progress.
+	BudgetReason      = model.BudgetReason
+	CallInfo          = model.CallInfo
+	Checkpoint[S any] = model.Checkpoint[S]
+	Clone[S any]      = model.Clone[S]
+	Config[S any]     = model.Config[S]
+	Failure           = model.Failure
+	FailureScope      = model.FailureScope
+	Graph[S any]      = definition.Graph[S]
+	Invocation[S any] = model.Invocation[S]
+	InvocationStatus  = model.InvocationStatus
+	// JoinSpec defines one fan-out join. Quorum and CanMerge are exclusive.
+	JoinSpec[S any]   = model.JoinSpec[S]
+	Merge[S any]      = model.Merge[S]
+	Node[S any]       = model.Node[S]
+	NodeSpec[S any]   = model.NodeSpec[S]
+	Options           = model.Options
+	PanicError        = model.PanicError
+	PendingInvocation = model.PendingInvocation
+	// Result describes one public call; BudgetReason is set only for StatusBudget.
+	Result[S any]    = model.Result[S]
+	ResumeInput      = model.ResumeInput
+	Execution[S any] = executor.Execution[S]
+	Runner[S any]    = executor.Runner[S]
+	// Status describes the outcome of one Start, Resume, Recover, or Advance call.
+	Status            = model.Status
+	Store[S any]      = model.Store[S]
+	Transition[S any] = model.Transition[S]
+	TransitionError   = model.TransitionError
 )
 
 const (
-	OperationStart   = model.OperationStart
-	OperationResume  = model.OperationResume
+	OperationStart  = model.OperationStart
+	OperationResume = model.OperationResume
+	// OperationAdvance identifies a call that continues an existing live handle.
+	OperationAdvance = model.OperationAdvance
 	OperationRecover = model.OperationRecover
 	OperationNode    = model.OperationNode
 	OperationJoin    = model.OperationJoin
@@ -98,17 +105,29 @@ const (
 	StatusCancelled             = model.StatusCancelled
 	StatusInterrupted           = model.StatusInterrupted
 
+	// BudgetMaxSteps reports that node-start admission exhausted its per-call limit.
+	BudgetMaxSteps = model.BudgetMaxSteps
+	// BudgetMaxInvocations reports that a transition exceeded the retained invocation limit.
+	BudgetMaxInvocations = model.BudgetMaxInvocations
+
 	CheckpointFormatVersion = model.CheckpointFormatVersion
 )
 
 var (
-	ErrConflict           = model.ErrConflict
-	ErrExecutionLimit     = model.ErrExecutionLimit
-	ErrInvalidCheckpoint  = model.ErrInvalidCheckpoint
+	// ErrConflict means the stored execution revision changed before commit.
+	ErrConflict = model.ErrConflict
+	// ErrExecutionLimit means an execution counter cannot advance safely.
+	ErrExecutionLimit = model.ErrExecutionLimit
+	// ErrInvalidCheckpoint means a checkpoint violates the execution schema.
+	ErrInvalidCheckpoint = model.ErrInvalidCheckpoint
+	// ErrInvalidResumeInput means a continuation input does not match a pending wait.
 	ErrInvalidResumeInput = model.ErrInvalidResumeInput
-	ErrRunCompleted       = model.ErrRunCompleted
-	ErrRunFailed          = model.ErrRunFailed
-	ErrInterrupted        = model.ErrInterrupted
+	// ErrRunCompleted means an operation requiring active work was given a terminal run.
+	ErrRunCompleted = model.ErrRunCompleted
+	// ErrRunFailed reports a persisted execution-level failure after recovery.
+	ErrRunFailed = model.ErrRunFailed
+	// ErrInterrupted is the default cause returned by Interrupt(nil).
+	ErrInterrupted = model.ErrInterrupted
 )
 
 // New creates a graph builder with the given entry vertex name.
@@ -151,18 +170,28 @@ func JSONClone[S any](state S) (S, error) {
 	return cloned, nil
 }
 
-func To[S any](state S, targets ...string) Transition[S] {
-	return model.To(state, targets...)
+// To continues to the required target or fans out to additional declared targets.
+func To[S any](state S, target string, additionalTargets ...string) Transition[S] {
+	return model.To(state, target, additionalTargets...)
 }
 
+// ToTargets continues to a runtime-generated list of declared targets. The
+// list must not be empty; an empty list is rejected when the transition runs.
+func ToTargets[S any](state S, targets []string) Transition[S] {
+	return model.ToTargets(state, targets)
+}
+
+// Wait commits state and suspends this invocation for a registered continuation.
 func Wait[S any](state S, continuation string, targets ...string) Transition[S] {
 	return model.Wait(state, continuation, targets...)
 }
 
+// FanOut creates one independent child invocation for each branch.
 func FanOut[S any](parent S, branches ...Branch[S]) Transition[S] {
 	return model.FanOut(parent, branches...)
 }
 
+// CompleteBranch returns this invocation's state to its activation group's join.
 func CompleteBranch[S any](state S) Transition[S] {
 	return model.CompleteBranch(state)
 }
@@ -181,6 +210,7 @@ func BranchValues[S any](branches []BranchResult[S]) []S {
 // EndBranch finishes the current invocation without producing a result.
 func EndBranch[S any]() Transition[S] { return model.EndBranch[S]() }
 
+// EndExecution finishes the whole run with state as its final result.
 func EndExecution[S any](state S) Transition[S] { return model.EndExecution(state) }
 
 // Return leaves a mounted subgraph and follows the edge leaving its mount point.

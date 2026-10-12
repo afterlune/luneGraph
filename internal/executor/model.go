@@ -9,6 +9,7 @@ type (
 	ActivationGroup     = model.ActivationGroup
 	Branch[S any]       = model.Branch[S]
 	BranchResult[S any] = model.BranchResult[S]
+	BudgetReason        = model.BudgetReason
 	CallInfo            = model.CallInfo
 	Checkpoint[S any]   = model.Checkpoint[S]
 	Clone[S any]        = model.Clone[S]
@@ -59,6 +60,9 @@ const (
 	StatusFailed                = model.StatusFailed
 	StatusCancelled             = model.StatusCancelled
 	StatusInterrupted           = model.StatusInterrupted
+
+	BudgetMaxSteps       = model.BudgetMaxSteps
+	BudgetMaxInvocations = model.BudgetMaxInvocations
 
 	CheckpointFormatVersion = model.CheckpointFormatVersion
 )

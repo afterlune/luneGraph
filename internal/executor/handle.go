@@ -34,6 +34,7 @@ func (e *Execution[S]) Checkpoint() (Checkpoint[S], error) {
 
 // Advance applies continuation inputs and continues this live execution. When
 // backed by a Store, it checks the persisted header revision before callbacks.
+// Its observer operation is OperationAdvance; Runner.Resume reports OperationResume.
 func (e *Execution[S]) Advance(ctx context.Context, inputs []ResumeInput, opts Options) (result Result[S], retErr error) {
 	if ctx == nil {
 		return Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
@@ -44,7 +45,7 @@ func (e *Execution[S]) Advance(ctx context.Context, inputs []ResumeInput, opts O
 	r := e.runner
 	obs := observation.New(opts.Observer, r.id, e.live.header.RunID)
 	if obs != nil {
-		span := obs.Begin(ctx, model.Event{Operation: model.OperationResume, Revision: e.live.header.Revision})
+		span := obs.Begin(ctx, model.Event{Operation: model.OperationAdvance, Revision: e.live.header.Revision})
 		defer func() {
 			if result.Status != "" {
 				obs.DiscardPending(ctx, retErr)

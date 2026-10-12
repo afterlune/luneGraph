@@ -68,7 +68,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 		return nil, result, errors.Join(fmt.Errorf("clone resume checkpoint: %w", err), resultErr)
 	}
-	l := newLive(owned, r.joins, r.clone)
+	l := newLive(owned, r.joins)
 	execution = &Execution[S]{runner: r, live: l, store: store}
 	result, retErr = r.advanceLive(ctx, l, inputs, opts, activeStore, obs)
 	return execution, result, retErr
@@ -129,12 +129,12 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 			}
 			return r.resultFromLiveOrEmpty(l, status, err)
 		}
-		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.To(updated, inv.Next...), err: err}
+		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.ToTargets(updated, inv.Next), err: err}
 		c, terminalErr, buildErr := r.resultChange(l, out, opts.MaxInvocations)
 		if buildErr != nil {
 			if errors.Is(buildErr, errInvocationBudget) {
 				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, buildErr)
-				return r.resultFromLiveOrEmpty(l, StatusBudget, nil)
+				return r.resultFromLiveWithBudget(l, BudgetMaxInvocations)
 			}
 			return r.resultFromLiveOrEmpty(l, errorStatus(buildErr), buildErr)
 		}

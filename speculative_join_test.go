@@ -13,6 +13,14 @@ import (
 	"github.com/afterlune/luneGraph/checkpoint/sqlite"
 )
 
+type speculativeState struct {
+	Values []int
+}
+
+func cloneSpeculativeState(state speculativeState) (speculativeState, error) {
+	return speculativeState{Values: append([]int(nil), state.Values...)}, nil
+}
+
 func TestSpeculativeJoinWithQuorum(t *testing.T) {
 	g := graph.New[int]("dispatch")
 
@@ -192,6 +200,147 @@ func TestSpeculativeJoinWithCanMerge(t *testing.T) {
 	}
 	if !slowCancelled.Load() {
 		t.Fatal("expected pending workers to be cancelled")
+	}
+}
+
+func TestCanMergeReceivesIsolatedStateCopies(t *testing.T) {
+	g := graph.New[speculativeState]("dispatch")
+	var predicateCalls atomic.Int32
+	var badPredicateInput atomic.Bool
+	var slowCancelled atomic.Bool
+	slowStarted := make(chan struct{})
+
+	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent speculativeState) (graph.Transition[speculativeState], error) {
+		return graph.FanOut(parent,
+			graph.Branch[speculativeState]{Target: "worker", State: speculativeState{Values: []int{1}}},
+			graph.Branch[speculativeState]{Target: "worker", State: speculativeState{Values: []int{2}}},
+		), nil
+	})
+	node(t, g, "worker", func(ctx context.Context, _ graph.CallInfo, state speculativeState) (graph.Transition[speculativeState], error) {
+		if len(state.Values) != 1 {
+			return graph.Transition[speculativeState]{}, errors.New("worker received invalid state")
+		}
+		if state.Values[0] == 1 {
+			return graph.CompleteBranch(speculativeState{Values: []int{10}}), nil
+		}
+		close(slowStarted)
+		select {
+		case <-ctx.Done():
+			slowCancelled.Store(true)
+			return graph.Transition[speculativeState]{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return graph.CompleteBranch(state), nil
+		}
+	})
+	if err := g.AddJoin(graph.JoinSpec[speculativeState]{
+		Name: "joined",
+		From: "dispatch",
+		CanMerge: func(parent speculativeState, branches []graph.BranchResult[speculativeState]) bool {
+			predicateCalls.Add(1)
+			if len(parent.Values) != 1 || parent.Values[0] != 9 || len(branches) != 2 || len(branches[0].State.Values) != 1 || len(branches[1].State.Values) != 1 || branches[1].State.Values[0] != 2 {
+				badPredicateInput.Store(true)
+			}
+			ready := branches[0].OK() && branches[0].State.Values[0] == 10
+			parent.Values[0] = 900
+			branches[0].State.Values[0] = 901
+			branches[1].State.Values[0] = 902
+			return ready
+		},
+		OnError: graph.FailExecution,
+		Merge: func(_ context.Context, _ graph.CallInfo, parent speculativeState, branches []graph.BranchResult[speculativeState]) (speculativeState, error) {
+			if parent.Values[0] != 9 || len(branches[0].State.Values) != 1 || branches[0].State.Values[0] != 10 {
+				return speculativeState{}, errors.New("CanMerge mutations leaked into Merge")
+			}
+			return speculativeState{Values: []int{parent.Values[0] + branches[0].State.Values[0]}}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state speculativeState) (graph.Transition[speculativeState], error) {
+		return graph.EndExecution(state), nil
+	})
+	edge(t, g, "dispatch", "worker")
+	edge(t, g, "joined", "done")
+	runner, err := g.Compile(graph.Config[speculativeState]{MachineID: "can-merge-isolation", Clone: cloneSpeculativeState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, result, err := runner.Start(context.Background(), "can-merge-isolation", speculativeState{Values: []int{9}}, nil, graph.Options{MaxConcurrency: 3})
+	if err != nil || result.Status != graph.StatusCompleted || result.Final == nil || len(result.Final.Values) != 1 || result.Final.Values[0] != 19 {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	select {
+	case <-slowStarted:
+	default:
+		t.Fatal("slow branch never started")
+	}
+	if !slowCancelled.Load() || predicateCalls.Load() < 2 || badPredicateInput.Load() {
+		t.Fatalf("predicate calls=%d cancelled=%v invalid input=%v", predicateCalls.Load(), slowCancelled.Load(), badPredicateInput.Load())
+	}
+}
+
+func TestCanMergePanicUsesJoinFailurePolicy(t *testing.T) {
+	g := graph.New[int]("dispatch")
+	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.FanOut(state, graph.Branch[int]{Target: "worker", State: state}), nil
+	})
+	node(t, g, "worker", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.CompleteBranch(state), nil
+	})
+	edge(t, g, "dispatch", "worker")
+	if err := g.AddJoin(graph.JoinSpec[int]{
+		Name: "joined", From: "dispatch", OnError: graph.FailExecution,
+		CanMerge: func(int, []graph.BranchResult[int]) bool { panic("predicate panic") },
+		Merge: func(_ context.Context, _ graph.CallInfo, parent int, _ []graph.BranchResult[int]) (int, error) {
+			return parent, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := intRunner(t, g)
+	_, result, err := runner.Start(context.Background(), "can-merge-panic", 7, nil, graph.Options{})
+	var panicErr *graph.PanicError
+	if !errors.As(err, &panicErr) || panicErr.Callback != "can-merge joined" || result.Status != graph.StatusFailed || !result.Header.Completed || result.Header.Failure == nil {
+		t.Fatalf("CanMerge panic = %+v, %v", result, err)
+	}
+}
+
+func TestCanMergeCloneErrorDoesNotCommitTerminalFailure(t *testing.T) {
+	g := graph.New[speculativeState]("dispatch")
+	cloneFailure := errors.New("predicate state clone failed")
+	var markerClones atomic.Int32
+	clone := func(state speculativeState) (speculativeState, error) {
+		if len(state.Values) == 1 && state.Values[0] == 123 && markerClones.Add(1) == 3 {
+			return speculativeState{}, cloneFailure
+		}
+		return cloneSpeculativeState(state)
+	}
+	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent speculativeState) (graph.Transition[speculativeState], error) {
+		return graph.FanOut(parent,
+			graph.Branch[speculativeState]{Target: "worker", State: speculativeState{Values: []int{1}}},
+			graph.Branch[speculativeState]{Target: "worker", State: speculativeState{Values: []int{123}}},
+		), nil
+	})
+	node(t, g, "worker", func(_ context.Context, _ graph.CallInfo, state speculativeState) (graph.Transition[speculativeState], error) {
+		return graph.CompleteBranch(state), nil
+	})
+	edge(t, g, "dispatch", "worker")
+	if err := g.AddJoin(graph.JoinSpec[speculativeState]{
+		Name: "joined", From: "dispatch", OnError: graph.FailExecution,
+		CanMerge: func(speculativeState, []graph.BranchResult[speculativeState]) bool { return true },
+		Merge: func(_ context.Context, _ graph.CallInfo, parent speculativeState, _ []graph.BranchResult[speculativeState]) (speculativeState, error) {
+			return parent, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := g.Compile(graph.Config[speculativeState]{MachineID: "can-merge-clone-error", Clone: clone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, result, err := runner.Start(context.Background(), "can-merge-clone-error", speculativeState{Values: []int{9}}, nil, graph.Options{MaxConcurrency: 3})
+	if !errors.Is(err, cloneFailure) || result.Status != graph.StatusFailed || result.Header.Completed || result.Header.Revision != 2 {
+		t.Fatalf("clone failure became terminal or committed: %+v, %v", result, err)
 	}
 }
 
