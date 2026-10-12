@@ -115,6 +115,12 @@ func (b BranchResult[S]) Failed() bool { return b.Status == InvocationFailed }
 // Ended reports whether the branch ended without producing a result.
 func (b BranchResult[S]) Ended() bool { return b.Status == InvocationEnded }
 
+// Resolved reports whether the branch reached a terminal status (joined, failed, or ended).
+func (b BranchResult[S]) Resolved() bool { return b.OK() || b.Failed() || b.Ended() }
+
+// Pending reports whether the branch was still pending/running when the join was evaluated.
+func (b BranchResult[S]) Pending() bool { return !b.Resolved() }
+
 // Merge combines branch outcomes that reached one activation group's join. CallInfo
 // carries the activation group's stable join callback ID.
 type Merge[S any] func(context.Context, CallInfo, S, []BranchResult[S]) (S, error)
@@ -139,11 +145,13 @@ type NodeSpec[S any] struct {
 // JoinSpec consumes obligations created by fan-out at From. Its only possible
 // successor is its sole outgoing edge; without one it ends the parent branch.
 type JoinSpec[S any] struct {
-	Name    string
-	From    string
-	Merge   Merge[S]
-	OnError FailureScope
-	Timeout time.Duration
+	Name     string
+	From     string
+	Merge    Merge[S]
+	OnError  FailureScope
+	Timeout  time.Duration
+	Quorum   int
+	CanMerge func(parent S, branches []BranchResult[S]) bool
 }
 
 // Continuation adapts an untyped persisted payload to a typed state handler.

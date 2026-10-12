@@ -68,7 +68,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 		return nil, result, errors.Join(fmt.Errorf("clone resume checkpoint: %w", err), resultErr)
 	}
-	l := newLive(owned)
+	l := newLive(owned, r.joins, r.clone)
 	execution = &Execution[S]{runner: r, live: l, store: store}
 	result, retErr = r.advanceLive(ctx, l, inputs, opts, activeStore, obs)
 	return execution, result, retErr

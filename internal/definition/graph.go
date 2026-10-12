@@ -79,6 +79,9 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	if spec.Timeout < 0 {
 		return fmt.Errorf("join %q timeout must not be negative", spec.Name)
 	}
+	if spec.Quorum < 0 {
+		return fmt.Errorf("join %q quorum must not be negative", spec.Name)
+	}
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}

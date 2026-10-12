@@ -55,6 +55,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 		{Name: "join", From: "entry"},
 		{Name: "join", From: "entry", Merge: merge, OnError: model.FailureScope(99)},
 		{Name: "join", From: "entry", Merge: merge, Timeout: -1},
+		{Name: "join", From: "entry", Merge: merge, Quorum: -1},
 	} {
 		if err := g.AddJoin(spec); err == nil {
 			t.Fatalf("AddJoin accepted %+v", spec)

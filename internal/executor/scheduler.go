@@ -279,6 +279,11 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				delete(prepared, ref)
 			}
 		}
+		for _, v := range c.UpsertInvocations {
+			if v.GroupID != "" {
+				delete(prepared, taskRef{id: v.GroupID, join: true})
+			}
+		}
 		for ref, cancel := range running {
 			if !l.valid(ref) {
 				cancel()

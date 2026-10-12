@@ -50,7 +50,7 @@ func assertLiveCounts(t *testing.T, l *live[int]) {
 }
 
 func TestLiveInstallKeepsCountsAcrossNestedSettlementAndFailure(t *testing.T) {
-	l := newLive(nestedCandidatePosition())
+	l := newLive(nestedCandidatePosition(), nil, nil)
 	assertLiveCounts(t, l)
 	inv, _ := l.invocation("i9")
 	inv.Status = InvocationWaiting
@@ -71,7 +71,7 @@ func TestLiveInstallKeepsCountsAcrossNestedSettlementAndFailure(t *testing.T) {
 	r := executorTestRunner(t, "unused", nil, []JoinSpec[int]{{Name: "inner-join", OnError: FailGroup}}, nil, nil, nil)
 	// Test the same enclosing-group collection used when a Merge fails. g5 is
 	// ready in a fresh position, so no user callback or scheduling is needed.
-	l = newLive(nestedCandidatePosition())
+	l = newLive(nestedCandidatePosition(), nil, nil)
 	change, terminalErr, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", join: true}, err: errors.New("merge failed")})
 	if err != nil || terminalErr != nil {
 		t.Fatalf("local failure = %v %v", err, terminalErr)

@@ -78,7 +78,7 @@ func TestLiveNextFiltersTasksAndDrainsJoinsAtBudget(t *testing.T) {
 		{ID: "i3", Status: InvocationReady},
 		{ID: "i9", Status: InvocationGroup, ChildGroupID: "g11"},
 		{ID: "i10", Status: InvocationJoined, GroupID: "g11"},
-	}, Groups: []ActivationGroup{{ID: "g11", ParentID: "i9", Children: []string{"i10"}}}})
+	}, Groups: []ActivationGroup{{ID: "g11", ParentID: "i9", Children: []string{"i10"}}}}, nil, nil)
 	l.ready.clear()
 	for _, ref := range []taskRef{{id: "missing"}, {id: "i2"}, {id: "i3"}, {id: "i1"}, {id: "g11", join: true}} {
 		l.enqueue(ref)

@@ -210,7 +210,7 @@ func scopePointer(scope FailureScope) *FailureScope { return &scope }
 
 func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cursor uint64) *Invocation[S] {
 	s.ScheduleCursor = cursor
-	l := newLive(s)
+	l := newLive(s, nil, nil)
 	active := make(map[taskRef]context.CancelFunc)
 	for id, cancel := range running {
 		active[taskRef{id: id}] = cancel

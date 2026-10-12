@@ -137,7 +137,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store St
 			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
-	l := newLive(s)
+	l := newLive(s, r.joins, r.clone)
 	execution = &Execution[S]{runner: r, live: l, store: rawStore}
 	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
 	return execution, result, retErr
@@ -194,7 +194,7 @@ func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint
 			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
-	l := newLive(forked)
+	l := newLive(forked, r.joins, r.clone)
 	execution = &Execution[S]{runner: r, live: l, store: rawStore}
 	result, retErr = r.driveLive(ctx, l, opts, obs, activeStore)
 	return execution, result, retErr

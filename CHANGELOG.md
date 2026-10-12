@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add speculative join and branch pruning (Quorum & custom predicates).
+  `JoinSpec[S].Quorum` and `JoinSpec[S].CanMerge` enable early triggering of `Merge`
+  before all branches resolve (e.g. LLM hedging, racing, quorum voting).
+  When early join conditions are met, `Merge` runs with available results;
+  `BranchResult[S].Resolved()` reports true for settled branches, while
+  `BranchResult[S].Pending()` identifies still-running branches.
+  Upon join commit, all remaining uncompleted branches in the activation group
+  are cancelled and pruned from live topology and checkpoint state.
+  If quorum cannot be met due to branch failures, the join automatically falls
+  back to normal execution once all branches resolve without deadlocking.
+
 - Add declarative node, join, and dynamic branch timeout controls.
   `NodeSpec[S].Timeout`, `JoinSpec[S].Timeout`, and `Branch[S].Timeout` specify
   per-task deadlines (`time.Duration`). Negative durations are validated and rejected.

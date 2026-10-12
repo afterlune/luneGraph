@@ -17,13 +17,16 @@ type live[S any] struct {
 	hasSingle          bool
 	groups             map[string]ActivationGroup
 	remaining          map[string]int
+	joins              map[string]JoinSpec[S]
+	clone              Clone[S]
+	joinEnqueued       map[string]bool
 	ready              readyQueue
 	readyNodes         int
 	waitingInvocations int
 }
 
-func newLive[S any](cp Checkpoint[S]) *live[S] {
-	l := &live[S]{header: cp}
+func newLive[S any](cp Checkpoint[S], joins map[string]JoinSpec[S], clone Clone[S]) *live[S] {
+	l := &live[S]{header: cp, joins: joins, clone: clone}
 	if len(cp.Invocations) == 1 {
 		l.single = cp.Invocations[0]
 		l.hasSingle = true
@@ -58,9 +61,7 @@ func newLive[S any](cp Checkpoint[S]) *live[S] {
 	}
 	l.ready.orderAfter(cp.ScheduleCursor)
 	for _, g := range cp.Groups {
-		if l.remaining[g.ID] == 0 {
-			l.enqueue(taskRef{id: g.ID, join: true})
-		}
+		l.enqueueJoinIfReady(g.ID)
 	}
 	return l
 }
@@ -153,10 +154,68 @@ func (l *live[S]) pending() []PendingInvocation {
 	return pending
 }
 
+func (l *live[S]) joinReady(id string) bool {
+	g, ok := l.groups[id]
+	if !ok {
+		return false
+	}
+	if l.remaining[id] == 0 {
+		return true
+	}
+	if g.JoinNode == "" || l.joins == nil {
+		return false
+	}
+	spec, ok := l.joins[g.JoinNode]
+	if !ok {
+		return false
+	}
+	if spec.CanMerge != nil {
+		defer func() { _ = recover() }()
+		branches := make([]BranchResult[S], 0, len(g.Children))
+		for _, childID := range g.Children {
+			child, _ := l.invocation(childID)
+			state := child.State
+			if l.clone != nil && child.Status == InvocationJoined {
+				if cloned, err := l.clone(child.State); err == nil {
+					state = cloned
+				}
+			}
+			branches = append(branches, BranchResult[S]{
+				Index:  child.BranchIndex,
+				Target: child.Target,
+				Node:   child.Node,
+				Status: child.Status,
+				State:  state,
+				Error:  child.Error,
+			})
+		}
+		parent, _ := l.invocation(g.ParentID)
+		parentState := parent.State
+		if l.clone != nil {
+			if cloned, err := l.clone(parent.State); err == nil {
+				parentState = cloned
+			}
+		}
+		if spec.CanMerge(parentState, branches) {
+			return true
+		}
+	} else if spec.Quorum > 0 {
+		var joined int
+		for _, childID := range g.Children {
+			if child, exists := l.invocation(childID); exists && child.Status == InvocationJoined {
+				joined++
+			}
+		}
+		if joined >= spec.Quorum {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *live[S]) valid(ref taskRef) bool {
 	if ref.join {
-		_, ok := l.groups[ref.id]
-		return ok && l.remaining[ref.id] == 0
+		return l.joinReady(ref.id)
 	}
 	v, ok := l.invocation(ref.id)
 	return ok && v.Status == InvocationReady
@@ -166,7 +225,14 @@ func (l *live[S]) enqueueJoinIfReady(id string) {
 	if id == "" {
 		return
 	}
-	if _, ok := l.groups[id]; ok && l.remaining[id] == 0 {
+	if l.joinEnqueued[id] {
+		return
+	}
+	if l.joinReady(id) {
+		if l.joinEnqueued == nil {
+			l.joinEnqueued = make(map[string]bool)
+		}
+		l.joinEnqueued[id] = true
 		l.enqueue(taskRef{id: id, join: true})
 	}
 }
@@ -181,6 +247,9 @@ func (l *live[S]) next(nodes bool, running map[taskRef]context.CancelFunc) (task
 	for range n {
 		ref := l.ready.pop()
 		if !l.valid(ref) {
+			if ref.join {
+				delete(l.joinEnqueued, ref.id)
+			}
 			continue
 		}
 		if _, busy := running[ref]; busy {
@@ -204,6 +273,7 @@ func (l *live[S]) install(c Change[S]) {
 		l.hasSingle = false
 		clear(l.groups)
 		clear(l.remaining)
+		clear(l.joinEnqueued)
 		l.ready.clear()
 		l.readyNodes = 0
 		l.waitingInvocations = 0
@@ -258,10 +328,12 @@ func (l *live[S]) install(c Change[S]) {
 	for _, id := range c.DeleteGroups {
 		delete(l.groups, id)
 		delete(l.remaining, id)
+		delete(l.joinEnqueued, id)
 	}
 	for _, g := range c.UpsertGroups {
 		l.groups[g.ID] = g
 		l.remaining[g.ID] = 0
+		delete(l.joinEnqueued, g.ID)
 		for _, id := range g.Children {
 			if inv, _ := l.invocation(id); !resolved(inv.Status) {
 				l.remaining[g.ID]++

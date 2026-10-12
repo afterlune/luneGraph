@@ -77,6 +77,16 @@ Declarative timeouts are supported for static nodes, join callbacks, and dynamic
 - Under `OnError: FailInvocation`, a timed-out branch records `inv.Error = "context deadline exceeded"` with `Status: InvocationFailed`, while other branches and the eventual join proceed normally. Under `FailGroup` or `FailExecution`, group-level or terminal execution failure semantics apply.
 - Timeouts and error strings are persisted in SQLite metadata and replayed identically during recovery.
 
+## Speculative joins and branch pruning
+
+A `JoinSpec` can declare early join thresholds:
+- `Quorum int`: positive integer specifying the minimum number of successfully joined branches (`b.OK()`) needed to trigger `Merge` early.
+- `CanMerge func(parent S, branches []BranchResult[S]) bool`: optional predicate evaluating whether `Merge` can execute early based on current parent state and branch outcomes.
+- In `Merge`, `BranchResult.Resolved()` reports true for branches that joined, ended, or failed, while `BranchResult.Pending()` reports true for tasks that were still running or queued when early join triggered.
+- When `Merge` commits, the entire activation group is retired: all child branches (including running and pending ones) are deleted from the live state and checkpoint.
+- Active goroutines of pruned branches are promptly cancelled via context cancellation, and their delayed outputs are discarded upon exit.
+- If early join conditions cannot be met due to branch errors or ended paths, the join falls back to standard execution as soon as all branches resolve (`remaining == 0`), preventing deadlocks.
+
 ## Independent callback commits
 
 Start creates revision 1 before invoking callbacks. Accepted node outcomes,

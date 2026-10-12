@@ -6,7 +6,7 @@ import (
 
 func TestLiveReadinessAndCandidateIsolation(t *testing.T) {
 	cp := Checkpoint[int]{Invocations: []Invocation[int]{{ID: "i1", Status: InvocationGroup, ChildGroupID: "g3"}, {ID: "i5", Status: InvocationReady, GroupID: "g3", State: 1}, {ID: "i7", Status: InvocationReady, GroupID: "g3", State: 2}}, Groups: []ActivationGroup{{ID: "g3", ParentID: "i1", Children: []string{"i5", "i7"}}}}
-	l := newLive(cp)
+	l := newLive(cp, nil, nil)
 	for _, id := range []string{"i5", "i7"} {
 		before := l.workspace.collect(l, id, false, "")
 		after := before

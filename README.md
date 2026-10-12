@@ -92,6 +92,14 @@ branches and tolerant joins to proceed. Dynamic branch timeouts override the
 target node's default timeout for the initial step, then clear upon single-target
 routing so subsequent nodes use their own configured timeouts.
 
+Speculative joins and branch pruning are supported via `JoinSpec.Quorum` (integer
+threshold of successful branches) or `JoinSpec.CanMerge` (predicate over parent and
+available branch results). When met, `Merge` runs early; `BranchResult.Resolved()`
+reports whether a branch finished, while `BranchResult.Pending()` identifies
+uncompleted tasks. Upon join commit, remaining running and pending branches in the
+group are cancelled and pruned. If quorum cannot be met due to branch failures, the
+join safely falls back to standard execution when all branches settle.
+
 AddSubgraph mounts a Graph with the same S. Compile expands it into the same
 machine/checkpoint, using qualified names such as `worker/review`. A mount has
 zero/one exit. Return follows that exit or ends its invocation. Change MachineID
