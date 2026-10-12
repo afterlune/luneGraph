@@ -1,4 +1,4 @@
-# Execution semantics — checkpoint format 5
+# Execution semantics — checkpoint format 6
 
 The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
@@ -46,9 +46,13 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   node/subgraph-entry tasks; repeated targets are valid and each branch receives
   an independent Clone. The source requires a JoinSpec. `CompleteBranch(state)`
   returns a child result to its immediate activation's join.
-- Merge receives a Clone of the activation parent state followed by successful
-  child states in target order, possibly empty. Ended or failed branches do not
-  provide business results. Nested task groups and loops are allowed.
+- Merge receives a Clone of the activation parent state followed by full branch
+  results as `[]BranchResult[S]` in activation order. Each result reports
+  `Index`, `Target`, `Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`,
+  `b.Failed()`, `b.Ended()`). Healthy states can be extracted via `BranchValues(branches)`.
+  Ended branches (`EndBranch`) and failed branches (`FailInvocation`) do not trigger
+  premature failure of the group; parents can inspect errors and handle partial failures
+  tolerantly. Nested task groups and loops are allowed.
 - Compile expands subgraphs into the same machine, state type, scheduler and
   checkpoint. Names are qualified by mount path. A mount has at most one exit;
   Return follows it or ends its invocation without an exit. Return outside a
@@ -236,7 +240,7 @@ quiescence and retention; do not reuse IDs while old owners can address them.
 Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
 SQLite pages reusable, without guaranteeing immediate file shrink.
 
-Format 5 rejects format-4 checkpoints and older versions. Existing runs require
+Format 6 rejects format-5 checkpoints and older versions. Existing runs require
 their matching runtime; use a new database for new executions. SQLite schema 2
 and the invocation/group record layout are unchanged. No automatic migration or
 compatibility execution machine is supplied. MachineID remains an application
@@ -248,8 +252,10 @@ CallID; repeated targets remain distinguishable by branch identity. Zero-child
 groups become ready for Merge immediately. CompleteBranch records a successful
 child result without selecting a fixed join node in application state.
 
-Merge receives cloned parent state plus cloned successful branch states. Clone
-errors do not trigger terminal Failure. An accepted child result stays committed
+Merge receives cloned parent state plus full branch outcomes (`[]BranchResult[S]`).
+Successful branch states are cloned independently. Failed branches provide their
+persisted error message in `b.Error`, while ended branches report `b.Ended()`.
+Clone errors do not trigger terminal Failure. An accepted child result stays committed
 if Merge is interrupted or its commit is rejected; only Merge replays with its
 original CallID. MaxSteps bounds node starts per public call; eligible joins
 continue to drain after the node budget is exhausted. Application code owns

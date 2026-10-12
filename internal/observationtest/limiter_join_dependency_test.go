@@ -56,7 +56,7 @@ func TestLimiterIndependentBranchProgressDuringJoin(t *testing.T) {
 			return graph.To(s, "join"), nil
 		})
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "nested", Merge: func(ctx context.Context, _ graph.CallInfo, _ int, _ []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "nested", Merge: func(ctx context.Context, _ graph.CallInfo, _ int, _ []graph.BranchResult[int]) (int, error) {
 		close(joinEntered)
 		select {
 		case <-descendantStarted:

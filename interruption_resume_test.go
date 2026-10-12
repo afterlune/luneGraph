@@ -133,14 +133,16 @@ func TestJoinInterruptionRollsBackCandidate(t *testing.T) {
 					}
 					var innerCalls, outerCalls []graph.CallInfo
 					if nested {
-						if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner", From: "b", Merge: func(_ context.Context, c graph.CallInfo, _ int, values []int) (int, error) {
+						if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner", From: "b", Merge: func(_ context.Context, c graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+							values := graph.BranchValues(branches)
 							innerCalls = append(innerCalls, c)
 							return values[0] + values[1], nil
 						}}); err != nil {
 							t.Fatal(err)
 						}
 					}
-					if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", From: "fork", OnError: scope, Merge: func(_ context.Context, c graph.CallInfo, _ int, values []int) (int, error) {
+					if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", From: "fork", OnError: scope, Merge: func(_ context.Context, c graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+						values := graph.BranchValues(branches)
 						outerCalls = append(outerCalls, c)
 						if len(outerCalls) == 1 {
 							return 99, fmt.Errorf("merge: %w", graph.Interrupt(nil))

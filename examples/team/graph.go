@@ -29,12 +29,14 @@ type teamState struct {
 	Depth    int
 	MaxDepth int
 	Results  []string
+	Failures []string
 	Approved bool
 }
 
 func cloneTeamState(s teamState) (teamState, error) {
 	s.Plan = append([]task(nil), s.Plan...)
 	s.Results = append([]string(nil), s.Results...)
+	s.Failures = append([]string(nil), s.Failures...)
 	return s, nil
 }
 
@@ -125,10 +127,16 @@ func addTeamDefinition(g *graph.Graph[teamState]) error {
 	return nil
 }
 
-func mergeTeamResults(_ context.Context, _ graph.CallInfo, parent teamState, branches []teamState) (teamState, error) {
+func mergeTeamResults(_ context.Context, _ graph.CallInfo, parent teamState, branches []graph.BranchResult[teamState]) (teamState, error) {
 	parent.Results = nil
+	parent.Failures = nil
 	for _, branch := range branches {
-		parent.Results = append(parent.Results, branch.Results...)
+		if branch.OK() {
+			parent.Results = append(parent.Results, branch.State.Results...)
+			parent.Failures = append(parent.Failures, branch.State.Failures...)
+		} else if branch.Failed() {
+			parent.Failures = append(parent.Failures, branch.Target+": "+branch.Error)
+		}
 	}
 	return parent, nil
 }

@@ -34,7 +34,8 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, _ state, values []state) (state, error) {
+				if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
+					values := graph.BranchValues(branches)
 					joins = append(joins, call.CallID)
 					if fault == "join" && armed {
 						return state{}, boom

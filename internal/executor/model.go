@@ -7,6 +7,7 @@ type (
 	Action              = model.Action
 	ActivationGroup     = model.ActivationGroup
 	Branch[S any]       = model.Branch[S]
+	BranchResult[S any] = model.BranchResult[S]
 	CallInfo            = model.CallInfo
 	Checkpoint[S any]   = model.Checkpoint[S]
 	Clone[S any]        = model.Clone[S]

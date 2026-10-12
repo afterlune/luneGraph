@@ -28,6 +28,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 		return r.failGroup(s, index, inv.GroupID)
 	}
 	inv.Status = InvocationFailed
+	inv.Error = cause.Error()
 	inv.CallID = ""
 	inv.Next = nil
 	inv.Continuation = ""

@@ -83,7 +83,8 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 		})
 		edge(t, g, "fork", item.name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		values := graph.BranchValues(branches)
 		if len(values) != 2 || values[0] != 1 || values[1] != 2 {
 			return 0, fmt.Errorf("wrong merge order: %v", values)
 		}
@@ -150,10 +151,12 @@ func TestNestedGroups(t *testing.T) {
 		return graph.EndExecution(v), nil
 	})
 	for _, spec := range []graph.JoinSpec[int]{
-		{Name: "inner", From: "a", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
+		{Name: "inner", From: "a", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+			values := graph.BranchValues(branches)
 			return values[0] + values[1], nil
 		}},
-		{Name: "outer", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
+		{Name: "outer", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+			values := graph.BranchValues(branches)
 			return values[0] + values[1], nil
 		}},
 	} {
@@ -213,7 +216,10 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) { return values[0], nil }}); err != nil {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+			values := graph.BranchValues(branches)
+			return values[0], nil
+		}}); err != nil {
 			t.Fatal(err)
 		}
 		node(t, g, "done", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {

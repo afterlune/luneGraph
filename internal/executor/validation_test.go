@@ -20,10 +20,12 @@ func executorTestValidationFixtures(t *testing.T) (waitingRunner *Runner[int], w
 		}, FailInvocation),
 		executorTestNode("left", executorTestEnd, FailInvocation),
 		executorTestNode("right", executorTestEnd, FailInvocation),
-	}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, values []int) (int, error) {
+	}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
 		var total int
-		for _, value := range values {
-			total += value
+		for _, b := range branches {
+			if b.OK() {
+				total += b.State
+			}
 		}
 		return total, nil
 	}}}, map[string][]string{"fork": {"left", "right"}, "left": {"joined"}, "right": {"joined"}}, nil, nil)
@@ -150,7 +152,7 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 		})
 	}
 
-	joinRunner := executorTestRunner(t, "pause", []NodeSpec[int]{executorTestNode("pause", executorTestEnd, FailInvocation)}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, int, []int) (int, error) { return 0, nil }}}, map[string][]string{"pause": {"joined"}}, map[string]Continuation[int]{"resume": {Decode: func([]byte) (any, error) { return nil, nil }, Apply: func(context.Context, CallInfo, int, any) (int, error) { return 0, nil }}}, nil)
+	joinRunner := executorTestRunner(t, "pause", []NodeSpec[int]{executorTestNode("pause", executorTestEnd, FailInvocation)}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"pause": {"joined"}}, map[string]Continuation[int]{"resume": {Decode: func([]byte) (any, error) { return nil, nil }, Apply: func(context.Context, CallInfo, int, any) (int, error) { return 0, nil }}}, nil)
 	wrongJoin := copyCheckpoint(base)
 	wrongJoin.Invocations[0].Next = []string{"joined"}
 	if err := joinRunner.validateCheckpoint(wrongJoin); !errors.Is(err, ErrInvalidCheckpoint) {

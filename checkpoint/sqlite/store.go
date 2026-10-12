@@ -20,10 +20,12 @@ type invocationMetadata struct {
 	BranchIndex           int
 	Continuation          string
 	Next                  []string
+	Error                 string
+	Target                string
 }
 
 func metadata[S any](v graph.Invocation[S]) invocationMetadata {
-	return invocationMetadata{v.ID, v.CallID, v.Node, v.Status, v.GroupID, v.ChildGroupID, v.BranchIndex, v.Continuation, v.Next}
+	return invocationMetadata{v.ID, v.CallID, v.Node, v.Status, v.GroupID, v.ChildGroupID, v.BranchIndex, v.Continuation, v.Next, v.Error, v.Target}
 }
 func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error {
 	if err := s.check(ctx); err != nil {
@@ -167,7 +169,7 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 			rows.Close()
 			return empty, fmt.Errorf("state: %w: %w", checkpoint.ErrCorrupt, err)
 		}
-		cp.Invocations = append(cp.Invocations, graph.Invocation[S]{ID: m.ID, CallID: m.CallID, Node: m.Node, State: value, Status: m.Status, GroupID: m.GroupID, ChildGroupID: m.ChildGroupID, BranchIndex: m.BranchIndex, Continuation: m.Continuation, Next: m.Next})
+		cp.Invocations = append(cp.Invocations, graph.Invocation[S]{ID: m.ID, CallID: m.CallID, Node: m.Node, State: value, Status: m.Status, GroupID: m.GroupID, ChildGroupID: m.ChildGroupID, BranchIndex: m.BranchIndex, Continuation: m.Continuation, Next: m.Next, Error: m.Error, Target: m.Target})
 	}
 	err = rows.Err()
 	rows.Close()

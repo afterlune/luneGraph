@@ -78,12 +78,14 @@ func teamRunner(t *testing.T) *graph.Runner[teamState] {
 		return graph.CompleteBranch(s), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "worker-join", From: "worker-b", OnError: graph.FailExecution,
-		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, results []teamState) (teamState, error) {
+		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, branches []graph.BranchResult[teamState]) (teamState, error) {
 			parent.Trace = nil
 			parent.MergeCalls++
-			for _, result := range results {
-				parent.Trace = append(parent.Trace, result.Trace...)
-				parent.MergeCalls += result.MergeCalls
+			for _, result := range branches {
+				if result.OK() {
+					parent.Trace = append(parent.Trace, result.State.Trace...)
+					parent.MergeCalls += result.State.MergeCalls
+				}
 			}
 			return parent, nil
 		}}); err != nil {
@@ -93,12 +95,14 @@ func teamRunner(t *testing.T) *graph.Runner[teamState] {
 		return graph.CompleteBranch(s), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "lead-join", From: "lead", OnError: graph.FailExecution,
-		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, results []teamState) (teamState, error) {
+		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, branches []graph.BranchResult[teamState]) (teamState, error) {
 			parent.Trace = nil
 			parent.MergeCalls++
-			for _, result := range results {
-				parent.Trace = append(parent.Trace, result.Trace...)
-				parent.MergeCalls += result.MergeCalls
+			for _, result := range branches {
+				if result.OK() {
+					parent.Trace = append(parent.Trace, result.State.Trace...)
+					parent.MergeCalls += result.State.MergeCalls
+				}
 			}
 			return parent, nil
 		}}); err != nil {
@@ -245,8 +249,8 @@ func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], ta
 		return graph.CompleteBranch(s), nil
 	})
 	if join {
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, _ graph.CallInfo, parent int, values []int) (int, error) {
-			return parent + len(values), nil
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+			return parent + len(branches), nil
 		}}); err != nil {
 			t.Fatal(err)
 		}
@@ -366,12 +370,12 @@ func TestDynamicMergeParentCloneFailureKeepsCommittedChildren(t *testing.T) {
 				workerCalls.Add(1)
 				return graph.CompleteBranch(state + 1), nil
 			})
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, values []int) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 				mergeCalls.Add(1)
 				mergeIDsMu.Lock()
 				mergeIDs = append(mergeIDs, call.CallID)
 				mergeIDsMu.Unlock()
-				return parent + values[0], nil
+				return parent + branches[0].State, nil
 			}}); err != nil {
 				t.Fatal(err)
 			}
@@ -500,9 +504,9 @@ func TestDynamicFanOutRejectedMergeReplaysOnlyMerge(t *testing.T) {
 				workers.Add(1)
 				return graph.CompleteBranch(state + 1), nil
 			})
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, values []int) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 				mergeCalls <- call
-				return parent + values[0], nil
+				return parent + branches[0].State, nil
 			}}); err != nil {
 				t.Fatal(err)
 			}
@@ -540,6 +544,207 @@ func TestDynamicFanOutRejectedMergeReplaysOnlyMerge(t *testing.T) {
 			if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil || *completed.Final != 8 || firstMerge.CallID == "" || firstMerge.CallID != secondMerge.CallID || workers.Load() != 1 {
 				t.Fatalf("Merge replay = %+v mergeIDs=%q/%q workers=%d err=%v", completed, firstMerge.CallID, secondMerge.CallID, workers.Load(), err)
 			}
+			if _, err := execution.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type tolerantTestState struct {
+	Val      int
+	Failures []string
+	Branches []string
+}
+
+func cloneTolerantState(s tolerantTestState) (tolerantTestState, error) {
+	return tolerantTestState{
+		Val:      s.Val,
+		Failures: append([]string(nil), s.Failures...),
+		Branches: append([]string(nil), s.Branches...),
+	}, nil
+}
+
+type rejectTolerantStore struct {
+	graph.Store[tolerantTestState]
+	reject atomic.Bool
+}
+
+func (s *rejectTolerantStore) Commit(ctx context.Context, expected uint64, change graph.Change[tolerantTestState]) error {
+	if len(change.DeleteGroups) != 0 && s.reject.Swap(false) {
+		return graph.ErrConflict
+	}
+	return s.Store.Commit(ctx, expected, change)
+}
+
+func tolerantStore(t *testing.T, kind string) graph.Store[tolerantTestState] {
+	t.Helper()
+	if kind == "memory" {
+		store, err := memory.New[tolerantTestState](cloneTolerantState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "tolerant.db"), checkpoint.JSON[tolerantTestState]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return store
+}
+
+func TestDynamicFanOutTolerantJoinWithPartialFailures(t *testing.T) {
+	for _, kind := range []string{"memory", "sqlite"} {
+		t.Run(kind, func(t *testing.T) {
+			var mergeResults []graph.BranchResult[tolerantTestState]
+			mergeCalls := make(chan graph.CallInfo, 4)
+
+			g := graph.New[tolerantTestState]("dispatch")
+			node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent tolerantTestState) (graph.Transition[tolerantTestState], error) {
+				return graph.FanOut(parent,
+					graph.Branch[tolerantTestState]{Target: "worker-ok", State: tolerantTestState{Val: 10}},
+					graph.Branch[tolerantTestState]{Target: "worker-end", State: tolerantTestState{Val: 20}},
+					graph.Branch[tolerantTestState]{Target: "worker-fail", State: tolerantTestState{Val: 30}},
+				), nil
+			})
+			node(t, g, "worker-ok", func(_ context.Context, _ graph.CallInfo, s tolerantTestState) (graph.Transition[tolerantTestState], error) {
+				s.Val += 1
+				return graph.CompleteBranch(s), nil
+			})
+			node(t, g, "worker-end", func(_ context.Context, _ graph.CallInfo, _ tolerantTestState) (graph.Transition[tolerantTestState], error) {
+				return graph.EndBranch[tolerantTestState](), nil
+			})
+			if err := g.AddNode(graph.NodeSpec[tolerantTestState]{
+				Name:    "worker-fail",
+				OnError: graph.FailInvocation,
+				Run: func(_ context.Context, _ graph.CallInfo, _ tolerantTestState) (graph.Transition[tolerantTestState], error) {
+					return graph.Transition[tolerantTestState]{}, errors.New("worker-fail boom")
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.AddJoin(graph.JoinSpec[tolerantTestState]{
+				Name:    "joined",
+				From:    "dispatch",
+				OnError: graph.FailExecution,
+				Merge: func(_ context.Context, call graph.CallInfo, parent tolerantTestState, branches []graph.BranchResult[tolerantTestState]) (tolerantTestState, error) {
+					mergeCalls <- call
+					mergeResults = append([]graph.BranchResult[tolerantTestState](nil), branches...)
+					values := graph.BranchValues(branches)
+					if len(values) != 1 || values[0].Val != 11 {
+						return tolerantTestState{}, fmt.Errorf("unexpected BranchValues: %+v", values)
+					}
+					for _, b := range branches {
+						if b.OK() {
+							parent.Val += b.State.Val
+							parent.Branches = append(parent.Branches, fmt.Sprintf("%d:%s:ok", b.Index, b.Target))
+						} else if b.Failed() {
+							parent.Failures = append(parent.Failures, b.Error)
+							parent.Branches = append(parent.Branches, fmt.Sprintf("%d:%s:failed:%s", b.Index, b.Target, b.Error))
+						} else if b.Ended() {
+							parent.Branches = append(parent.Branches, fmt.Sprintf("%d:%s:ended", b.Index, b.Target))
+						}
+					}
+					return parent, nil
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			node(t, g, "done", func(_ context.Context, _ graph.CallInfo, s tolerantTestState) (graph.Transition[tolerantTestState], error) {
+				return graph.EndExecution(s), nil
+			})
+			edge(t, g, "dispatch", "worker-ok")
+			edge(t, g, "dispatch", "worker-end")
+			edge(t, g, "dispatch", "worker-fail")
+			edge(t, g, "joined", "done")
+
+			r, err := g.Compile(graph.Config[tolerantTestState]{MachineID: "tolerant-join-v1", Clone: cloneTolerantState})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			backing := tolerantStore(t, kind)
+			store := &rejectTolerantStore{Store: backing}
+			store.reject.Store(true)
+
+			// Start with conflict injected on Join commit to verify reloaded branches on recovery
+			execution, rejected, err := r.Start(context.Background(), "tolerant-run", tolerantTestState{Val: 100}, store, graph.Options{MaxConcurrency: 4})
+			if !errors.Is(err, graph.ErrConflict) {
+				t.Fatalf("expected conflict on first start, got: %+v, %v", rejected, err)
+			}
+			firstMergeCall := <-mergeCalls
+
+			// Validate stored checkpoint before recovery
+			stored, err := backing.Load(context.Background(), "tolerant-run")
+			if err != nil {
+				t.Fatalf("Load checkpoint error: %v", err)
+			}
+			var failedInv *graph.Invocation[tolerantTestState]
+			for i := range stored.Invocations {
+				if stored.Invocations[i].Status == graph.InvocationFailed {
+					failedInv = &stored.Invocations[i]
+					break
+				}
+			}
+			if failedInv == nil {
+				t.Fatalf("stored checkpoint missing InvocationFailed: %+v", stored.Invocations)
+			}
+			if failedInv.Target != "worker-fail" || failedInv.Error != "worker-fail boom" {
+				t.Fatalf("failed invocation metadata mismatch: Target=%q Error=%q", failedInv.Target, failedInv.Error)
+			}
+
+			// Recover execution: Merge will re-run with branches reconstructed from loaded checkpoint
+			mergeResults = nil
+			_, completed, err := r.Recover(context.Background(), "tolerant-run", nil, store, graph.Options{MaxConcurrency: 4})
+			if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil {
+				t.Fatalf("Recover = %+v, %v", completed, err)
+			}
+			secondMergeCall := <-mergeCalls
+			if firstMergeCall.CallID == "" || firstMergeCall.CallID != secondMergeCall.CallID {
+				t.Fatalf("Merge CallID did not remain stable: %q vs %q", firstMergeCall.CallID, secondMergeCall.CallID)
+			}
+
+			// Validate final state
+			if completed.Final.Val != 111 {
+				t.Fatalf("expected Val 111, got %d", completed.Final.Val)
+			}
+			if !reflect.DeepEqual(completed.Final.Failures, []string{"worker-fail boom"}) {
+				t.Fatalf("unexpected Failures: %+v", completed.Final.Failures)
+			}
+			wantBranches := []string{
+				"0:worker-ok:ok",
+				"1:worker-end:ended",
+				"2:worker-fail:failed:worker-fail boom",
+			}
+			if !reflect.DeepEqual(completed.Final.Branches, wantBranches) {
+				t.Fatalf("unexpected Branches: %+v, want %+v", completed.Final.Branches, wantBranches)
+			}
+			if !completed.Header.HadLocalFailures || completed.Header.Failure != nil {
+				t.Fatalf("unexpected Header: %+v", completed.Header)
+			}
+
+			// Validate recovered mergeResults
+			if len(mergeResults) != 3 {
+				t.Fatalf("expected 3 branch results, got %d", len(mergeResults))
+			}
+			b0 := mergeResults[0]
+			if b0.Index != 0 || b0.Target != "worker-ok" || b0.Node != "joined" || b0.Status != graph.InvocationJoined || !b0.OK() || b0.Failed() || b0.Ended() || b0.State.Val != 11 || b0.Error != "" {
+				t.Fatalf("unexpected b0: %+v", b0)
+			}
+			b1 := mergeResults[1]
+			if b1.Index != 1 || b1.Target != "worker-end" || b1.Node != "worker-end" || b1.Status != graph.InvocationEnded || b1.OK() || b1.Failed() || !b1.Ended() || b1.Error != "" {
+				t.Fatalf("unexpected b1: %+v", b1)
+			}
+			b2 := mergeResults[2]
+			if b2.Index != 2 || b2.Target != "worker-fail" || b2.Node != "worker-fail" || b2.Status != graph.InvocationFailed || b2.OK() || !b2.Failed() || b2.Ended() || b2.Error != "worker-fail boom" {
+				t.Fatalf("unexpected b2: %+v", b2)
+			}
+
 			if _, err := execution.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}

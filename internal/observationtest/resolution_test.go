@@ -124,11 +124,11 @@ func TestResolvedJoinBatch(t *testing.T) {
 				})
 				edge(t, g, "fork", name)
 			}
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, v []int) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 				if mode == "interrupt" {
 					return 0, graph.Interrupt(nil)
 				}
-				return v[0] + v[1], nil
+				return branches[0].State + branches[1].State, nil
 			}}); err != nil {
 				t.Fatal(err)
 			}

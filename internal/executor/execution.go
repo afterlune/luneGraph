@@ -220,7 +220,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		if err != nil {
 			return &stateCopyError{cause: fmt.Errorf("clone fan-out state: %w", err)}
 		}
-		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
+		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex, Target: target}
 		group.Children[branchIndex] = child.ID
 		appended := appendInvocation(index, s, child)
 		if err := r.setTarget(s, appended, target); err != nil {
@@ -279,6 +279,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			Status:      InvocationReady,
 			GroupID:     groupID,
 			BranchIndex: branchIndex,
+			Target:      branch.Target,
 		}
 		activation.Children[branchIndex] = child.ID
 		childPosition := appendInvocation(index, s, child)

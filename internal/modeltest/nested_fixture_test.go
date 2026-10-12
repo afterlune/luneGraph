@@ -71,7 +71,8 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 		})
 	}
 	merge := func(name string, nextPhase int, inner bool) graph.Merge[nestedState] {
-		return func(ctx context.Context, call graph.CallInfo, _ nestedState, values []nestedState) (nestedState, error) {
+		return func(ctx context.Context, call graph.CallInfo, _ nestedState, branches []graph.BranchResult[nestedState]) (nestedState, error) {
+			values := graph.BranchValues(branches)
 			if err := c.attempt(ctx, call, "join", values); err != nil {
 				values[0].Values["speculative"] = 1
 				return values[0], err

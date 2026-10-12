@@ -18,12 +18,12 @@ func (r *Runner[S]) observedNode(ctx context.Context, obs *observation.Session, 
 	return out, err
 }
 
-func (r *Runner[S]) observedMerge(ctx context.Context, obs *observation.Session, revision uint64, call CallInfo, spec JoinSpec[S], parent S, states []S) (S, error) {
+func (r *Runner[S]) observedMerge(ctx context.Context, obs *observation.Session, revision uint64, call CallInfo, spec JoinSpec[S], parent S, branches []BranchResult[S]) (S, error) {
 	if obs == nil {
-		return r.mergeStates(ctx, call, spec, parent, states)
+		return r.mergeStates(ctx, call, spec, parent, branches)
 	}
 	span := obs.Begin(ctx, callbackEvent(model.OperationJoin, revision, call, spec.Name, ""))
-	out, err := r.mergeStates(ctx, call, spec, parent, states)
+	out, err := r.mergeStates(ctx, call, spec, parent, branches)
 	span.End(ctx, model.Event{Revision: revision, Err: err})
 	return out, err
 }

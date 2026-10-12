@@ -70,10 +70,14 @@ concurrency safe. Treat returned checkpoints as immutable.
 Register JoinSpec with From naming a FanOut source. Each activation joins only
 its own children. FanOut branches can repeat targets and carry independent
 states; zero and one branch still pass through a normal activation and Merge.
-Merge receives a clone of the state saved by FanOut, then successful branch
-states in target order. Ended/failed branches are omitted. Workers can dispatch
-nested tasks from the same declared graph; CompleteBranch returns to their
-immediate activation group without storing the caller's join name in state.
+Merge receives a clone of the state saved by FanOut, then ordered branch
+outcomes as `[]BranchResult[S]`. Each `BranchResult` reports `Index`, `Target`,
+`Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`, `b.Failed()`,
+`b.Ended()`). Healthy values can be extracted directly using `BranchValues(branches)`.
+This gives parent and Lead nodes full visibility into partial branch failures and
+ended tasks, supporting tolerant aggregation. Workers can dispatch nested tasks
+from the same declared graph; CompleteBranch returns to their immediate activation
+group without storing the caller's join name in state.
 Merge runs independently: branch arrivals commit before Merge starts, and other
 branches can advance while it runs. A rejected Merge replays independently with
 its original CallID. Revision includes Merge commits; Steps counts node outcomes.
@@ -268,6 +272,17 @@ Windows/Linux and enforces at least 85% statement coverage per production
 package. [Performance and graph-level benchmark guide](docs/performance.md) records
 reproducible measurements and known trade-offs; it does not claim application-level
 production capacity.
+
+## Format-6 migration
+
+Merge callbacks now receive `(ctx, call, parentState, branches []BranchResult[S])`.
+Update custom Merge signatures. Inspect individual branch outcomes via `b.OK()`,
+`b.Failed()`, `b.Ended()`, `b.Target` and `b.Error`, or use `BranchValues(branches)`
+to extract healthy states directly.
+
+Format 6 rejects format-5 and older checkpoints; finish active runs with the
+matching runtime and use a new database for new executions. SQLite schema 2 and
+its stored record layout are unchanged.
 
 ## Format-5 migration
 

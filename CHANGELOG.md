@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Provide full branch outcome inspection in `Merge` via `[]BranchResult[S]`.
+  Parents and Leads can observe not only successful branch states (`b.OK()`, `b.State`),
+  but also ended branches (`b.Ended()`) and failed branches (`b.Failed()`, `b.Error`)
+  with their declared `Target`, settled `Node`, and activation `Index`.
+  Add `BranchValues[S](branches)` convenience helper to extract healthy branch states.
+  Support tolerant dynamic joins where parent nodes handle partial branch failures
+  without failing the entire execution, enabling robust agentic workflows and
+  partial-result aggregations. Upgrade checkpoint format version to 6; SQLite
+  schema 2 and record layout remain unchanged. Format <= 5 checkpoints are rejected;
+  finish active old runs with the matching runtime and use a new database for new runs.
+
 - Add runtime `FanOut(parent, branches...)` for zero, one, or many branch states
   and `CompleteBranch(state)` to return a child result to its current activation
   group. FanOut targets must be declared nodes or mounted subgraph entries and

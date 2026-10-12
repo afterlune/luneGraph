@@ -48,11 +48,12 @@ func TestRuntimeFanOutTargetsMountedSubgraphEntry(t *testing.T) {
 	if err := parent.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []int) (int, error) {
-		if len(branches) != 1 {
+	if err := parent.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+		values := graph.BranchValues(branches)
+		if len(values) != 1 {
 			return 0, errors.New("mounted branch did not reach join")
 		}
-		return parent + branches[0], nil
+		return parent + values[0], nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +205,8 @@ func TestSubgraphReturnCanReachFanoutJoin(t *testing.T) {
 	if err := root.AddSubgraph("worker", worker); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
+	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		states := graph.BranchValues(branches)
 		if len(states) != 2 {
 			return 0, errors.New("expected both branches at join")
 		}
@@ -235,7 +237,8 @@ func TestSubgraphCanContainFanoutAndJoin(t *testing.T) {
 	node(t, child, "finish", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Return(state), nil
 	})
-	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, states []int) (int, error) {
+	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		states := graph.BranchValues(branches)
 		return states[0] + states[1], nil
 	}}); err != nil {
 		t.Fatal(err)

@@ -147,7 +147,8 @@ func durableFanoutRunner(b *testing.B, width int) *graph.Runner[durableBenchmark
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[durableBenchmarkState]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ durableBenchmarkState, states []durableBenchmarkState) (durableBenchmarkState, error) {
+	if err := g.AddJoin(graph.JoinSpec[durableBenchmarkState]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ durableBenchmarkState, branches []graph.BranchResult[durableBenchmarkState]) (durableBenchmarkState, error) {
+		states := graph.BranchValues(branches)
 		merged, err := cloneDurableBenchmarkState(states[0])
 		if err != nil {
 			return durableBenchmarkState{}, err

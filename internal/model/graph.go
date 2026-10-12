@@ -94,9 +94,28 @@ type CallInfo struct {
 // Clone makes an independent copy of state before a user callback runs.
 type Clone[S any] func(S) (S, error)
 
-// Merge combines values that reached one activation group's join. CallInfo
+// BranchResult describes the final outcome of one child branch in an activation group.
+type BranchResult[S any] struct {
+	Index  int
+	Target string
+	Node   string
+	Status InvocationStatus
+	State  S
+	Error  string
+}
+
+// OK reports whether the branch completed successfully and produced a valid State.
+func (b BranchResult[S]) OK() bool { return b.Status == InvocationJoined }
+
+// Failed reports whether the branch failed. Error contains the failure message.
+func (b BranchResult[S]) Failed() bool { return b.Status == InvocationFailed }
+
+// Ended reports whether the branch ended without producing a result.
+func (b BranchResult[S]) Ended() bool { return b.Status == InvocationEnded }
+
+// Merge combines branch outcomes that reached one activation group's join. CallInfo
 // carries the activation group's stable join callback ID.
-type Merge[S any] func(context.Context, CallInfo, S, []S) (S, error)
+type Merge[S any] func(context.Context, CallInfo, S, []BranchResult[S]) (S, error)
 
 // FailureScope controls how a node or join error affects an execution.
 type FailureScope uint8

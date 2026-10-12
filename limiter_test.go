@@ -48,7 +48,8 @@ func limiterGraph(t *testing.T, role string, callback func(context.Context, grap
 			})
 			link("entry", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "entry", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ int, values []int) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "entry", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+			values := graph.BranchValues(branches)
 			return callback(ctx, call, values[0]+values[1])
 		}}); err != nil {
 			t.Fatal(err)

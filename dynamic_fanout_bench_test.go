@@ -49,9 +49,9 @@ func dynamicFanOutBenchRunner(b *testing.B, width int) *graph.Runner[dynamicBenc
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[dynamicBenchState]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent dynamicBenchState, branches []dynamicBenchState) (dynamicBenchState, error) {
+	if err := g.AddJoin(graph.JoinSpec[dynamicBenchState]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent dynamicBenchState, branches []graph.BranchResult[dynamicBenchState]) (dynamicBenchState, error) {
 		for _, branch := range branches {
-			parent.Value += branch.Value
+			parent.Value += branch.State.Value
 		}
 		return parent, nil
 	}}); err != nil {

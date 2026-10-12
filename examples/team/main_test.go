@@ -144,7 +144,7 @@ func TestOfflineTeamRejectsIncompatibleModelAssignments(t *testing.T) {
 			}
 			pending := execution.Pending()[0]
 			completed, err := execution.Advance(context.Background(), []graph.ResumeInput{{InvocationID: pending.InvocationID, CallID: pending.CallID, Payload: []byte("true")}}, graph.Options{})
-			if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil || len(completed.Final.Results) != 0 {
+			if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil || len(completed.Final.Results) != 0 || len(completed.Final.Failures) != 1 {
 				t.Fatalf("invalid model result = %+v, %v", completed, err)
 			}
 		})

@@ -84,7 +84,9 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 			return model.EndExecution(state), nil
 		}, FailInvocation),
 	}, []JoinSpec[int]{
-		{Name: "join", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, states []int) (int, error) { return states[0], nil }},
+		{Name: "join", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+			return branches[0].State, nil
+		}},
 	}, nil, map[string]Continuation[int]{
 		"resume": {
 			Decode: func(payload []byte) (any, error) {
@@ -130,12 +132,12 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 	}
 
 	merge := runner.joins["join"]
-	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []int{6}); err != nil {
+	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []BranchResult[int]{{State: 6, Status: InvocationJoined}}); err != nil {
 		t.Fatal(err)
 	}
 	checkEvents(model.OperationJoin, nil)
-	merge.Merge = func(context.Context, CallInfo, int, []int) (int, error) { return 0, boom }
-	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []int{6}); !errors.Is(err, boom) {
+	merge.Merge = func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, boom }
+	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []BranchResult[int]{{State: 6, Status: InvocationJoined}}); !errors.Is(err, boom) {
 		t.Fatalf("merge error = %v", err)
 	}
 	checkEvents(model.OperationJoin, boom)
@@ -171,7 +173,9 @@ func TestMachineExportMermaidAndWideTargetValidation(t *testing.T) {
 		nodes = append(nodes, executorTestNode(name, executorTestEnd, FailInvocation))
 	}
 	runner := executorTestRunner(t, "root", nodes, []JoinSpec[int]{
-		{Name: "join", From: "root", Merge: func(_ context.Context, _ CallInfo, _ int, states []int) (int, error) { return states[0], nil }},
+		{Name: "join", From: "root", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+			return branches[0].State, nil
+		}},
 	}, edges, nil, map[string]string{"child/return": "target-a"})
 	if err := runner.checkTargets("root", targets); err != nil {
 		t.Fatalf("valid wide target list: %v", err)
@@ -193,4 +197,144 @@ func TestMachineExportMermaidAndWideTargetValidation(t *testing.T) {
 	if nilRunner.ExportMermaid() != "" {
 		t.Fatal("nil runner exported a diagram")
 	}
+}
+
+func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
+	t.Run("dynamic fanout and complete branch", func(t *testing.T) {
+		runner := executorTestRunner(t, "fork", []NodeSpec[int]{
+			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.FanOut(value,
+					Branch[int]{Target: "a", State: 10},
+					Branch[int]{Target: "b", State: 20},
+				), nil
+			}, FailInvocation),
+			executorTestNode("a", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.CompleteBranch(value + 1), nil
+			}, FailInvocation),
+			executorTestNode("b", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.CompleteBranch(value + 2), nil
+			}, FailInvocation),
+			executorTestNode("done", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.EndExecution(value), nil
+			}, FailInvocation),
+		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, parent int, branches []BranchResult[int]) (int, error) {
+			if len(branches) != 2 || branches[0].State != 11 || branches[1].State != 22 {
+				return 0, errors.New("unexpected branches")
+			}
+			return parent + branches[0].State + branches[1].State, nil
+		}}}, map[string][]string{"fork": {"a", "b"}, "joined": {"done"}}, nil, nil)
+
+		_, res, err := runner.Start(context.Background(), "fanout-test", 100, nil, Options{MaxConcurrency: 2})
+		if err != nil || res.Status != StatusCompleted || res.Final == nil || *res.Final != 133 {
+			t.Fatalf("dynamic fanout failed: %+v, %v", res, err)
+		}
+	})
+
+	t.Run("dynamic fanout error paths", func(t *testing.T) {
+		noJoinRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.FanOut(value, Branch[int]{Target: "a", State: 10}), nil
+			}, FailInvocation),
+			executorTestNode("a", executorTestEnd, FailInvocation),
+		}, nil, map[string][]string{"fork": {"a"}}, nil, nil)
+		_, noJoinRes, err := noJoinRunner.Start(context.Background(), "no-join", 0, nil, Options{})
+		if err == nil || noJoinRes.Status != StatusFailed {
+			t.Fatalf("expected failure without join: %+v, %v", noJoinRes, err)
+		}
+
+		routingRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				tr := model.FanOut(value, Branch[int]{Target: "a", State: 10})
+				tr.Targets = []string{"a"}
+				return tr, nil
+			}, FailInvocation),
+			executorTestNode("a", executorTestEnd, FailInvocation),
+		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)
+		_, routingRes, err := routingRunner.Start(context.Background(), "routing-err", 0, nil, Options{})
+		if err == nil || routingRes.Status != StatusFailed {
+			t.Fatalf("expected failure with FanOut targets: %+v, %v", routingRes, err)
+		}
+
+		completeRoutingRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				tr := model.CompleteBranch(value)
+				tr.Targets = []string{"done"}
+				return tr, nil
+			}, FailInvocation),
+			executorTestNode("done", executorTestEnd, FailInvocation),
+		}, nil, map[string][]string{"fork": {"done"}}, nil, nil)
+		_, completeRes, err := completeRoutingRunner.Start(context.Background(), "complete-routing", 0, nil, Options{})
+		if err == nil || completeRes.Status != StatusFailed {
+			t.Fatalf("expected failure with CompleteBranch targets: %+v, %v", completeRes, err)
+		}
+	})
+
+	t.Run("execution handle pending advance and nil methods", func(t *testing.T) {
+		var nilExec *Execution[int]
+		if nilExec.Pending() != nil {
+			t.Fatal("expected nil Pending")
+		}
+		if _, err := nilExec.Checkpoint(); err == nil {
+			t.Fatal("expected error on nil Checkpoint")
+		}
+		if _, err := nilExec.Advance(context.Background(), nil, Options{}); err == nil {
+			t.Fatal("expected error on nil Advance")
+		}
+		if _, err := (&Execution[int]{}).Advance(nil, nil, Options{}); err == nil {
+			t.Fatal("expected context error on Advance")
+		}
+
+		runner := executorTestRunner(t, "wait", []NodeSpec[int]{
+			executorTestNode("wait", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.Wait(value, "input", "done"), nil
+			}, FailInvocation),
+			executorTestNode("done", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.EndExecution(value), nil
+			}, FailInvocation),
+		}, nil, map[string][]string{"wait": {"done"}}, map[string]Continuation[int]{
+			"input": {
+				Decode: func(payload []byte) (any, error) { return string(payload), nil },
+				Apply: func(_ context.Context, _ CallInfo, state int, payload any) (int, error) {
+					return state + len(payload.(string)), nil
+				},
+			},
+		}, nil)
+
+		exec, waitRes, err := runner.Start(context.Background(), "handle-test", 10, nil, Options{})
+		if err != nil || waitRes.Status != StatusWaiting {
+			t.Fatalf("Start wait failed: %+v, %v", waitRes, err)
+		}
+		pending := exec.Pending()
+		if len(pending) != 1 || pending[0].Continuation != "input" {
+			t.Fatalf("unexpected pending: %+v", pending)
+		}
+		cp, err := exec.Checkpoint()
+		if err != nil || cp.RunID != "handle-test" {
+			t.Fatalf("Checkpoint failed: %+v, %v", cp, err)
+		}
+
+		// Advance execution with invalid options
+		if _, err := exec.Advance(context.Background(), nil, Options{MaxSteps: -1}); err == nil {
+			t.Fatal("expected error on invalid options")
+		}
+
+		// Advance execution to completion
+		advRes, err := exec.Advance(context.Background(), []ResumeInput{{
+			InvocationID: pending[0].InvocationID,
+			CallID:       pending[0].CallID,
+			Payload:      []byte("hello"),
+		}}, Options{})
+		if err != nil || advRes.Status != StatusCompleted || advRes.Final == nil || *advRes.Final != 15 {
+			t.Fatalf("Advance failed: %+v, %v", advRes, err)
+		}
+
+		// Test runner.scope
+		override := FailExecution
+		if runner.scope(FailInvocation, Options{FailureOverride: &override}) != FailExecution {
+			t.Fatal("expected FailExecution override")
+		}
+		if runner.scope(FailInvocation, Options{}) != FailInvocation {
+			t.Fatal("expected declared FailInvocation")
+		}
+	})
 }

@@ -41,8 +41,8 @@ func TestApplyAndJoinReplayIdentities(t *testing.T) {
 						return graph.To(s+1, "join"), nil
 					})
 				}
-				if joinErr := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, values []int) (int, error) {
-					return values[0] + values[1], nil
+				if joinErr := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+					return branches[0].State + branches[1].State, nil
 				}}); joinErr != nil {
 					t.Fatal(joinErr)
 				}

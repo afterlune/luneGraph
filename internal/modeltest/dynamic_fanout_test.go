@@ -57,9 +57,10 @@ func dynamicModelRunner(t testing.TB) *graph.Runner[dynamicState] {
 			graph.Branch[dynamicState]{Target: "linear", State: left},
 			graph.Branch[dynamicState]{Target: "split", State: right}), nil
 	})
-	merge := func(_ context.Context, _ graph.CallInfo, parent dynamicState, branches []dynamicState) (dynamicState, error) {
+	merge := func(_ context.Context, _ graph.CallInfo, parent dynamicState, branches []graph.BranchResult[dynamicState]) (dynamicState, error) {
 		parent.Total, parent.Leaves = 0, 0
-		for _, branch := range branches {
+		for _, b := range branches {
+			branch := b.State
 			if branch.Owner != parent.Owner || branch.Total != branch.Leaves || branch.Leaves < 1 {
 				return dynamicState{}, fmt.Errorf("invalid dynamic result for %s: %+v", parent.Task, branch)
 			}

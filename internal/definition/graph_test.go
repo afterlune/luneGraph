@@ -47,7 +47,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 		t.Fatal("duplicate node accepted")
 	}
 
-	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []int) (int, error) { return 0, nil })
+	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
 	for _, spec := range []model.JoinSpec[int]{
 		{Name: "", From: "entry", Merge: merge},
 		{Name: "join", From: "", Merge: merge},
@@ -250,7 +250,7 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 	validNode := model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndExecution(0), nil
 	})
-	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []int) (int, error) { return 0, nil })
+	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
 	compile := func(g *Graph[int]) error {
 		_, err := g.Compile(model.Config[int]{MachineID: "machine", Clone: identity})
 		return err

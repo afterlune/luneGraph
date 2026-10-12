@@ -29,7 +29,8 @@ func referenceContractRunner(t *testing.T, clone graph.Clone[referenceExampleSta
 		edge(t, g, "fork", name)
 	}
 	if err := g.AddJoin(graph.JoinSpec[referenceExampleState]{Name: "join", From: "fork", OnError: graph.FailExecution,
-		Merge: func(_ context.Context, call graph.CallInfo, _ referenceExampleState, values []referenceExampleState) (referenceExampleState, error) {
+		Merge: func(_ context.Context, call graph.CallInfo, _ referenceExampleState, branches []graph.BranchResult[referenceExampleState]) (referenceExampleState, error) {
+			values := graph.BranchValues(branches)
 			*merges = append(*merges, call)
 			if len(values) != 2 || values[0].Values["item"][0] != 11 || values[1].Values["item"][0] != 12 || values[0].Data[0] != 21 || values[1].Data[0] != 22 {
 				return referenceExampleState{}, fmt.Errorf("merge inputs were not isolated: %+v", values)

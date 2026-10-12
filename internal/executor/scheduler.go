@@ -26,7 +26,7 @@ type workerTask[S any] struct {
 	spec     NodeSpec[S]
 	join     JoinSpec[S]
 	state    S
-	values   []S
+	branches []BranchResult[S]
 	obs      *observation.Session
 	revision uint64
 }
@@ -289,7 +289,7 @@ func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 	out := workResult[S]{ref: t.ref, callID: t.call.CallID}
 	if t.ref.join {
 		if t.join.Merge != nil {
-			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.state, t.values)
+			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.state, t.branches)
 		}
 	} else if t.obs == nil {
 		out.transition, out.err = r.runNode(t.ctx, t.call, t.spec, t.state)
@@ -311,15 +311,24 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		t.state = parentState
 		t.join = r.joins[g.JoinNode]
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
+		t.branches = make([]BranchResult[S], 0, len(g.Children))
 		for _, id := range g.Children {
 			child, _ := l.invocation(id)
+			res := BranchResult[S]{
+				Index:  child.BranchIndex,
+				Target: child.Target,
+				Node:   child.Node,
+				Status: child.Status,
+				Error:  child.Error,
+			}
 			if child.Status == InvocationJoined {
 				value, err := r.cloneState(child.State, id)
 				if err != nil {
 					return t, fmt.Errorf("clone join input: %w", err)
 				}
-				t.values = append(t.values, value)
+				res.State = value
 			}
+			t.branches = append(t.branches, res)
 		}
 	} else {
 		v, _ := l.invocation(ref.id)

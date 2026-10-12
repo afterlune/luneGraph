@@ -11,7 +11,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 5
+const CheckpointFormatVersion uint32 = 6
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -39,6 +39,8 @@ type Invocation[S any] struct {
 	BranchIndex  int
 	Continuation string
 	Next         []string
+	Error        string
+	Target       string
 }
 
 // ActivationGroup correlates branches started by one fan-out occurrence.

@@ -12,42 +12,43 @@ import (
 )
 
 type (
-	Header            = model.Header
-	Change[S any]     = model.Change[S]
-	Limiter           = limit.Limiter
-	Event             = model.Event
-	EventOperation    = model.EventOperation
-	EventPhase        = model.EventPhase
-	CallbackOutcome   = model.CallbackOutcome
-	Observer          = model.Observer
-	ObserverFunc      = model.ObserverFunc
-	Action            = model.Action
-	ActivationGroup   = model.ActivationGroup
-	Branch[S any]     = model.Branch[S]
-	CallInfo          = model.CallInfo
-	Checkpoint[S any] = model.Checkpoint[S]
-	Clone[S any]      = model.Clone[S]
-	Config[S any]     = model.Config[S]
-	Failure           = model.Failure
-	FailureScope      = model.FailureScope
-	Graph[S any]      = definition.Graph[S]
-	Invocation[S any] = model.Invocation[S]
-	InvocationStatus  = model.InvocationStatus
-	JoinSpec[S any]   = model.JoinSpec[S]
-	Merge[S any]      = model.Merge[S]
-	Node[S any]       = model.Node[S]
-	NodeSpec[S any]   = model.NodeSpec[S]
-	Options           = model.Options
-	PanicError        = model.PanicError
-	PendingInvocation = model.PendingInvocation
-	Result[S any]     = model.Result[S]
-	ResumeInput       = model.ResumeInput
-	Execution[S any]  = executor.Execution[S]
-	Runner[S any]     = executor.Runner[S]
-	Status            = model.Status
-	Store[S any]      = model.Store[S]
-	Transition[S any] = model.Transition[S]
-	TransitionError   = model.TransitionError
+	Header              = model.Header
+	Change[S any]       = model.Change[S]
+	Limiter             = limit.Limiter
+	Event               = model.Event
+	EventOperation      = model.EventOperation
+	EventPhase          = model.EventPhase
+	CallbackOutcome     = model.CallbackOutcome
+	Observer            = model.Observer
+	ObserverFunc        = model.ObserverFunc
+	Action              = model.Action
+	ActivationGroup     = model.ActivationGroup
+	Branch[S any]       = model.Branch[S]
+	BranchResult[S any] = model.BranchResult[S]
+	CallInfo            = model.CallInfo
+	Checkpoint[S any]   = model.Checkpoint[S]
+	Clone[S any]        = model.Clone[S]
+	Config[S any]       = model.Config[S]
+	Failure             = model.Failure
+	FailureScope        = model.FailureScope
+	Graph[S any]        = definition.Graph[S]
+	Invocation[S any]   = model.Invocation[S]
+	InvocationStatus    = model.InvocationStatus
+	JoinSpec[S any]     = model.JoinSpec[S]
+	Merge[S any]        = model.Merge[S]
+	Node[S any]         = model.Node[S]
+	NodeSpec[S any]     = model.NodeSpec[S]
+	Options             = model.Options
+	PanicError          = model.PanicError
+	PendingInvocation   = model.PendingInvocation
+	Result[S any]       = model.Result[S]
+	ResumeInput         = model.ResumeInput
+	Execution[S any]    = executor.Execution[S]
+	Runner[S any]       = executor.Runner[S]
+	Status              = model.Status
+	Store[S any]        = model.Store[S]
+	Transition[S any]   = model.Transition[S]
+	TransitionError     = model.TransitionError
 )
 
 const (
@@ -163,6 +164,17 @@ func FanOut[S any](parent S, branches ...Branch[S]) Transition[S] {
 
 func CompleteBranch[S any](state S) Transition[S] {
 	return model.CompleteBranch(state)
+}
+
+// BranchValues extracts successful states from branch results in order.
+func BranchValues[S any](branches []BranchResult[S]) []S {
+	out := make([]S, 0, len(branches))
+	for _, b := range branches {
+		if b.OK() {
+			out = append(out, b.State)
+		}
+	}
+	return out
 }
 
 // EndBranch finishes the current invocation without producing a result.
