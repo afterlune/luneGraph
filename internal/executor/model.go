@@ -5,6 +5,7 @@ import "github.com/afterlune/luneGraph/internal/model"
 type (
 	Change[S any]       = model.Change[S]
 	Action              = model.Action
+	ActivationBranch    = model.ActivationBranch
 	ActivationGroup     = model.ActivationGroup
 	Branch[S any]       = model.Branch[S]
 	BranchResult[S any] = model.BranchResult[S]

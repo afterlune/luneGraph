@@ -340,7 +340,7 @@ func TestDynamicRepeatedTargetsSurviveStoreReload(t *testing.T) {
 				t.Fatalf("start = %+v, %v", budget, err)
 			}
 			position := mustCheckpoint(e)
-			if len(position.Groups) != 1 || len(position.Groups[0].Children) != 4 {
+			if len(position.Groups) != 1 || len(position.Groups[0].Branches) != 4 {
 				t.Fatalf("dynamic activation = %+v", position.Groups)
 			}
 			_, result, err := r.Recover(context.Background(), "repeated-"+kind, nil, store, graph.Options{MaxConcurrency: 2})
@@ -694,8 +694,19 @@ func TestDynamicFanOutTolerantJoinWithPartialFailures(t *testing.T) {
 			if failedInv == nil {
 				t.Fatalf("stored checkpoint missing InvocationFailed: %+v", stored.Invocations)
 			}
-			if failedInv.Target != "worker-fail" || failedInv.Error != "worker-fail boom" {
-				t.Fatalf("failed invocation metadata mismatch: Target=%q Error=%q", failedInv.Target, failedInv.Error)
+			var failedGroup *graph.ActivationGroup
+			for i := range stored.Groups {
+				if stored.Groups[i].ID == failedInv.GroupID {
+					failedGroup = &stored.Groups[i]
+					break
+				}
+			}
+			if failedGroup == nil || failedInv.BranchIndex < 0 || failedInv.BranchIndex >= len(failedGroup.Branches) {
+				t.Fatalf("failed invocation has no activation branch metadata: %+v / %+v", failedInv, stored.Groups)
+			}
+			failedBranch := failedGroup.Branches[failedInv.BranchIndex]
+			if failedBranch.InvocationID != failedInv.ID || failedBranch.Target != "worker-fail" || failedBranch.Error != "worker-fail boom" {
+				t.Fatalf("failed branch metadata mismatch: %+v", failedBranch)
 			}
 
 			// Recover execution: Merge will re-run with branches reconstructed from loaded checkpoint

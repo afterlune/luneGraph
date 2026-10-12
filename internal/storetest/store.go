@@ -39,7 +39,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		}
 		initial.Invocations[0].State.Values["n"] = 99
 		initial.Invocations[0].Next[0] = "changed"
-		initial.Groups[0].Children[0] = "changed"
+		initial.Groups[0].Branches[0].InvocationID = "changed"
 
 		loaded, err := store.Load(ctx, "run")
 		if err != nil {
@@ -48,7 +48,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		assertFixture(t, loaded, 1)
 		loaded.Invocations[0].State.Values["n"] = 88
 		loaded.Invocations[0].Next[0] = "changed"
-		loaded.Groups[0].Children[0] = "changed"
+		loaded.Groups[0].Branches[0].InvocationID = "changed"
 
 		again, err := store.Load(ctx, "run")
 		if err != nil {
@@ -229,9 +229,9 @@ func ordering(t *testing.T, open func(*testing.T) graph.Store[State]) {
 			{ID: "i1", State: State{Values: map[string]int{"n": 1}}},
 		}
 		initial.Groups = []graph.ActivationGroup{
-			{ID: "g2", Children: []string{"i1"}},
-			{ID: "g10", Children: []string{"i2"}},
-			{ID: "g1", Children: []string{"i2", "i10"}},
+			{ID: "g2", Branches: []graph.ActivationBranch{{InvocationID: "i1"}}},
+			{ID: "g10", Branches: []graph.ActivationBranch{{InvocationID: "i2"}}},
+			{ID: "g1", Branches: []graph.ActivationBranch{{InvocationID: "i2"}, {InvocationID: "i10"}}},
 		}
 		if err := store.Create(ctx, initial); err != nil {
 			t.Fatal(err)
@@ -246,7 +246,7 @@ func ordering(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		next.Invocations = append(next.Invocations, graph.Invocation[State]{
 			ID: "i0", State: State{Values: map[string]int{"n": 0}},
 		})
-		next.Groups = append(next.Groups, graph.ActivationGroup{ID: "g0", Children: []string{"i10", "i2"}})
+		next.Groups = append(next.Groups, graph.ActivationGroup{ID: "g0", Branches: []graph.ActivationBranch{{InvocationID: "i10"}, {InvocationID: "i2"}}})
 		if err := store.Commit(ctx, 1, next.Change()); err != nil {
 			t.Fatal(err)
 		}
@@ -274,7 +274,7 @@ func assertLoadOrder(t *testing.T, store graph.Store[State], invocations, groups
 		}
 	}
 	for _, group := range loaded.Groups {
-		if group.ID == "g1" && (len(group.Children) != 2 || group.Children[0] != "i2" || group.Children[1] != "i10") {
+		if group.ID == "g1" && (len(group.Branches) != 2 || group.Branches[0].InvocationID != "i2" || group.Branches[1].InvocationID != "i10") {
 			t.Fatalf("group child target order changed: %+v", group)
 		}
 	}
@@ -290,14 +290,14 @@ func fixture() graph.Checkpoint[State] {
 		Revision:      1,
 
 		Invocations:      []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},
-		Groups:           []graph.ActivationGroup{{ID: "g1", CallID: "c3", Children: []string{"i1"}}},
+		Groups:           []graph.ActivationGroup{{ID: "g1", CallID: "c3", Branches: []graph.ActivationBranch{{InvocationID: "i1"}}}},
 		HadLocalFailures: true,
 	}
 }
 
 func assertFixture(t *testing.T, value graph.Checkpoint[State], revision uint64) {
 	t.Helper()
-	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Children[0] != "i1" || !value.HadLocalFailures {
+	if value.Revision != revision || value.Invocations[0].CallID != "c2" || value.Groups[0].CallID != "c3" || value.Invocations[0].State.Values["n"] != 1 || value.Invocations[0].Next[0] != "next" || value.Groups[0].Branches[0].InvocationID != "i1" || !value.HadLocalFailures {
 		t.Fatalf("stored checkpoint was mutated: %+v", value)
 	}
 }

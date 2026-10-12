@@ -163,7 +163,10 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 	_, _, runner, base, _, _ := executorTestValidationFixtures(t)
 	parentID := base.Groups[0].ParentID
-	childIDs := append([]string(nil), base.Groups[0].Children...)
+	childIDs := make([]string, len(base.Groups[0].Branches))
+	for i, branch := range base.Groups[0].Branches {
+		childIDs[i] = branch.InvocationID
+	}
 	tests := []struct {
 		name   string
 		mutate func(*Checkpoint[int])
@@ -176,9 +179,14 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 		{"duplicate group ID", func(s *Checkpoint[int]) { s.Groups = append(s.Groups, s.Groups[0]) }},
 		{"group with invalid parent", func(s *Checkpoint[int]) { s.Groups[0].ParentID = "missing" }},
 		{"incompatible join", func(s *Checkpoint[int]) { s.Groups[0].JoinNode = "elsewhere" }},
-		{"too few children", func(s *Checkpoint[int]) { s.Groups[0].Children = s.Groups[0].Children[:1] }},
-		{"too many children", func(s *Checkpoint[int]) { s.Groups[0].Children = append(s.Groups[0].Children, "i99") }},
-		{"missing child", func(s *Checkpoint[int]) { s.Groups[0].Children[0] = "i99" }},
+		{"too few children", func(s *Checkpoint[int]) { s.Groups[0].Branches = s.Groups[0].Branches[:1] }},
+		{"too many children", func(s *Checkpoint[int]) {
+			s.Groups[0].Branches = append(s.Groups[0].Branches, ActivationBranch{InvocationID: "i99"})
+		}},
+		{"missing child", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].InvocationID = "i99" }},
+		{"undeclared branch target", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Target = "missing" }},
+		{"negative branch timeout", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Timeout = -1 }},
+		{"error on non-failed branch", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Error = "stale" }},
 		{"child belongs to another group", func(s *Checkpoint[int]) { _, child := invocation(s, childIDs[0]); child.GroupID = "g99" }},
 		{"child index mismatch", func(s *Checkpoint[int]) { _, child := invocation(s, childIDs[0]); child.BranchIndex = 1 }},
 		{"joined child at wrong node", func(s *Checkpoint[int]) {

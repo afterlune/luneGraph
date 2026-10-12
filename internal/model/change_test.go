@@ -8,15 +8,15 @@ import (
 )
 
 func TestChangeValidationAndOwnership(t *testing.T) {
-	cp := Checkpoint[map[string]int]{FormatVersion: CheckpointFormatVersion, RunID: "r", MachineID: "m", Revision: 2, NextID: 3, Invocations: []Invocation[map[string]int]{{ID: "i1", State: map[string]int{"n": 1}, Next: []string{"next"}}}, Groups: []ActivationGroup{{ID: "g2", Children: []string{"i1"}}}}
+	cp := Checkpoint[map[string]int]{FormatVersion: CheckpointFormatVersion, RunID: "r", MachineID: "m", Revision: 2, NextID: 3, Invocations: []Invocation[map[string]int]{{ID: "i1", State: map[string]int{"n": 1}, Next: []string{"next"}}}, Groups: []ActivationGroup{{ID: "g2", Branches: []ActivationBranch{{InvocationID: "i1"}}}}}
 	c := cp.Change()
 	c.UpsertInvocations[0].Next[0] = "detached"
-	c.UpsertGroups[0].Children[0] = "detached"
-	if cp.Invocations[0].Next[0] != "next" || cp.Groups[0].Children[0] != "i1" {
+	c.UpsertGroups[0].Branches[0].InvocationID = "detached"
+	if cp.Invocations[0].Next[0] != "next" || cp.Groups[0].Branches[0].InvocationID != "i1" {
 		t.Fatal("checkpoint shared change structure")
 	}
 	c.UpsertInvocations[0].Next[0] = "next"
-	c.UpsertGroups[0].Children[0] = "i1"
+	c.UpsertGroups[0].Branches[0].InvocationID = "i1"
 	c.DeleteInvocations = []string{"i9"}
 	c.DeleteGroups = []string{"g9"}
 	if err := ValidateChange(1, c); err != nil {
@@ -34,10 +34,10 @@ func TestChangeValidationAndOwnership(t *testing.T) {
 	}
 	c.UpsertInvocations[0].State["n"] = 9
 	c.UpsertInvocations[0].Next[0] = "changed"
-	c.UpsertGroups[0].Children[0] = "changed"
+	c.UpsertGroups[0].Branches[0].InvocationID = "changed"
 	c.DeleteInvocations[0] = "changed"
 	c.DeleteGroups[0] = "changed"
-	if owned.UpsertInvocations[0].State["n"] != 1 || owned.UpsertInvocations[0].Next[0] != "next" || owned.UpsertGroups[0].Children[0] != "i1" || owned.DeleteInvocations[0] != "i9" || owned.DeleteGroups[0] != "g9" {
+	if owned.UpsertInvocations[0].State["n"] != 1 || owned.UpsertInvocations[0].Next[0] != "next" || owned.UpsertGroups[0].Branches[0].InvocationID != "i1" || owned.DeleteInvocations[0] != "i9" || owned.DeleteGroups[0] != "g9" {
 		t.Fatal(owned)
 	}
 	if _, err := owned.Clone(func(s map[string]int) (map[string]int, error) { return s, errors.New("clone") }); err == nil {

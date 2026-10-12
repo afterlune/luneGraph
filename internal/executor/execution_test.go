@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/afterlune/luneGraph/internal/model"
 )
@@ -170,6 +171,24 @@ func TestJoinTargetValidationAndRouting(t *testing.T) {
 	}
 	if err := runner.checkTargets("fork", []string{"joined", "joined"}); err == nil {
 		t.Fatal("duplicate target list accepted")
+	}
+}
+
+func TestRouteClearsPersistedDynamicBranchTimeout(t *testing.T) {
+	runner := executorTestRunner(t, "worker", []NodeSpec[int]{
+		executorTestNode("worker", executorTestEnd, FailInvocation),
+		executorTestNode("next", executorTestEnd, FailInvocation),
+	}, nil, map[string][]string{"worker": {"next"}}, nil, nil)
+	cp := Checkpoint[int]{NextID: 5, Invocations: []Invocation[int]{
+		{ID: "i1", CallID: "c4", Node: "worker", Status: InvocationReady, GroupID: "g1", BranchIndex: 0},
+		{ID: "i2", Status: InvocationGroup, ChildGroupID: "g1", Node: "worker"},
+	}, Groups: []ActivationGroup{{ID: "g1", ParentID: "i2", Source: "worker", Branches: []ActivationBranch{{InvocationID: "i1", Target: "worker", Timeout: 25 * time.Millisecond}}}}}
+	index := executionTestIndex(cp)
+	if err := runner.route(&cp, index, "i1", "worker", 9, []string{"next"}); err != nil {
+		t.Fatal(err)
+	}
+	if cp.Groups[0].Branches[0].Timeout != 0 || cp.Invocations[0].Node != "next" {
+		t.Fatalf("single-target route retained branch timeout: %+v / %+v", cp.Groups[0], cp.Invocations[0])
 	}
 }
 

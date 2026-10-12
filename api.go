@@ -23,6 +23,7 @@ type (
 	ObserverFunc        = model.ObserverFunc
 	Action              = model.Action
 	ActivationGroup     = model.ActivationGroup
+	ActivationBranch    = model.ActivationBranch
 	Branch[S any]       = model.Branch[S]
 	BranchResult[S any] = model.BranchResult[S]
 	CallInfo            = model.CallInfo

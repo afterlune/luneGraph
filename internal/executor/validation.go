@@ -145,23 +145,31 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		if group.JoinNode != r.joinBySource[group.Source] {
 			return invalidCheckpoint("group %q has incompatible join", group.ID)
 		}
-		if group.JoinNode == "" && (len(group.Children) < 2 || len(group.Children) > len(r.edges[group.Source])) {
+		if group.JoinNode == "" && (len(group.Branches) < 2 || len(group.Branches) > len(r.edges[group.Source])) {
 			return invalidCheckpoint("group %q has invalid unjoined child count", group.ID)
 		}
-		if group.JoinNode != "" && len(group.Children) == 0 {
+		if group.JoinNode != "" && len(group.Branches) == 0 {
 			return invalidCheckpoint("group %q has invalid child count", group.ID)
 		}
-		for index, childID := range group.Children {
+		for index, branch := range group.Branches {
+			childID := branch.InvocationID
 			child, exists := invocations[childID]
 			if !exists || child.GroupID != group.ID || child.BranchIndex != index || childID == group.ParentID {
 				return invalidCheckpoint("group %q has invalid child %q", group.ID, childID)
+			}
+			if _, exists := r.edges[group.Source][branch.Target]; !exists || branch.Timeout < 0 {
+				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
+			}
+			if branch.Error != "" && child.Status != InvocationFailed {
+				return invalidCheckpoint("group %q has an error for non-failed branch %d", group.ID, index)
 			}
 			if child.Status == InvocationJoined && (group.JoinNode == "" || child.Node != group.JoinNode) {
 				return invalidCheckpoint("group %q has child at wrong join", group.ID)
 			}
 		}
 		resolved := true
-		for _, childID := range group.Children {
+		for _, branch := range group.Branches {
+			childID := branch.InvocationID
 			status := invocations[childID].Status
 			if status != InvocationJoined && status != InvocationEnded && status != InvocationFailed {
 				resolved = false
@@ -178,7 +186,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	for _, inv := range s.Invocations {
 		if inv.GroupID != "" {
 			group, exists := groups[inv.GroupID]
-			if !exists || inv.BranchIndex >= len(group.Children) || group.Children[inv.BranchIndex] != inv.ID {
+			if !exists || inv.BranchIndex >= len(group.Branches) || group.Branches[inv.BranchIndex].InvocationID != inv.ID {
 				return invalidCheckpoint("invocation %q has invalid group membership", inv.ID)
 			}
 		}

@@ -25,10 +25,10 @@ func nestedCandidatePosition() Checkpoint[int] {
 			{ID: "i10", Status: InvocationWaiting, GroupID: "g8"},
 			{ID: "i90", Status: InvocationWaiting, GroupID: "g0"},
 		}, Groups: []ActivationGroup{
-			{ID: "g0", ParentID: "i0", Children: []string{"i1", "i90"}},
-			{ID: "g2", ParentID: "i1", Children: []string{"i3", "i4"}},
-			{ID: "g5", ParentID: "i3", JoinNode: "inner-join", Children: []string{"i6", "i7"}},
-			{ID: "g8", ParentID: "i4", Children: []string{"i9", "i10"}},
+			{ID: "g0", ParentID: "i0", Branches: []ActivationBranch{{InvocationID: "i1"}, {InvocationID: "i90"}}},
+			{ID: "g2", ParentID: "i1", Branches: []ActivationBranch{{InvocationID: "i3"}, {InvocationID: "i4"}}},
+			{ID: "g5", ParentID: "i3", JoinNode: "inner-join", Branches: []ActivationBranch{{InvocationID: "i6"}, {InvocationID: "i7"}}},
+			{ID: "g8", ParentID: "i4", Branches: []ActivationBranch{{InvocationID: "i9"}, {InvocationID: "i10"}}},
 		}}
 }
 
@@ -122,7 +122,7 @@ func TestCandidateWideCollectionAndDifferenceReuse(t *testing.T) {
 	for i := range 32 {
 		id := "child-" + strconv.Itoa(i)
 		cp.Invocations = append(cp.Invocations, Invocation[int]{ID: id, Status: InvocationJoined, GroupID: "wide"})
-		cp.Groups[0].Children = append(cp.Groups[0].Children, id)
+		cp.Groups[0].Branches = append(cp.Groups[0].Branches, ActivationBranch{InvocationID: id})
 	}
 	l := newLive(cp, nil, nil)
 	for range 2 {
@@ -136,5 +136,37 @@ func TestCandidateWideCollectionAndDifferenceReuse(t *testing.T) {
 		if len(change.DeleteInvocations) != 32 || !reflect.DeepEqual(change.DeleteGroups, []string{"wide"}) || len(change.UpsertInvocations) != 1 {
 			t.Fatalf("wide change = %+v", change)
 		}
+	}
+}
+
+func TestCandidateUpsertsChangedActivationBranchRecords(t *testing.T) {
+	workspace := &candidateWorkspace[int]{}
+	before := Checkpoint[int]{Groups: []ActivationGroup{{ID: "g1", Branches: []ActivationBranch{{InvocationID: "i1", Target: "worker"}}}}}
+
+	unchanged := model.Copy(before)
+	change := workspace.change(before, unchanged)
+	if len(change.UpsertGroups) != 0 {
+		t.Fatalf("unchanged group produced upserts: %+v", change.UpsertGroups)
+	}
+
+	after := model.Copy(before)
+	after.Groups[0].Branches[0].Error = "worker failed"
+	change = workspace.change(before, after)
+	if len(change.UpsertGroups) != 1 || change.UpsertGroups[0].Branches[0].Error != "worker failed" {
+		t.Fatalf("changed branch metadata was not upserted: %+v", change.UpsertGroups)
+	}
+	if before.Groups[0].Branches[0].Error != "" {
+		t.Fatal("group change mutated the prior position")
+	}
+
+	wideBefore := Checkpoint[int]{Groups: make([]ActivationGroup, 8)}
+	for i := range wideBefore.Groups {
+		wideBefore.Groups[i].ID = "g" + strconv.Itoa(i+1)
+	}
+	wideAfter := model.Copy(wideBefore)
+	wideAfter.Groups[3].Branches = []ActivationBranch{{InvocationID: "i4", Target: "worker"}}
+	change = workspace.change(wideBefore, wideAfter)
+	if len(change.UpsertGroups) != 1 || change.UpsertGroups[0].ID != "g4" {
+		t.Fatalf("wide group metadata change was not upserted: %+v", change.UpsertGroups)
 	}
 }

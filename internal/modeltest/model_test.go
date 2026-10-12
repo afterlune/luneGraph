@@ -100,7 +100,7 @@ func (m model) check(cp graph.Checkpoint[state]) error {
 	}
 	if len(cp.Groups) == 1 {
 		g := cp.Groups[0]
-		if m.width == 0 || g.Source != "fork" || g.JoinNode != "join" || len(g.Children) != m.width {
+		if m.width == 0 || g.Source != "fork" || g.JoinNode != "join" || len(g.Branches) != m.width {
 			return fmt.Errorf("invalid fanout shape: %+v", g)
 		}
 		joined := 0

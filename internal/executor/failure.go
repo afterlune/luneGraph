@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"slices"
 )
 
 // recordFailure changes a candidate checkpoint. An execution-level error
@@ -27,8 +28,17 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 	if scope == FailGroup && inv.GroupID != "" {
 		return r.failGroup(s, index, inv.GroupID)
 	}
+	if inv.GroupID != "" {
+		_, activation := group(s, inv.GroupID)
+		if activation == nil || inv.BranchIndex < 0 || inv.BranchIndex >= len(activation.Branches) || activation.Branches[inv.BranchIndex].InvocationID != inv.ID {
+			return fmt.Errorf("invocation %q has invalid group membership", inv.ID)
+		}
+		if activation.Branches[inv.BranchIndex].Error != cause.Error() {
+			activation.Branches = slices.Clone(activation.Branches)
+			activation.Branches[inv.BranchIndex].Error = cause.Error()
+		}
+	}
 	inv.Status = InvocationFailed
-	inv.Error = cause.Error()
 	inv.CallID = ""
 	inv.Next = nil
 	inv.Continuation = ""
@@ -50,7 +60,8 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id strin
 			return
 		}
 		removeGroups[groupID] = true
-		for _, childID := range current.Children {
+		for _, branch := range current.Branches {
+			childID := branch.InvocationID
 			removeInv[childID] = true
 			_, child := indexedInvocation(index, s, childID)
 			if child != nil && child.ChildGroupID != "" {

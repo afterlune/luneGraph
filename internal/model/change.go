@@ -48,7 +48,7 @@ func (s Checkpoint[S]) Change() Change[S] {
 	groups := make([]ActivationGroup, len(s.Groups))
 	copy(groups, s.Groups)
 	for i := range groups {
-		groups[i].Children = slices.Clone(s.Groups[i].Children)
+		groups[i].Branches = slices.Clone(s.Groups[i].Branches)
 	}
 	var final *S
 	if s.Final != nil {

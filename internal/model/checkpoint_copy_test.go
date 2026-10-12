@@ -16,7 +16,7 @@ func referenceCheckpointCopy[S any](src Checkpoint[S]) Checkpoint[S] {
 	}
 	out.Groups = append([]ActivationGroup(nil), src.Groups...)
 	for i := range out.Groups {
-		out.Groups[i].Children = append([]string(nil), src.Groups[i].Children...)
+		out.Groups[i].Branches = append([]ActivationBranch(nil), src.Groups[i].Branches...)
 	}
 	if src.Failure != nil {
 		failure := *src.Failure
@@ -58,7 +58,7 @@ func checkCopySequence[S any](t *testing.T, state func(int) S) {
 			src.Invocations = append(src.Invocations, inv)
 		}
 		if size > 0 {
-			src.Groups = []ActivationGroup{{ID: "g1", CallID: "c100", Source: "fork", ParentID: "i1", JoinNode: "join", Children: []string{"i2", "i3"}}}
+			src.Groups = []ActivationGroup{{ID: "g1", CallID: "c100", Source: "fork", ParentID: "i1", JoinNode: "join", Branches: []ActivationBranch{{InvocationID: "i2"}, {InvocationID: "i3"}}}}
 			src.Failure = &Failure{InvocationID: "i10", Node: "node", Message: "failure", PanicStack: "stack"}
 		}
 		oldInv, oldGroups := dst.Invocations, dst.Groups
@@ -104,11 +104,11 @@ func checkCopySequence[S any](t *testing.T, state func(int) S) {
 			}
 		}
 		if len(dst.Groups) > 0 {
-			dst.Groups[0].Children[0] = "changed"
-			if src.Groups[0].Children[0] != "i2" {
+			dst.Groups[0].Branches[0].InvocationID = "changed"
+			if src.Groups[0].Branches[0].InvocationID != "i2" {
 				t.Fatal("group structure shared")
 			}
-			dst.Groups[0].Children[0] = "i2"
+			dst.Groups[0].Branches[0].InvocationID = "i2"
 		}
 		*dst.Final = state(step + 100)
 		if !reflect.DeepEqual(*src.Final, final) {

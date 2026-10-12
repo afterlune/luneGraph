@@ -87,7 +87,7 @@ func TestPartialResumeAcrossParallelInvocations(t *testing.T) {
 	}
 	corrupt := mustCheckpoint(firstExecution)
 	corrupt.Groups = append([]graph.ActivationGroup(nil), corrupt.Groups...)
-	corrupt.Groups[0].Children = []string{"missing", ids["b"]}
+	corrupt.Groups[0].Branches = []graph.ActivationBranch{{InvocationID: "missing"}, {InvocationID: ids["b"]}}
 	if _, _, err := r.Resume(context.Background(), corrupt, nil, nil, graph.Options{}); err == nil {
 		t.Fatal("invalid group checkpoint accepted")
 	}

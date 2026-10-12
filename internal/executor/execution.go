@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 )
 
 func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S]) (bool, error) {
@@ -169,7 +170,16 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		inv.State = state
 		inv.Continuation = ""
 		inv.Next = nil
-		inv.Timeout = 0
+		if inv.GroupID != "" {
+			_, activation := group(s, inv.GroupID)
+			if activation == nil || inv.BranchIndex < 0 || inv.BranchIndex >= len(activation.Branches) {
+				return fmt.Errorf("invocation %q has invalid group membership", inv.ID)
+			}
+			if activation.Branches[inv.BranchIndex].Timeout != 0 {
+				activation.Branches = slices.Clone(activation.Branches)
+				activation.Branches[inv.BranchIndex].Timeout = 0
+			}
+		}
 		return r.setTarget(s, inv, targets[0])
 	}
 	needed := uint64(1) // activation group
@@ -205,7 +215,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		Source:   source,
 		ParentID: id,
 		JoinNode: r.joinBySource[source],
-		Children: make([]string, len(targets)),
+		Branches: make([]ActivationBranch, len(targets)),
 	}
 	if group.JoinNode != "" {
 		group.CallID = newID(s, "c")
@@ -221,8 +231,8 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		if err != nil {
 			return &stateCopyError{cause: fmt.Errorf("clone fan-out state: %w", err)}
 		}
-		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex, Target: target}
-		group.Children[branchIndex] = child.ID
+		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
+		group.Branches[branchIndex] = ActivationBranch{InvocationID: child.ID, Target: target}
 		appended := appendInvocation(index, s, child)
 		if err := r.setTarget(s, appended, target); err != nil {
 			return err
@@ -264,7 +274,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 		Source:   source,
 		ParentID: parent.ID,
 		JoinNode: joinNode,
-		Children: make([]string, len(branches)),
+		Branches: make([]ActivationBranch, len(branches)),
 	}
 	parent.State = parentState
 	parent.Status = InvocationGroup
@@ -283,10 +293,8 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			Status:      InvocationReady,
 			GroupID:     groupID,
 			BranchIndex: branchIndex,
-			Target:      branch.Target,
-			Timeout:     branch.Timeout,
 		}
-		activation.Children[branchIndex] = child.ID
+		activation.Branches[branchIndex] = ActivationBranch{InvocationID: child.ID, Target: branch.Target, Timeout: branch.Timeout}
 		childPosition := appendInvocation(index, s, child)
 		if err := r.setTarget(s, childPosition, branch.Target); err != nil {
 			return err

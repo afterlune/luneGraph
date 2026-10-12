@@ -25,18 +25,18 @@ func BenchmarkJSONCheckpointEncoding(b *testing.B) {
 		Steps:         32,
 		Groups: []graph.ActivationGroup{{
 			ID: "group-1", CallID: "join-call-1", Source: "fork", JoinNode: "join",
-			Children: make([]string, branchCount),
+			Branches: make([]graph.ActivationBranch, branchCount),
 		}},
 		Invocations: make([]graph.Invocation[codecBenchmarkState], branchCount),
 	}
 	for i := range branchCount {
-		checkpointValue.Groups[0].Children[i] = fmt.Sprintf("invocation-%02d", i)
+		checkpointValue.Groups[0].Branches[i] = graph.ActivationBranch{InvocationID: fmt.Sprintf("invocation-%02d", i)}
 		values := make(map[string]int, 16)
 		for j := range 16 {
 			values[fmt.Sprintf("value-%02d", j)] = i + j
 		}
 		checkpointValue.Invocations[i] = graph.Invocation[codecBenchmarkState]{
-			ID:     checkpointValue.Groups[0].Children[i],
+			ID:     checkpointValue.Groups[0].Branches[i].InvocationID,
 			CallID: fmt.Sprintf("node-call-%02d", i),
 			Node:   "work",
 			State:  codecBenchmarkState{Values: values},

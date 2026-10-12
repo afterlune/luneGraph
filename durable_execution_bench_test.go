@@ -214,12 +214,13 @@ func assertDurableFanoutCheckpoint(b *testing.B, checkpoint graph.Checkpoint[dur
 	if len(checkpoint.Groups) != 1 {
 		b.Fatalf("fanout checkpoint has %d groups; want 1", len(checkpoint.Groups))
 	}
-	if len(checkpoint.Invocations) != width+1 || len(checkpoint.Groups[0].Children) != width {
-		b.Fatalf("fanout checkpoint has %d invocations and %d children; want %d and %d", len(checkpoint.Invocations), len(checkpoint.Groups[0].Children), width+1, width)
+	if len(checkpoint.Invocations) != width+1 || len(checkpoint.Groups[0].Branches) != width {
+		b.Fatalf("fanout checkpoint has %d invocations and %d children; want %d and %d", len(checkpoint.Invocations), len(checkpoint.Groups[0].Branches), width+1, width)
 	}
 	group := checkpoint.Groups[0]
 	children := make(map[string]struct{}, width)
-	for _, id := range group.Children {
+	for _, branch := range group.Branches {
+		id := branch.InvocationID
 		children[id] = struct{}{}
 	}
 	parentFound := false

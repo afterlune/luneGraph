@@ -154,7 +154,8 @@ func runNestedSequenceTarget(t testing.TB, kind string, data []byte, requireFaul
 				if len(faultCalls) != 1 || faultCalls[0] != outer.CallID {
 					t.Fatalf("conflict did not target the pending outer Merge: group=%+v callbacks=%v", outer, faultCalls)
 				}
-				for _, childID := range outer.Children {
+				for _, branch := range outer.Branches {
+					childID := branch.InvocationID
 					var child *graph.Invocation[nestedState]
 					for index := range beforeFault.Invocations {
 						if beforeFault.Invocations[index].ID == childID {

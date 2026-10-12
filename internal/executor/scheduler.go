@@ -325,15 +325,16 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		t.join = r.joins[g.JoinNode]
 		t.timeout = t.join.Timeout
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
-		t.branches = make([]BranchResult[S], 0, len(g.Children))
-		for _, id := range g.Children {
+		t.branches = make([]BranchResult[S], 0, len(g.Branches))
+		for branchIndex, branch := range g.Branches {
+			id := branch.InvocationID
 			child, _ := l.invocation(id)
 			res := BranchResult[S]{
-				Index:  child.BranchIndex,
-				Target: child.Target,
+				Index:  branchIndex,
+				Target: branch.Target,
 				Node:   child.Node,
 				Status: child.Status,
-				Error:  child.Error,
+				Error:  branch.Error,
 			}
 			if child.Status == InvocationJoined {
 				value, err := r.cloneState(child.State, id)
@@ -352,7 +353,11 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		}
 		t.state = state
 		t.spec = r.nodes[v.Node]
-		t.timeout = v.Timeout
+		if v.GroupID != "" {
+			if activation, ok := l.groups[v.GroupID]; ok && v.BranchIndex >= 0 && v.BranchIndex < len(activation.Branches) {
+				t.timeout = activation.Branches[v.BranchIndex].Timeout
+			}
+		}
 		if t.timeout <= 0 {
 			t.timeout = t.spec.Timeout
 		}

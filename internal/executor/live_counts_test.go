@@ -27,7 +27,8 @@ func assertLiveCounts(t *testing.T, l *live[int]) {
 	}
 	for _, g := range cp.Groups {
 		unresolved := 0
-		for _, id := range g.Children {
+		for _, branch := range g.Branches {
+			id := branch.InvocationID
 			found := false
 			for _, inv := range cp.Invocations {
 				if inv.ID != id {

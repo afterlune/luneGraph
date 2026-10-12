@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Move durable branch metadata from `Invocation` into ordered
+  `ActivationGroup.Branches []ActivationBranch` records. Branch records now own
+  the invocation ID, declared target, local error message and timeout; the
+  invocation's `BranchIndex` remains the stable position used by `CallInfo`.
+  Remove `ActivationGroup.Children` and `Invocation.Target`, `Invocation.Error`
+  and `Invocation.Timeout`. This is a public API and checkpoint-format break:
+  format 7 rejects format-6 and older checkpoints, with no automatic migration.
+  SQLite schema 2 remains unchanged because activation groups already use a
+  serialized payload; finish old runs with their matching runtime and use new
+  runs for format 7.
+
 - Add speculative join and branch pruning (Quorum & custom predicates).
   `JoinSpec[S].Quorum` and `JoinSpec[S].CanMerge` enable early triggering of `Merge`
   before all branches resolve (e.g. LLM hedging, racing, quorum voting).

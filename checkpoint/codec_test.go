@@ -45,7 +45,7 @@ func TestJSONCheckpointRoundTripPreservesRecoveryFields(t *testing.T) {
 		Invocations: []graph.Invocation[codecState]{
 			{ID: "i1", CallID: "node-call-17", Node: "work", State: codecState{Value: "<active> 雪", Values: map[string]int{"z": 1, "a": 2}}, Status: graph.InvocationWaiting, Continuation: "approval", Next: []string{"next"}},
 		},
-		Groups:  []graph.ActivationGroup{{ID: "g1", CallID: "join-call-4", Source: "split", JoinNode: "join", Children: []string{"i1"}}},
+		Groups:  []graph.ActivationGroup{{ID: "g1", CallID: "join-call-4", Source: "split", JoinNode: "join", Branches: []graph.ActivationBranch{{InvocationID: "i1"}}}},
 		Failure: &graph.Failure{InvocationID: "i1", Node: "work", Message: "failed", PanicStack: "stack"},
 	}
 

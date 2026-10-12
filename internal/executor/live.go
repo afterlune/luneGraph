@@ -44,7 +44,8 @@ func newLive[S any](cp Checkpoint[S], joins map[string]JoinSpec[S], clone Clone[
 	l.header.Groups = nil
 	for _, g := range cp.Groups {
 		l.groups[g.ID] = g
-		for _, id := range g.Children {
+		for _, branch := range g.Branches {
+			id := branch.InvocationID
 			if inv, _ := l.invocation(id); !resolved(inv.Status) {
 				l.remaining[g.ID]++
 			}
@@ -171,8 +172,9 @@ func (l *live[S]) joinReady(id string) bool {
 	}
 	if spec.CanMerge != nil {
 		defer func() { _ = recover() }()
-		branches := make([]BranchResult[S], 0, len(g.Children))
-		for _, childID := range g.Children {
+		branches := make([]BranchResult[S], 0, len(g.Branches))
+		for index, branch := range g.Branches {
+			childID := branch.InvocationID
 			child, _ := l.invocation(childID)
 			state := child.State
 			if l.clone != nil && child.Status == InvocationJoined {
@@ -181,12 +183,12 @@ func (l *live[S]) joinReady(id string) bool {
 				}
 			}
 			branches = append(branches, BranchResult[S]{
-				Index:  child.BranchIndex,
-				Target: child.Target,
+				Index:  index,
+				Target: branch.Target,
 				Node:   child.Node,
 				Status: child.Status,
 				State:  state,
-				Error:  child.Error,
+				Error:  branch.Error,
 			})
 		}
 		parent, _ := l.invocation(g.ParentID)
@@ -201,7 +203,8 @@ func (l *live[S]) joinReady(id string) bool {
 		}
 	} else if spec.Quorum > 0 {
 		var joined int
-		for _, childID := range g.Children {
+		for _, branch := range g.Branches {
+			childID := branch.InvocationID
 			if child, exists := l.invocation(childID); exists && child.Status == InvocationJoined {
 				joined++
 			}
@@ -334,7 +337,8 @@ func (l *live[S]) install(c Change[S]) {
 		l.groups[g.ID] = g
 		l.remaining[g.ID] = 0
 		delete(l.joinEnqueued, g.ID)
-		for _, id := range g.Children {
+		for _, branch := range g.Branches {
+			id := branch.InvocationID
 			if inv, _ := l.invocation(id); !resolved(inv.Status) {
 				l.remaining[g.ID]++
 			}

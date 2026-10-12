@@ -12,7 +12,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 6
+const CheckpointFormatVersion uint32 = 7
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -40,9 +40,19 @@ type Invocation[S any] struct {
 	BranchIndex  int
 	Continuation string
 	Next         []string
-	Error        string
-	Target       string
-	Timeout      time.Duration
+}
+
+// ActivationBranch stores the stable, ordered identity and outcome metadata
+// for one invocation in an activation group.
+type ActivationBranch struct {
+	// InvocationID identifies this branch's invocation.
+	InvocationID string
+	// Target is the branch's declared target node.
+	Target string
+	// Error is the local failure message when the invocation failed.
+	Error string
+	// Timeout is this branch's per-invocation timeout override.
+	Timeout time.Duration
 }
 
 // ActivationGroup correlates branches started by one fan-out occurrence.
@@ -53,7 +63,7 @@ type ActivationGroup struct {
 	Source   string
 	ParentID string
 	JoinNode string
-	Children []string
+	Branches []ActivationBranch
 }
 
 // Failure records the execution-level failure of a completed run.
@@ -81,7 +91,8 @@ type Checkpoint[S any] struct {
 	Invocations    []Invocation[S]
 	Groups         []ActivationGroup
 	// HadLocalFailures remains true after a committed local failure.
-	// Local error details and ended branch states are not retained.
+	// Failed activation branches retain their error message until their group
+	// settles; ended branch states are not exposed as join results.
 	HadLocalFailures bool
 	// Failure is non-nil only for a completed execution-level failure.
 	Failure *Failure
@@ -114,7 +125,7 @@ type ResumeInput struct {
 
 // Store persists execution checkpoints. Create accepts revision one and rejects
 // an existing RunID. Load returns an independent full checkpoint with invocations
-// and groups sorted by ID; group children preserve fan-out target order.
+// and groups sorted by ID; group branches preserve fan-out target order.
 // LoadHeader returns copied metadata without loading invocation states. Commit
 // atomically applies a Change at expected+1. ErrConflict guarantees no write;
 // other Store errors can leave the outcome uncertain, so callers must reload

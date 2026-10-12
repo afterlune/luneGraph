@@ -191,11 +191,12 @@ func (m nestedOracle) check(cp graph.Checkpoint[nestedState]) error {
 		} else if group.Source != "fork" {
 			return fmt.Errorf("unknown activation source: %+v", group)
 		}
-		if group.JoinNode != wantJoin || len(group.Children) != wantChildren {
+		if group.JoinNode != wantJoin || len(group.Branches) != wantChildren {
 			return fmt.Errorf("invalid nested group shape: %+v", group)
 		}
-		seen := make(map[string]bool, len(group.Children))
-		for i, id := range group.Children {
+		seen := make(map[string]bool, len(group.Branches))
+		for i, branch := range group.Branches {
+			id := branch.InvocationID
 			child, exists := invocations[id]
 			if !exists || child.GroupID != group.ID || seen[id] {
 				return fmt.Errorf("invalid group child %q in %+v", id, group)
@@ -225,7 +226,7 @@ func (m nestedOracle) check(cp graph.Checkpoint[nestedState]) error {
 	for _, inv := range cp.Invocations {
 		if inv.GroupID != "" {
 			group, exists := groups[inv.GroupID]
-			if !exists || !slicesContains(group.Children, inv.ID) {
+			if !exists || !activationContains(group.Branches, inv.ID) {
 				return fmt.Errorf("invocation group membership mismatch: %+v", inv)
 			}
 		}
@@ -262,9 +263,9 @@ func (m nestedOracle) check(cp graph.Checkpoint[nestedState]) error {
 	return nil
 }
 
-func slicesContains(values []string, target string) bool {
+func activationContains(values []graph.ActivationBranch, target string) bool {
 	for _, value := range values {
-		if value == target {
+		if value.InvocationID == target {
 			return true
 		}
 	}

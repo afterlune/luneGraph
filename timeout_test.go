@@ -302,11 +302,22 @@ func TestTimeoutPersistenceWithSQLite(t *testing.T) {
 	if failedInv == nil {
 		t.Fatalf("missing failed invocation in sqlite checkpoint: %+v", cp.Invocations)
 	}
-	if failedInv.Error != context.DeadlineExceeded.Error() {
-		t.Fatalf("persisted error mismatch: got %q, want %q", failedInv.Error, context.DeadlineExceeded.Error())
+	var failedGroup *graph.ActivationGroup
+	for i := range cp.Groups {
+		if cp.Groups[i].ID == failedInv.GroupID {
+			failedGroup = &cp.Groups[i]
+			break
+		}
 	}
-	if failedInv.Timeout != 25*time.Millisecond {
-		t.Fatalf("persisted timeout mismatch: got %v, want 25ms", failedInv.Timeout)
+	if failedGroup == nil || failedInv.BranchIndex < 0 || failedInv.BranchIndex >= len(failedGroup.Branches) {
+		t.Fatalf("failed invocation has no activation branch metadata: %+v / %+v", failedInv, cp.Groups)
+	}
+	failedBranch := failedGroup.Branches[failedInv.BranchIndex]
+	if failedBranch.InvocationID != failedInv.ID || failedBranch.Error != context.DeadlineExceeded.Error() {
+		t.Fatalf("persisted branch error mismatch: %+v", failedBranch)
+	}
+	if failedBranch.Timeout != 25*time.Millisecond {
+		t.Fatalf("persisted branch timeout mismatch: got %v, want 25ms", failedBranch.Timeout)
 	}
 
 	// Replay recovery

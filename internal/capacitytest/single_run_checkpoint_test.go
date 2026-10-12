@@ -95,7 +95,7 @@ func assertSingleRunCheckpoint(t testing.TB, cp graph.Checkpoint[state], waiters
 		t.Fatalf("invalid single-Run header or topology: revision=%d steps=%d groups=%d invocations=%d", cp.Revision, cp.Steps, len(cp.Groups), len(cp.Invocations))
 	}
 	group := cp.Groups[0]
-	if group.JoinNode != "" || len(group.Children) != waiters+1 || group.ParentID == "" {
+	if group.JoinNode != "" || len(group.Branches) != waiters+1 || group.ParentID == "" {
 		t.Fatalf("unexpected activation group: %+v", group)
 	}
 	waiting := 0

@@ -1,4 +1,4 @@
-# Execution semantics — checkpoint format 6
+# Execution semantics — checkpoint format 7
 
 The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
@@ -53,6 +53,11 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   Ended branches (`EndBranch`) and failed branches (`FailInvocation`) do not trigger
   premature failure of the group; parents can inspect errors and handle partial failures
   tolerantly. Nested task groups and loops are allowed.
+- Checkpoints keep ordered branch identity and metadata on the activation:
+  `ActivationGroup.Branches` contains each child invocation ID, its declared
+  target, local error message and timeout. The child's `Invocation.BranchIndex`
+  addresses that record and remains the index reported in `CallInfo` and
+  `BranchResult`; branch metadata is not duplicated on `Invocation`.
 - Compile expands subgraphs into the same machine, state type, scheduler and
   checkpoint. Names are qualified by mount path. A mount has at most one exit;
   Return follows it or ends its invocation without an exit. Return outside a
@@ -74,8 +79,12 @@ Declarative timeouts are supported for static nodes, join callbacks, and dynamic
 - Negative durations are rejected at graph compilation (`AddNode`, `AddJoin`) and at runtime (`FanOut`).
 - When a task has a positive timeout, the scheduler derives a context with `context.WithTimeout(runCtx, task.timeout)` and cancels it immediately upon callback completion.
 - If a callback runs past its deadline, `context.DeadlineExceeded` is propagated even if the callback returned nil.
-- Under `OnError: FailInvocation`, a timed-out branch records `inv.Error = "context deadline exceeded"` with `Status: InvocationFailed`, while other branches and the eventual join proceed normally. Under `FailGroup` or `FailExecution`, group-level or terminal execution failure semantics apply.
-- Timeouts and error strings are persisted in SQLite metadata and replayed identically during recovery.
+- Under `OnError: FailInvocation`, a timed-out branch records its error on the
+  activation branch record and sets its invocation to `InvocationFailed`, while
+  other branches and the eventual join proceed normally. Under `FailGroup` or
+  `FailExecution`, group-level or terminal execution failure semantics apply.
+- Branch timeouts and error strings are stored with activation group payloads
+  and replayed identically during recovery.
 
 ## Speculative joins and branch pruning
 
@@ -262,11 +271,12 @@ quiescence and retention; do not reuse IDs while old owners can address them.
 Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
 SQLite pages reusable, without guaranteeing immediate file shrink.
 
-Format 6 rejects format-5 checkpoints and older versions. Existing runs require
+Format 7 rejects format-6 checkpoints and older versions. Existing runs require
 their matching runtime; use a new database for new executions. SQLite schema 2
-and the invocation/group record layout are unchanged. No automatic migration or
-compatibility execution machine is supplied. MachineID remains an application
-controlled definition identity; change it for incompatible graphs.
+remains unchanged, but activation-group payloads have the new branch-record
+shape. No automatic migration or compatibility execution machine is supplied.
+MachineID remains an application controlled definition identity; change it for
+incompatible graphs.
 
 FanOut atomically commits its parent, activation and child invocation IDs before
 children can start. Each child gets an independent Clone, invocation ID and

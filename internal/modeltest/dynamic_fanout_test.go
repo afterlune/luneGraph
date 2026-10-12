@@ -129,10 +129,11 @@ func checkDynamicPosition(cp graph.Checkpoint[dynamicState], tasks, maxDepth int
 	}
 	for _, activation := range cp.Groups {
 		parent, ok := invocations[activation.ParentID]
-		if !ok || parent.ChildGroupID != activation.ID || len(activation.Children) != 2 && activation.Source == "split" || len(activation.Children) != tasks && activation.Source == "lead" {
+		if !ok || parent.ChildGroupID != activation.ID || len(activation.Branches) != 2 && activation.Source == "split" || len(activation.Branches) != tasks && activation.Source == "lead" {
 			return fmt.Errorf("invalid dynamic activation: %+v", activation)
 		}
-		for i, id := range activation.Children {
+		for i, branch := range activation.Branches {
+			id := branch.InvocationID
 			child, ok := invocations[id]
 			if !ok || child.GroupID != activation.ID || child.BranchIndex != i {
 				return fmt.Errorf("invalid child %d of %s", i, activation.ID)

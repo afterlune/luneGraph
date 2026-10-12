@@ -176,13 +176,15 @@ with five serial 300 ms samples, CPU 1. Values are median
 | `58c1681` | Timeout controls | 10,977 / 4,535 / 28 |
 | `f426a3c` | Speculative joins and pruning | 11,150 / 4,535 / 28 |
 
-The base samples ranged from 8,644 to 9,633 ns/op; the FanOut samples ranged
-from 10,148 to 11,915 ns/op. This run first shows the change at `bff31d3`, which
+In the format-6 comparison, the base samples ranged from 8,644 to 9,633 ns/op;
+the FanOut samples ranged from 10,148 to 11,915 ns/op. This run first shows the
+change at `bff31d3`, which
 adds the branch slice to the public `Transition`; `B/op` rises by 16 while the
 allocation count stays fixed. Format 6 adds persisted branch error and target
 metadata to `Invocation`, and timeout controls add its deadline field. The
-current candidate uses 208 more bytes per operation than the base, still with
-28 allocations.
+format-6 candidate used 208 more bytes per operation than the base, still with
+28 allocations. Format 7 later moved this metadata into activation branch
+records; the follow-up measurement below records that change.
 
 Five-second CPU and allocation profiles of the base and candidate show the same
 broad path through `driveLive`, task preparation, state cloning and Memory Store
@@ -190,9 +192,10 @@ commit. The allocation profile includes invocation-slice resizing in both
 versions, with the candidate carrying the larger persisted `Invocation` value;
 the CPU comparison does not identify a single new algorithmic hotspot. The
 measured cost follows the larger transition and checkpoint values needed by
-the added runtime behavior. No runtime representation change is made from these
-profiles alone because reducing the persisted footprint would require a
-separate checkpoint representation design.
+the added runtime behavior. Those profiles alone did not justify a runtime
+representation change because reducing the persisted footprint required a
+separate checkpoint representation design. Format 7 is a separate follow-up
+that measures the activation branch representation.
 
 An internal compact worker-result experiment changed the warm Memory median from
 12,207 to 11,606 ns/op and reduced it by 16 B/op, but the five-sample latency
@@ -201,7 +204,7 @@ from 145,749 to 151,545 ns/op, with one extra allocation and 8 more bytes per
 operation. The experiment showed no repeatable latency gain and was not
 retained.
 
-The current format-6 `BenchmarkDynamicFanOut` run covers zero, one, two, eight,
+The format-6 `BenchmarkDynamicFanOut` run covers zero, one, two, eight,
 32 and 128 repeated-target branches. The table gives CPU-1 default-concurrency
 medians from three 150 ms samples, in `ns/op / B/op / allocs/op`:
 
@@ -352,6 +355,49 @@ earlier same-host candidate batch measured about 26 ms. Treat that latency
 comparison as inconclusive until repeated on an otherwise idle machine; the
 measured allocation count was about 66% lower. These local results are evidence
 for review, not production SLOs.
+
+### Checkpoint format 7 — activation branch records
+
+Format 7 replaces `ActivationGroup.Children []string` with ordered
+`ActivationGroup.Branches []ActivationBranch` records and removes `Target`,
+`Error` and `Timeout` from `Invocation`. `BranchIndex` continues to identify the
+same ordered branch. This keeps branch metadata with its activation and reduces
+the invocation record copied by warm commits.
+
+The comparison used the format-6 `ca645bc` worktree and the format-7 working
+tree on Windows/amd64, Go 1.26.5, AMD Ryzen 7 6800H. Warm advances used five
+serial 300 ms samples at CPU 1. Static, dynamic and durable fan-out used three
+serial 150 ms samples. Values are median `ns/op / B/op / allocs/op`:
+
+| Workload | Format 6 | Format 7 |
+| --- | ---: | ---: |
+| Warm Memory advance, 32 waiters | 11,814 / 4,535 / 28 | 11,346 / 4,375 / 28 |
+| Warm Memory advance, 256 waiters | 16,959 / 4,534 / 28 | 17,406 / 4,374 / 28 |
+| Warm Memory advance, 2,048 waiters | 16,225 / 4,535 / 28 | 16,172 / 4,375 / 28 |
+| Warm SQLite advance, 32 waiters | 2,510,427 / 9,546 / 180 | 3,074,001 / 9,419 / 180 |
+| Warm SQLite advance, 256 waiters | 2,693,762 / 9,548 / 180 | 2,919,530 / 9,418 / 180 |
+| Warm SQLite advance, 2,048 waiters | 2,747,717 / 9,547 / 180 | 2,503,999 / 9,419 / 180 |
+| Static width-32 fan-out/join, CPU 1 | 160,088 / 67,112 / 292 | 163,683 / 57,384 / 292 |
+| Static width-32 fan-out/join, CPU 8 | 191,156 / 71,401 / 299 | 217,225 / 61,692 / 299 |
+| Durable width-32 Memory fan-out/join | 554,839 / 431,348 / 1,726 | 591,113 / 409,521 / 1,726 |
+| Dynamic width-32 FanOut | 141,774 / 66,304 / 257 | 134,808 / 56,576 / 257 |
+| Dynamic width-128 FanOut | 511,979 / 254,056 / 753 | 512,217 / 212,584 / 753 |
+
+Format 7 reduced warm Memory advances by 160 B/op and warm SQLite advances by
+127–130 B/op, with allocation counts unchanged. Static and dynamic fan-out
+allocations also stayed flat; durable Memory FanOut saved about 21 KB/op.
+Across these short same-host runs, format-6 and format-7 latency sample ranges
+overlapped. The warm SQLite medians varied across waiter counts, so the samples
+do not establish a stable latency regression or gain.
+
+Reproduce the comparison with the same commands in both checkouts:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$/storage=(memory|sqlite)/waiters=(32|256|2048)/mode=warm-advance$' -benchmem -benchtime=300ms -count=5 -cpu 1 ./internal/capacitytest
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu 1,8 .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin/storage=memory/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu 1 .
+go test -run '^$' -bench '^BenchmarkDynamicFanOut/width=(32|128)/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu 1 .
+```
 
 ## Repository checks
 

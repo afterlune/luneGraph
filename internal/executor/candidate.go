@@ -7,6 +7,7 @@ type candidateWorkspace[S any] struct {
 	beforeInv, afterInv       []Invocation[S]
 	beforeGroups, afterGroups []ActivationGroup
 	membership                map[string]bool
+	groupsBefore              map[string]ActivationGroup
 }
 
 type candidateMembers struct {
@@ -77,7 +78,8 @@ func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], id strin
 	cp.Groups = append(cp.Groups, g)
 	if children {
 		w.addInvocation(l, cp, g.ParentID, m)
-		for _, child := range g.Children {
+		for _, branch := range g.Branches {
+			child := branch.InvocationID
 			w.addInvocation(l, cp, child, m)
 			descendant, exists := l.invocation(child)
 			if nested := descendant.ChildGroupID; exists && nested != "" {
@@ -97,7 +99,7 @@ func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joi
 	if joinGroupID != "" {
 		// A pending join already knows its local child count. Reserve that
 		// set when it crosses the indexing threshold, not the whole run.
-		members.invocationHint = len(l.groups[joinGroupID].Children) + 1
+		members.invocationHint = len(l.groups[joinGroupID].Branches) + 1
 	}
 	w.addInvocation(l, &cp, id, &members)
 	if v, ok := l.invocation(id); ok && v.GroupID != "" {
@@ -171,6 +173,9 @@ func (w *candidateWorkspace[S]) change(before, after Checkpoint[S]) Change[S] {
 			found := false
 			for _, old := range before.Groups {
 				if next.ID == old.ID {
+					if !sameActivationGroup(next, old) {
+						c.UpsertGroups = append(c.UpsertGroups, next)
+					}
 					found = true
 					break
 				}
@@ -180,24 +185,42 @@ func (w *candidateWorkspace[S]) change(before, after Checkpoint[S]) Change[S] {
 			}
 		}
 	} else {
-		if w.membership == nil {
-			w.membership = make(map[string]bool, len(before.Groups))
+		if w.groupsBefore == nil {
+			w.groupsBefore = make(map[string]ActivationGroup, len(before.Groups))
 		}
-		clear(w.membership)
+		clear(w.groupsBefore)
 		for _, g := range before.Groups {
-			w.membership[g.ID] = true
+			w.groupsBefore[g.ID] = g
 		}
 		for _, g := range after.Groups {
-			if w.membership[g.ID] {
-				delete(w.membership, g.ID)
+			if old, exists := w.groupsBefore[g.ID]; exists {
+				if !sameActivationGroup(g, old) {
+					c.UpsertGroups = append(c.UpsertGroups, g)
+				}
+				delete(w.groupsBefore, g.ID)
 			} else {
 				c.UpsertGroups = append(c.UpsertGroups, g)
 			}
 		}
-		for id := range w.membership {
+		for id := range w.groupsBefore {
 			c.DeleteGroups = append(c.DeleteGroups, id)
 		}
 	}
 	clear(w.membership)
 	return c
+}
+
+func sameActivationGroup(a, b ActivationGroup) bool {
+	if a.ID != b.ID || a.CallID != b.CallID || a.Source != b.Source || a.ParentID != b.ParentID || a.JoinNode != b.JoinNode || len(a.Branches) != len(b.Branches) {
+		return false
+	}
+	if len(a.Branches) == 0 || &a.Branches[0] == &b.Branches[0] {
+		return true
+	}
+	for i := range a.Branches {
+		if a.Branches[i] != b.Branches[i] {
+			return false
+		}
+	}
+	return true
 }

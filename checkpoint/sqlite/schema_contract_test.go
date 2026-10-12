@@ -18,7 +18,7 @@ func TestForeignKeysSurviveConnectionReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "r", MachineID: "m", Revision: 1, Invocations: []graph.Invocation[int]{{ID: "i1", State: 1}}, Groups: []graph.ActivationGroup{{ID: "g3", Children: []string{"i1"}}}}
+	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "r", MachineID: "m", Revision: 1, Invocations: []graph.Invocation[int]{{ID: "i1", State: 1}}, Groups: []graph.ActivationGroup{{ID: "g3", Branches: []graph.ActivationBranch{{InvocationID: "i1"}}}}}
 	if err := s.Create(ctx, cp); err != nil {
 		t.Fatal(err)
 	}

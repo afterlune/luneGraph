@@ -84,11 +84,11 @@ func copyGroups(dst, src []ActivationGroup) []ActivationGroup {
 	old := dst
 	dst = resizeSlice(dst, len(src))
 	for i, activation := range src {
-		var children []string
+		var branches []ActivationBranch
 		if i < len(old) {
-			children = old[i].Children
+			branches = old[i].Branches
 		}
-		activation.Children = copySlice(children, activation.Children)
+		activation.Branches = copySlice(branches, activation.Branches)
 		dst[i] = activation
 	}
 	return dst

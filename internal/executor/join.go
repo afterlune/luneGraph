@@ -34,9 +34,9 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S]) (Change[S], erro
 	var terminalErr error
 	if out.ref.join {
 		g := l.groups[out.ref.id]
-		remove := make(map[string]bool, len(g.Children))
-		for _, child := range g.Children {
-			remove[child] = true
+		remove := make(map[string]bool, len(g.Branches))
+		for _, branch := range g.Branches {
+			remove[branch.InvocationID] = true
 		}
 		removeInvocations(&index, &after, remove)
 		kept := after.Groups[:0]

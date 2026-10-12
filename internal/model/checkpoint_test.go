@@ -12,16 +12,16 @@ func TestCheckpointCopySeparatesStructure(t *testing.T) {
 	original := Checkpoint[int]{
 		Final:       &final,
 		Invocations: []Invocation[int]{{ID: "i1", Next: []string{"a", "b"}}},
-		Groups:      []ActivationGroup{{ID: "g1", Children: []string{"i2", "i3"}}},
+		Groups:      []ActivationGroup{{ID: "g1", Branches: []ActivationBranch{{InvocationID: "i2"}, {InvocationID: "i3"}}}},
 		Failure:     &Failure{InvocationID: "i5", Message: "failure"},
 	}
 
 	copied := Copy(original)
 	copied.Invocations[0].Next[0] = "changed"
-	copied.Groups[0].Children[0] = "changed"
+	copied.Groups[0].Branches[0].InvocationID = "changed"
 	copied.Failure.Message = "changed"
 	*copied.Final = 90
-	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i2" || original.Failure.Message != "failure" || final != 9 {
+	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Branches[0].InvocationID != "i2" || original.Failure.Message != "failure" || final != 9 {
 		t.Fatalf("Copy shared checkpoint structure: original=%+v final=%d", original, final)
 	}
 	if !reflect.DeepEqual(copied.Invocations[0].Next, []string{"changed", "b"}) {
@@ -38,21 +38,21 @@ func TestCheckpointCopyIntoReusesStructure(t *testing.T) {
 			{ID: "i1", State: []int{1}, Next: []string{"a", "b"}},
 			{ID: "i2", State: []int{2}, Next: []string{"c"}},
 		},
-		Groups:  []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Groups:  []ActivationGroup{{ID: "g1", Branches: []ActivationBranch{{InvocationID: "i1"}, {InvocationID: "i2"}}}},
 		Failure: &Failure{InvocationID: "i4", Message: "failed"},
 	}
 	destination := Copy(original)
 	invocationStorage := &destination.Invocations[0]
 	nextStorage := &destination.Invocations[0].Next[0]
 	groupStorage := &destination.Groups[0]
-	childrenStorage := &destination.Groups[0].Children[0]
+	childrenStorage := &destination.Groups[0].Branches[0]
 
 	next := Copy(original)
 	next.RunID = "next-run"
 	next.Revision = 2
 	next.Invocations[0].State = []int{11}
 	next.Invocations[0].Next = []string{"x", "y"}
-	next.Groups[0].Children = []string{"i7", "i8"}
+	next.Groups[0].Branches = []ActivationBranch{{InvocationID: "i7"}, {InvocationID: "i8"}}
 	next.Failure.Message = "next failure"
 	CopyInto(&destination, next)
 
@@ -60,13 +60,13 @@ func TestCheckpointCopyIntoReusesStructure(t *testing.T) {
 		t.Fatalf("CopyInto result = %+v, want %+v", destination, Copy(next))
 	}
 	if &destination.Invocations[0] != invocationStorage || &destination.Invocations[0].Next[0] != nextStorage ||
-		&destination.Groups[0] != groupStorage || &destination.Groups[0].Children[0] != childrenStorage {
+		&destination.Groups[0] != groupStorage || &destination.Groups[0].Branches[0] != childrenStorage {
 		t.Fatal("CopyInto did not reuse destination storage")
 	}
 	destination.Invocations[0].Next[0] = "changed"
-	destination.Groups[0].Children[0] = "changed"
+	destination.Groups[0].Branches[0].InvocationID = "changed"
 	destination.Failure.Message = "changed"
-	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Children[0] != "i1" || original.Failure.Message != "failed" {
+	if original.Invocations[0].Next[0] != "a" || original.Groups[0].Branches[0].InvocationID != "i1" || original.Failure.Message != "failed" {
 		t.Fatalf("CopyInto shared structure with source: %+v", original)
 	}
 	if &destination.Invocations[0].State[0] != &next.Invocations[0].State[0] {
@@ -80,7 +80,7 @@ func TestCheckpointCopyIntoClearsUnusedEntries(t *testing.T) {
 			{ID: "i1", Next: []string{"a", "b"}},
 			{ID: "i2", Next: []string{"c"}},
 		},
-		Groups:  []ActivationGroup{{ID: "g1", Children: []string{"i1", "i2"}}},
+		Groups:  []ActivationGroup{{ID: "g1", Branches: []ActivationBranch{{InvocationID: "i1"}, {InvocationID: "i2"}}}},
 		Failure: &Failure{InvocationID: "i5", Message: "stale"},
 	}
 	destination := Copy(large)

@@ -2,10 +2,10 @@
 
 Implement graph.Store[S] outside the graph core. Create accepts a full checkpoint;
 Load returns a full independent checkpoint with `Invocations` and `Groups`
-sorted by ascending lexicographic ID; `ActivationGroup.Children` retains its
-fan-out target order. `LoadHeader` returns only a copied Header, including an
-independent Failure value, and should avoid loading or decoding invocation and
-group states. Warm `Execution.Advance` uses it to detect stale handles. Commit
+sorted by ascending lexicographic ID; `ActivationGroup.Branches` retains its
+fan-out order and branch metadata. `LoadHeader` returns only a copied Header,
+including an independent Failure value, and should avoid loading or decoding
+invocation and group states. Warm `Execution.Advance` uses it to detect stale handles. Commit
 accepts only changed records. State copies belong to the Store even after the
 caller reuses its submission. `Change.Clone(copyState)` can establish ownership
 before the atomic write.

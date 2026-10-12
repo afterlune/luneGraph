@@ -5,8 +5,8 @@ nodes and allowed edges; each execution owns its evolving state. The core
 handles scheduling, branches, joins, waiting and recovery. Models, tools,
 permissions and agent policy belong to applications.
 
-**Current changes are unreleased.** Checkpoint format 5 and SQLite
-schema 2 break compatibility with previous versions. See [CHANGELOG](CHANGELOG.md),
+**Current changes are unreleased.** Checkpoint format 7 is incompatible with
+earlier checkpoint formats; SQLite schema 2 remains in use. See [CHANGELOG](CHANGELOG.md),
 [execution contract](docs/execution-semantics.md), [Store guide](docs/store-implementation.md)
 Requires Go 1.26.5 or newer.
 
@@ -87,8 +87,8 @@ Nodes, joins and dynamic branches support declarative timeouts via
 When configured, the runtime derives a context with `context.WithTimeout`
 for the callback execution. If a deadline expires, `context.DeadlineExceeded`
 is recorded. Under `OnError: FailInvocation`, the failure is isolated to that
-branch invocation (`inv.Error = "context deadline exceeded"`), allowing sibling
-branches and tolerant joins to proceed. Dynamic branch timeouts override the
+branch and stored on its activation record, allowing sibling branches and
+tolerant joins to proceed. Dynamic branch timeouts override the
 target node's default timeout for the initial step, then clear upon single-target
 routing so subsequent nodes use their own configured timeouts.
 
@@ -196,7 +196,8 @@ LoadHeader returns only revision and scheduling metadata for warm-handle conflic
 checks; it must not materialize invocation states. ErrConflict
 guarantees no write; other Store errors can leave the outcome uncertain. Reload
 before replay. Load returns Invocations and Groups sorted by ascending
-lexicographic ID; ActivationGroup.Children preserves fan-out target order. CAS
+lexicographic ID; ActivationGroup.Branches preserves fan-out order and its
+metadata. CAS
 does not grant exclusive execution ownership. Multi-run cleanup is caller-owned;
 repeated Delete calls do not form an atomic batch.
 
@@ -291,6 +292,19 @@ package. [Performance and graph-level benchmark guide](docs/performance.md) reco
 reproducible measurements and known trade-offs; it does not claim application-level
 production capacity.
 
+## Format-7 migration
+
+Checkpoint branch metadata now lives in the ordered `ActivationGroup.Branches`
+records. Each `ActivationBranch` stores its invocation ID, declared target,
+failure message and timeout. `Invocation.BranchIndex` still identifies the
+invocation's position in that group; `Invocation.Target`, `Invocation.Error`
+and `Invocation.Timeout` have been removed. Update code that constructs or
+inspects checkpoints and custom Stores.
+
+Format 7 rejects format-6 and older checkpoints. Finish active runs with their
+matching runtime and use a new database for new executions. SQLite schema 2
+remains in use; activation-group payloads use the new record shape.
+
 ## Format-6 migration
 
 Merge callbacks now receive `(ctx, call, parentState, branches []BranchResult[S])`.
@@ -341,4 +355,5 @@ Resume inputs now require `CallID`, obtained from the original waiting
 invocation in `Pending()` or a checkpoint. Update every input producer, including
 persisted application input records. Inputs without a matching CallID are
 rejected with `ErrInvalidResumeInput`; there is no optional legacy mode.
-Checkpoint format 5 and SQLite schema 2 are in use; format-4 checkpoints are rejected.
+Format 5 rejected format-4 checkpoints. The current checkpoint format and
+migration boundary are described above.
