@@ -26,15 +26,18 @@ func main() {
 
 func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err error) {
 	if len(args) == 0 || (args[0] != "start" && args[0] != "resume" && args[0] != "continue") {
-		return errors.New("usage: team {start|resume|continue} -db runs.db -run demo [-tasks 2] [-max-invocations N] [-invocation iN -call cN -approved=true]")
+		return errors.New("usage: team {start|resume|continue} -db runs.db -run demo [-provider offline|deepseek] [-tasks 2] [-max-invocations N] [-invocation iN -call cN -approved=true]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("team "+command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	dbPath := flags.String("db", "runs.db", "SQLite checkpoint path (parent directory must exist)")
 	runID := flags.String("run", "team-demo", "execution ID")
-	taskCount := flags.Int("tasks", 2, "number of tasks requested from the offline Lead (start only, 0-16)")
+	provider := flags.String("provider", "offline", "model provider: offline or deepseek")
+	taskCount := flags.Int("tasks", 2, "number of tasks requested from the Lead (start only, 0-16)")
 	maxInvocations := flags.Int("max-invocations", 0, "maximum invocation records in the execution (0 = unlimited)")
+	requestTimeout := flags.Duration("request-timeout", deepSeekDefaultTimeout, "DeepSeek HTTP request timeout")
+	maxTokens := flags.Int("max-tokens", deepSeekDefaultMaxTokens, "DeepSeek maximum output tokens per call")
 	invocationID := flags.String("invocation", "", "original waiting invocation ID (resume)")
 	callID := flags.String("call", "", "original waiting CallID (resume)")
 	approved := flags.Bool("approved", true, "approval decision (resume)")
@@ -50,13 +53,44 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	if *maxInvocations < 0 {
 		return errors.New("-max-invocations must not be negative")
 	}
+	if *requestTimeout <= 0 {
+		return errors.New("-request-timeout must be positive")
+	}
+	if *maxTokens <= 0 {
+		return errors.New("-max-tokens must be positive")
+	}
 	if command == "resume" && (*invocationID == "" || *callID == "") {
 		return errors.New("resume requires the original -invocation and -call values")
 	}
 	if command != "resume" && (*invocationID != "" || *callID != "") {
 		return errors.New("-invocation and -call are only accepted by resume")
 	}
-	runner, err := newTeamRunner(offlineModelRegistry())
+	var models ModelRegistry
+	var machineID, startModelID string
+	switch *provider {
+	case "offline":
+		models = offlineModelRegistry()
+		machineID = "team-model-adapters-v2"
+		startModelID = modelLead
+	case "deepseek":
+		apiKey := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY"))
+		if apiKey == "" {
+			return errors.New("DEEPSEEK_API_KEY is required when -provider=deepseek")
+		}
+		models, err = deepSeekModelRegistry(apiKey, deepSeekConfig{
+			requestTimeout: *requestTimeout,
+			maxTokens:      *maxTokens,
+			usageWriter:    diagnostics,
+		})
+		if err != nil {
+			return err
+		}
+		machineID = "team-deepseek-flash-v1"
+		startModelID = modelDeepSeekFlash
+	default:
+		return fmt.Errorf("unknown provider %q; expected offline or deepseek", *provider)
+	}
+	runner, err := newTeamRunnerWithID(models, machineID)
 	if err != nil {
 		return err
 	}
@@ -72,7 +106,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 		execution, result, err = runner.Start(ctx, *runID, teamState{
 			Goal:           "Research a question and produce a concise plan.",
 			RequestedTasks: *taskCount,
-			ModelID:        modelLead,
+			ModelID:        startModelID,
 			MaxDepth:       1,
 		}, store, options)
 	} else if command == "resume" {

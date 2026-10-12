@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add an opt-in DeepSeek Flash provider to the Team example using Chat Completions
+  and JSON Output. Offline remains the default; `-provider deepseek` selects the
+  provider, with configurable request timeout and output-token limit. The API key
+  is read from `DEEPSEEK_API_KEY` and is never checkpointed. Per-call token usage
+  is written to diagnostics without prompts or model output. DeepSeek runs use
+  MachineID `team-deepseek-flash-v1`; automated tests use a local HTTP server and
+  do not require network access.
 - Add the optional `Options.MaxInvocations` limit for invocation records retained
   by one execution. It applies atomically to static multi-target routing and
   dynamic FanOut; a transition that exceeds the limit is left uncommitted and

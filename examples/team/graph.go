@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	modelLead   = "local/lead-model"
-	modelSearch = "local/search-model"
-	modelPlan   = "local/planning-model"
-	maxTasks    = 16
+	modelLead          = "local/lead-model"
+	modelSearch        = "local/search-model"
+	modelPlan          = "local/planning-model"
+	modelDeepSeekFlash = "deepseek/deepseek-flash"
+	maxTasks           = 16
 
 	roleLead    = "lead"
 	roleSearch  = "search"
@@ -25,23 +26,23 @@ const (
 // TaskAssignment is the provider-neutral task shape returned by a Lead or a
 // Planner adapter. Target selects a graph node; ModelID selects its adapter.
 type TaskAssignment struct {
-	Target      string
-	ID          string
-	ModelID     string
-	Instruction string
+	Target      string `json:"target"`
+	ID          string `json:"id"`
+	ModelID     string `json:"model_id"`
+	Instruction string `json:"instruction"`
 }
 
 // ModelRequest contains only serializable application data. Adapter instances
 // are injected into the runner and are never stored in checkpoints.
 type ModelRequest struct {
-	Role           string
-	Goal           string
-	TaskID         string
-	Instruction    string
-	Depth          int
-	MaxDepth       int
-	RequestedTasks int
-	Results        []string
+	Role           string   `json:"role"`
+	Goal           string   `json:"goal"`
+	TaskID         string   `json:"task_id"`
+	Instruction    string   `json:"instruction"`
+	Depth          int      `json:"depth"`
+	MaxDepth       int      `json:"max_depth"`
+	RequestedTasks int      `json:"requested_tasks"`
+	Results        []string `json:"results"`
 }
 
 // ModelResponse is normalized by each provider adapter. Assignments are used
@@ -82,6 +83,13 @@ func cloneTeamState(s teamState) (teamState, error) {
 }
 
 func newTeamRunner(models ModelRegistry) (*graph.Runner[teamState], error) {
+	return newTeamRunnerWithID(models, "team-model-adapters-v2")
+}
+
+func newTeamRunnerWithID(models ModelRegistry, machineID string) (*graph.Runner[teamState], error) {
+	if strings.TrimSpace(machineID) == "" {
+		return nil, errors.New("team MachineID must not be empty")
+	}
 	registry, err := copyModelRegistry(models)
 	if err != nil {
 		return nil, err
@@ -90,7 +98,7 @@ func newTeamRunner(models ModelRegistry) (*graph.Runner[teamState], error) {
 	if err := addTeamDefinition(g, registry); err != nil {
 		return nil, err
 	}
-	return g.Compile(graph.Config[teamState]{MachineID: "team-model-adapters-v2", Clone: cloneTeamState})
+	return g.Compile(graph.Config[teamState]{MachineID: machineID, Clone: cloneTeamState})
 }
 
 func copyModelRegistry(models ModelRegistry) (ModelRegistry, error) {

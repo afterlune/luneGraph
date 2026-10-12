@@ -283,13 +283,34 @@ are deterministic and independent of node names, and labels are escaped.
 - [Offline Team](examples/team): an injected `ModelAdapter` registry lets the
   Lead assign tasks to different model IDs; a Planner can recursively delegate,
   Workers aggregate partial results, and approval resumes after SQLite recovery.
-  The default adapters are deterministic and make no external LLM calls.
+  The default adapters are deterministic and make no external LLM calls. An
+  optional DeepSeek Flash provider uses Chat Completions with JSON Output.
 
 ```sh
 go run ./examples/team start -db runs.db -run demo -tasks 2 -max-invocations 1
 go run ./examples/team continue -db runs.db -run demo -max-invocations 8
 go run ./examples/team resume -db runs.db -run demo -invocation iN -call cN -approved=true
 ```
+
+DeepSeek is opt-in. Set `DEEPSEEK_API_KEY` in the environment, then pass
+`-provider deepseek` to every `start`, `continue`, and `resume` command for that
+run. DeepSeek Flash handles the Lead and all worker roles; role-specific prompts
+and persisted model IDs keep the assignments explicit. The request timeout
+defaults to `120s` and the maximum output is `4096` tokens per model call; both
+can be changed with `-request-timeout` and `-max-tokens`.
+
+```powershell
+$env:DEEPSEEK_API_KEY = "your-api-key"
+go run ./examples/team start -provider deepseek -db runs.db -run live-demo -tasks 2
+go run ./examples/team resume -provider deepseek -db runs.db -run live-demo -invocation iN -call cN -approved=true
+```
+
+Each decoded provider response writes a JSON usage record to stderr with the
+provider, model, role, RunID, CallID, and prompt/completion/total token counts.
+It does not include prompts, model output, or the API key. Calls are at-least-once,
+so replay may produce another usage record with the same CallID. CI and automated
+tests use a local HTTP test server; a live smoke test is manual and requires a
+valid key. A missing key is rejected before opening the checkpoint database.
 
 `continue` recovers a run without submitting input, which lets a caller raise an
 invocation limit after `StatusBudget`. `resume` remains the input path and
@@ -310,6 +331,10 @@ shape changed. Resume old example runs with the previous source version or use a
 new run ID; the example does not migrate old state. Use the invocation and
 CallID printed by `start`; do not replace them with the current waiting identity
 after an uncertain resume result.
+
+DeepSeek executions use MachineID `team-deepseek-flash-v1`; resume them with
+`-provider deepseek` and the same model semantics. The offline default has a
+different MachineID and intentionally cannot recover a DeepSeek checkpoint.
 
 ```sh
 gofmt -w .
