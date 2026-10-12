@@ -33,7 +33,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	flags.SetOutput(diagnostics)
 	dbPath := flags.String("db", "runs.db", "SQLite checkpoint path (parent directory must exist)")
 	runID := flags.String("run", "team-demo", "execution ID")
-	taskCount := flags.Int("tasks", 2, "number of tasks the Lead assigns (start only, 0-16)")
+	taskCount := flags.Int("tasks", 2, "number of tasks requested from the offline Lead (start only, 0-16)")
 	invocationID := flags.String("invocation", "", "original waiting invocation ID (resume)")
 	callID := flags.String("call", "", "original waiting CallID (resume)")
 	approved := flags.Bool("approved", true, "approval decision (resume)")
@@ -49,7 +49,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	if command == "resume" && (*invocationID == "" || *callID == "") {
 		return errors.New("resume requires the original -invocation and -call values")
 	}
-	runner, err := newTeamRunner()
+	runner, err := newTeamRunner(offlineModelRegistry())
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,12 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	var execution *graph.Execution[teamState]
 	var result graph.Result[teamState]
 	if command == "start" {
-		execution, result, err = runner.Start(ctx, *runID, teamState{Plan: makePlan(*taskCount, 1), MaxDepth: 1}, store, graph.Options{})
+		execution, result, err = runner.Start(ctx, *runID, teamState{
+			Goal:           "Research a question and produce a concise plan.",
+			RequestedTasks: *taskCount,
+			ModelID:        modelLead,
+			MaxDepth:       1,
+		}, store, graph.Options{})
 	} else {
 		payload := "false"
 		if *approved {

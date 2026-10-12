@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Update the offline Team example to inject synchronous provider-neutral model
+  adapters. The Lead now returns structured assignments, Workers select
+  adapters by persisted model ID, and Planner adapters can recursively delegate
+  within a depth limit. The example remains deterministic and offline by default;
+  its MachineID changes to `team-model-adapters-v2`, so old example runs require
+  the prior source version or a new RunID.
+
 - Move durable branch metadata from `Invocation` into ordered
   `ActivationGroup.Branches []ActivationBranch` records. Branch records now own
   the invocation ID, declared target, local error message and timeout; the

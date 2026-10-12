@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	graph "github.com/afterlune/luneGraph"
@@ -127,27 +130,178 @@ func TestTeamMainStartsDurableRun(t *testing.T) {
 	}
 }
 
-func TestOfflineTeamRejectsIncompatibleModelAssignments(t *testing.T) {
-	for _, assignment := range []task{
-		{Target: "search", ID: "wrong-search", Model: modelPlan},
-		{Target: "planner", ID: "wrong-planner", Model: modelSearch},
+func TestTeamUsesInjectedModelsAndStableCallInfo(t *testing.T) {
+	type modelCall struct {
+		call graph.CallInfo
+		req  ModelRequest
+	}
+	var mu sync.Mutex
+	calls := make(map[string][]modelCall)
+	record := func(modelID string, call graph.CallInfo, request ModelRequest) {
+		mu.Lock()
+		calls[modelID] = append(calls[modelID], modelCall{call: call, req: request})
+		mu.Unlock()
+	}
+	models := ModelRegistry{
+		"test/lead": modelAdapterFunc(func(_ context.Context, call graph.CallInfo, request ModelRequest) (ModelResponse, error) {
+			record("test/lead", call, request)
+			return ModelResponse{Assignments: []TaskAssignment{
+				{Target: roleSearch, ID: "research", ModelID: "test/search", Instruction: "find evidence"},
+				{Target: rolePlanner, ID: "plan", ModelID: "test/planner", Instruction: "summarize"},
+			}}, nil
+		}),
+		"test/search": modelAdapterFunc(func(_ context.Context, call graph.CallInfo, request ModelRequest) (ModelResponse, error) {
+			record("test/search", call, request)
+			return ModelResponse{Text: "injected research"}, nil
+		}),
+		"test/planner": modelAdapterFunc(func(_ context.Context, call graph.CallInfo, request ModelRequest) (ModelResponse, error) {
+			record("test/planner", call, request)
+			return ModelResponse{Text: "injected plan"}, nil
+		}),
+	}
+	runner, err := newTeamRunner(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Runner construction snapshots registry selection; later caller map edits
+	// cannot redirect a persisted model ID to a different adapter.
+	models["test/search"] = modelAdapterFunc(func(context.Context, graph.CallInfo, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{Text: "wrong adapter"}, nil
+	})
+	execution, waiting, err := runner.Start(context.Background(), "injected-models", teamState{
+		Goal: "answer the question", RequestedTasks: 2, ModelID: "test/lead", MaxDepth: 0,
+	}, nil, graph.Options{MaxConcurrency: 4})
+	if err != nil || waiting.Status != graph.StatusWaiting {
+		t.Fatalf("start = %+v, %v", waiting, err)
+	}
+	pending := execution.Pending()
+	if len(pending) != 1 || pending[0].Continuation != "approval" || pending[0].CallID == "" {
+		t.Fatalf("pending approval = %+v", pending)
+	}
+	completed, err := execution.Advance(context.Background(), []graph.ResumeInput{{
+		InvocationID: pending[0].InvocationID,
+		CallID:       pending[0].CallID,
+		Payload:      []byte("true"),
+	}}, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompleted || completed.Final == nil {
+		t.Fatalf("advance = %+v, %v", completed, err)
+	}
+	if got, want := completed.Final.Results, []string{"injected research", "injected plan"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("results = %v, want %v", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls["test/lead"]) != 1 || len(calls["test/search"]) != 1 || len(calls["test/planner"]) != 1 {
+		t.Fatalf("adapter calls = %+v", calls)
+	}
+	for modelID, invocations := range calls {
+		for _, observed := range invocations {
+			if observed.call.RunID != "injected-models" || observed.call.CallID == "" || observed.call.InvocationID == "" {
+				t.Fatalf("%s received incomplete CallInfo: %+v", modelID, observed.call)
+			}
+		}
+	}
+	if calls["test/lead"][0].req.Role != roleLead || calls["test/search"][0].req.Role != roleSearch || calls["test/planner"][0].req.Role != rolePlanner {
+		t.Fatalf("adapter roles = %+v", calls)
+	}
+}
+
+func TestTeamValidatesAssignmentsAndRegistry(t *testing.T) {
+	models := offlineModelRegistry()
+	for _, test := range []struct {
+		name        string
+		assignments []TaskAssignment
+	}{
+		{name: "unknown target", assignments: []TaskAssignment{{Target: "unknown", ID: "task", ModelID: modelSearch}}},
+		{name: "unknown model", assignments: []TaskAssignment{{Target: roleSearch, ID: "task", ModelID: "missing"}}},
+		{name: "empty ID", assignments: []TaskAssignment{{Target: roleSearch, ModelID: modelSearch}}},
+		{name: "duplicate IDs", assignments: []TaskAssignment{{Target: roleSearch, ID: "same", ModelID: modelSearch}, {Target: rolePlanner, ID: "same", ModelID: modelPlan}}},
+		{name: "too many", assignments: makeAssignments(maxTasks + 1)},
 	} {
-		t.Run(assignment.Target, func(t *testing.T) {
-			plan := teamState{Plan: []task{assignment}, MaxDepth: 1}
-			runner, err := newTeamRunner()
-			if err != nil {
-				t.Fatal(err)
-			}
-			execution, waiting, err := runner.Start(context.Background(), "bad-model-"+assignment.Target, plan, nil, graph.Options{MaxConcurrency: 1})
-			if err != nil || waiting.Status != graph.StatusWaiting || !waiting.Header.HadLocalFailures {
-				t.Fatalf("invalid model assignment = %+v, %v", waiting, err)
-			}
-			pending := execution.Pending()[0]
-			completed, err := execution.Advance(context.Background(), []graph.ResumeInput{{InvocationID: pending.InvocationID, CallID: pending.CallID, Payload: []byte("true")}}, graph.Options{})
-			if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil || len(completed.Final.Results) != 0 || len(completed.Final.Failures) != 1 {
-				t.Fatalf("invalid model result = %+v, %v", completed, err)
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateAssignments(test.assignments, models); err == nil {
+				t.Fatal("invalid assignments were accepted")
 			}
 		})
+	}
+	if _, err := copyModelRegistry(nil); err == nil {
+		t.Fatal("empty model registry was accepted")
+	}
+	if _, err := copyModelRegistry(ModelRegistry{"broken": nil}); err == nil {
+		t.Fatal("nil model adapter was accepted")
+	}
+}
+
+func TestTeamRejectsNegativeDepthBudget(t *testing.T) {
+	runner, err := newTeamRunner(offlineModelRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, result, err := runner.Start(context.Background(), "negative-depth", teamState{
+		Goal: "goal", ModelID: modelLead, MaxDepth: -1,
+	}, nil, graph.Options{})
+	if err != nil || result.Status != graph.StatusCompletedWithFailures || !result.Header.HadLocalFailures {
+		t.Fatalf("negative depth budget = %+v, %v", result, err)
+	}
+}
+
+func makeAssignments(count int) []TaskAssignment {
+	assignments := make([]TaskAssignment, count)
+	for i := range assignments {
+		assignments[i] = TaskAssignment{Target: roleSearch, ID: "task-" + strconv.Itoa(i), ModelID: modelSearch}
+	}
+	return assignments
+}
+
+func TestTeamAdapterFailureIsAggregatedAsBranchFailure(t *testing.T) {
+	models := offlineModelRegistry()
+	models[modelLead] = modelAdapterFunc(func(context.Context, graph.CallInfo, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{Assignments: []TaskAssignment{
+			{Target: roleSearch, ID: "search-fails", ModelID: "test/failing"},
+			{Target: rolePlanner, ID: "plan-succeeds", ModelID: modelPlan},
+		}}, nil
+	})
+	models["test/failing"] = modelAdapterFunc(func(context.Context, graph.CallInfo, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{}, errors.New("provider unavailable")
+	})
+	runner, err := newTeamRunner(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, waiting, err := runner.Start(context.Background(), "adapter-failure", teamState{Goal: "goal", ModelID: modelLead, MaxDepth: 0}, nil, graph.Options{MaxConcurrency: 2})
+	if err != nil || waiting.Status != graph.StatusWaiting || !waiting.Header.HadLocalFailures {
+		t.Fatalf("start with failed adapter = %+v, %v", waiting, err)
+	}
+	pending := execution.Pending()[0]
+	completed, err := execution.Advance(context.Background(), []graph.ResumeInput{{InvocationID: pending.InvocationID, CallID: pending.CallID, Payload: []byte("true")}}, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil {
+		t.Fatalf("completed adapter failure run = %+v, %v", completed, err)
+	}
+	if strings.Join(completed.Final.Results, ",") != "plan-succeeds via local/planning-model" || len(completed.Final.Failures) != 1 || !strings.Contains(completed.Final.Failures[0], "provider unavailable") {
+		t.Fatalf("partial aggregation = %+v", completed.Final)
+	}
+}
+
+func TestPlannerCannotDelegateBeyondConfiguredDepth(t *testing.T) {
+	models := offlineModelRegistry()
+	models[modelLead] = modelAdapterFunc(func(context.Context, graph.CallInfo, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{Assignments: []TaskAssignment{{Target: rolePlanner, ID: "plan", ModelID: modelPlan}}}, nil
+	})
+	models[modelPlan] = modelAdapterFunc(func(context.Context, graph.CallInfo, ModelRequest) (ModelResponse, error) {
+		return ModelResponse{Assignments: []TaskAssignment{{Target: roleSearch, ID: "too-deep", ModelID: modelSearch}}}, nil
+	})
+	runner, err := newTeamRunner(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, waiting, err := runner.Start(context.Background(), "max-depth", teamState{Goal: "goal", ModelID: modelLead, MaxDepth: 0}, nil, graph.Options{MaxConcurrency: 1})
+	if err != nil || waiting.Status != graph.StatusWaiting || !waiting.Header.HadLocalFailures {
+		t.Fatalf("start beyond max depth = %+v, %v", waiting, err)
+	}
+	pending := execution.Pending()[0]
+	completed, err := execution.Advance(context.Background(), []graph.ResumeInput{{InvocationID: pending.InvocationID, CallID: pending.CallID, Payload: []byte("true")}}, graph.Options{})
+	if err != nil || completed.Status != graph.StatusCompletedWithFailures || completed.Final == nil || len(completed.Final.Results) != 0 || len(completed.Final.Failures) != 1 || !strings.Contains(completed.Final.Failures[0], "maximum depth") {
+		t.Fatalf("max-depth result = %+v, %v", completed, err)
 	}
 }
 
@@ -160,7 +314,7 @@ func TestAddTeamDefinitionRejectsDuplicateRegistrations(t *testing.T) {
 			}}); err != nil {
 				t.Fatal(err)
 			}
-			if err := addTeamDefinition(g); err == nil {
+			if err := addTeamDefinition(g, offlineModelRegistry()); err == nil {
 				t.Fatal("duplicate node accepted")
 			}
 		})
@@ -171,7 +325,7 @@ func TestAddTeamDefinitionRejectsDuplicateRegistrations(t *testing.T) {
 			if err := g.AddJoin(graph.JoinSpec[teamState]{Name: name, From: "lead", Merge: mergeTeamResults}); err != nil {
 				t.Fatal(err)
 			}
-			if err := addTeamDefinition(g); err == nil {
+			if err := addTeamDefinition(g, offlineModelRegistry()); err == nil {
 				t.Fatal("duplicate join accepted")
 			}
 		})
@@ -181,7 +335,7 @@ func TestAddTeamDefinitionRejectsDuplicateRegistrations(t *testing.T) {
 		if err := graph.RegisterJSONContinuation(g, "approval", func(context.Context, graph.CallInfo, teamState, bool) (teamState, error) { return teamState{}, nil }); err != nil {
 			t.Fatal(err)
 		}
-		if err := addTeamDefinition(g); err == nil {
+		if err := addTeamDefinition(g, offlineModelRegistry()); err == nil {
 			t.Fatal("duplicate continuation accepted")
 		}
 	})

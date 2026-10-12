@@ -265,17 +265,31 @@ are deterministic and independent of node names, and labels are escaped.
 
 - [Durable CLI](examples/durable): waiting and typed continuation across processes.
 - [Effect receipts](examples/effects): effects, uncertain outcomes and replay.
-- [Offline Team](examples/team): a deterministic Lead assigns dynamic tasks to
-  typed Workers, one Worker recursively dispatches tasks, and approval resumes
-  after SQLite recovery without an external LLM service.
+- [Offline Team](examples/team): an injected `ModelAdapter` registry lets the
+  Lead assign tasks to different model IDs; a Planner can recursively delegate,
+  Workers aggregate partial results, and approval resumes after SQLite recovery.
+  The default adapters are deterministic and make no external LLM calls.
 
 ```sh
 go run ./examples/team start -db runs.db -run demo -tasks 2
 go run ./examples/team resume -db runs.db -run demo -invocation iN -call cN -approved=true
 ```
 
-Use the invocation and CallID printed by `start`; do not replace them with the
-current waiting identity after an uncertain resume result.
+The example's provider-neutral `ModelAdapter` contract is in
+`examples/team/graph.go`. Replace the offline registry with adapters that
+normalize provider responses into text or structured task assignments. Model
+IDs are stored in execution state; adapter instances are injected when building
+the Runner and never enter checkpoints. Adapter calls receive `CallInfo` and
+are synchronous, concurrent, and at-least-once, so real integrations must honor
+context cancellation and reconcile effects with `RunID` and `CallID`.
+Keep model IDs and their request/response meaning stable while runs are active;
+change the example MachineID when adapter semantics become incompatible.
+
+The example uses MachineID `team-model-adapters-v2` because its stored state
+shape changed. Resume old example runs with the previous source version or use a
+new run ID; the example does not migrate old state. Use the invocation and
+CallID printed by `start`; do not replace them with the current waiting identity
+after an uncertain resume result.
 
 ```sh
 gofmt -w .
