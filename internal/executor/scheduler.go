@@ -413,7 +413,7 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		t.spec = r.nodes[v.Node]
 		if v.GroupID != "" {
 			if activation, ok := l.groups[v.GroupID]; ok && v.BranchIndex >= 0 && v.BranchIndex < len(activation.Branches) {
-				t.timeout = activation.Branches[v.BranchIndex].Timeout
+				t.timeout = activation.Branches[v.BranchIndex].EntryTimeout
 			}
 		}
 		if t.timeout <= 0 {

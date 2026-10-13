@@ -20,6 +20,20 @@
 
 ### API and execution changes
 
+- Seal Transition fields and require construction through control-flow helpers.
+  Wait now requires its first target; continuation Apply remains state-only.
+- Rename Branch.Timeout and ActivationBranch.Timeout to EntryTimeout. It covers
+  each attempt of the entry callback only and clears atomically on every accepted
+  successful entry transition, including waiting and nested fan-out.
+- Advance rejects all terminal handles consistently, with or without a Store.
+  Recover validates loaded positions before returning a handle, including when
+  cancellation occurs after Load. Pending zero-child activations are valid recovery
+  and clone-only fork positions.
+- Preserve nested FailGroup causes on the parent's outer activation branch,
+  including recovery and rejected-commit replay. Invocation budgets now count the
+  entire retained live execution, rather than only the touched candidate records.
+- Document concurrent Store calls and persisted error/stack metadata. SQLite's
+  state codec does not encode or encrypt metadata.
 - `Merge` receives the cloned parent state and ordered `[]BranchResult[S]`,
   including successful, ended, failed, and pending branch outcomes.
 - `Start`, `Resume`, and `Recover` return a live execution handle, per-call
@@ -41,11 +55,11 @@
 
 ### Compatibility
 
-- Checkpoint format 7 rejects format 6 and earlier. There is no automatic
+- Checkpoint format 8 rejects format 7 and earlier. There is no automatic
   checkpoint migration or compatibility runner. Finish active runs with their
   matching runtime and use a new database for new executions.
 - SQLite remains at schema 2. The minimum supported Go version is 1.26.5.
 - This source tree contains unreleased API and execution changes. See the
-  [README migration notes](README.md#format-7-migration) before upgrading from
+  [README migration notes](README.md#format-8-migration) before upgrading from
   an earlier checkout. See the [performance guide](docs/performance.md) for
   benchmark methodology and measured trade-offs.

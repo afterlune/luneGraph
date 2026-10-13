@@ -71,8 +71,16 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 		after.Steps++
 		if out.err != nil {
 			terminalErr = r.recordFailure(&after, &index, id, node, scope, out.err)
-		} else if _, err := r.applyTransition(&after, &index, id, out.transition, maxInvocations); err != nil {
-			return Change[S]{}, nil, err
+		} else {
+			if _, err := r.applyTransition(&after, &index, id, out.transition, invocationBudget{retained: l.invocationCount(), maximum: maxInvocations}); err != nil {
+				return Change[S]{}, nil, err
+			}
+			if !after.Completed {
+				_, inv := indexedInvocation(&index, &after, id)
+				if err := clearEntryTimeout(&after, inv); err != nil {
+					return Change[S]{}, nil, err
+				}
+			}
 		}
 	}
 	if terminalErr != nil && after.Failure == nil {

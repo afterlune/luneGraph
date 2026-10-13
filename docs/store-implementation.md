@@ -1,6 +1,8 @@
 # Implementing a Store
 
-Implement graph.Store[S] outside the graph core. Create accepts a full checkpoint;
+Implement graph.Store[S] outside the graph core. All methods must be safe for
+concurrent calls from multiple executions and runners, including competing callers
+on one RunID. Create accepts a full checkpoint;
 Load returns a full independent checkpoint with `Invocations` and `Groups`
 sorted by ascending lexicographic ID; `ActivationGroup.Branches` retains its
 fan-out order and branch metadata. `LoadHeader` returns only a copied Header,
@@ -40,8 +42,11 @@ implement TTL, effects cleanup, or atomic multi-run deletion.
 
 SQLite uses StateCodec[S]. Append must append to and not retain caller buffers;
 Unmarshal must return an independent state. Preserve all application-required
-fields. Scheduling metadata and CallIDs are handled by SQLite. Codec panics are
-Store panics and are not recovered as callback PanicError.
+fields. Scheduling metadata and CallIDs are handled by SQLite. Branch error messages,
+terminal failure messages and panic stacks are persisted metadata. SQLite encodes
+these as plain JSON outside StateCodec; an encrypted state codec does not encrypt
+metadata. Application errors must have text suitable for persistence. Codec
+panics are Store panics and are not recovered as callback PanicError.
 
 ## Verification
 

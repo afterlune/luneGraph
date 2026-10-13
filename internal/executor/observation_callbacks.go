@@ -14,7 +14,7 @@ func callbackEvent(operation model.EventOperation, revision uint64, call CallInf
 func (r *Runner[S]) observedNode(ctx context.Context, obs *observation.Session, revision uint64, call CallInfo, spec NodeSpec[S], state S) (Transition[S], error) {
 	span := obs.Begin(ctx, callbackEvent(model.OperationNode, revision, call, spec.Name, ""))
 	out, err := r.runNode(ctx, call, spec, state)
-	span.End(ctx, model.Event{Revision: revision, Action: out.Action, Err: err})
+	span.End(ctx, model.Event{Revision: revision, Action: model.ReadTransition(out).Action, Err: err})
 	return out, err
 }
 

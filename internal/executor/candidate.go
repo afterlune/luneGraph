@@ -104,6 +104,14 @@ func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joi
 	w.addInvocation(l, &cp, id, &members)
 	if v, ok := l.invocation(id); ok && v.GroupID != "" {
 		w.addGroup(l, &cp, v.GroupID, subtree, &members)
+		if subtree {
+			// FailGroup marks this activation's parent failed. Include its outer
+			// branch metadata without collecting unrelated outer descendants.
+			g := l.groups[v.GroupID]
+			if parent, exists := l.invocation(g.ParentID); exists && parent.GroupID != "" {
+				w.addGroup(l, &cp, parent.GroupID, false, &members)
+			}
+		}
 	}
 	if joinGroupID != "" {
 		w.addGroup(l, &cp, joinGroupID, true, &members)

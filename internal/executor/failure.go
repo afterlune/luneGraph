@@ -26,17 +26,19 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 	}
 	s.HadLocalFailures = true
 	if scope == FailGroup && inv.GroupID != "" {
-		return r.failGroup(s, index, inv.GroupID)
+		return r.failGroup(s, index, inv.GroupID, cause.Error())
 	}
-	if inv.GroupID != "" {
-		_, activation := group(s, inv.GroupID)
-		if activation == nil || inv.BranchIndex < 0 || inv.BranchIndex >= len(activation.Branches) || activation.Branches[inv.BranchIndex].InvocationID != inv.ID {
-			return fmt.Errorf("invocation %q has invalid group membership", inv.ID)
-		}
-		if activation.Branches[inv.BranchIndex].Error != cause.Error() {
-			activation.Branches = slices.Clone(activation.Branches)
-			activation.Branches[inv.BranchIndex].Error = cause.Error()
-		}
+	return markInvocationFailed(s, inv, cause.Error())
+}
+
+func markInvocationFailed[S any](s *Checkpoint[S], inv *Invocation[S], message string) error {
+	branch, activation, err := activationBranch(s, inv)
+	if err != nil {
+		return err
+	}
+	if branch != nil && branch.Error != message {
+		activation.Branches = slices.Clone(activation.Branches)
+		activation.Branches[inv.BranchIndex].Error = message
 	}
 	inv.Status = InvocationFailed
 	inv.CallID = ""
@@ -45,7 +47,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 	return nil
 }
 
-func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id string) error {
+func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id, message string) error {
 	_, activation := group(s, id)
 	if activation == nil {
 		return fmt.Errorf("missing failed group %q", id)
@@ -84,9 +86,7 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id strin
 		return fmt.Errorf("failed group %q lost parent", id)
 	}
 	parent.ChildGroupID = ""
-	parent.Status = InvocationFailed
-	parent.CallID = ""
-	return nil
+	return markInvocationFailed(s, parent, message)
 }
 
 func recoveredFailure[S any](s Checkpoint[S]) error {

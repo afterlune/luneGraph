@@ -35,6 +35,7 @@ func (e *Execution[S]) Checkpoint() (Checkpoint[S], error) {
 // Advance applies continuation inputs and continues this live execution. When
 // backed by a Store, it checks the persisted header revision before callbacks.
 // Its observer operation is OperationAdvance; Runner.Resume reports OperationResume.
+// All terminal handles return ErrRunCompleted, with or without a Store or inputs.
 func (e *Execution[S]) Advance(ctx context.Context, inputs []ResumeInput, opts Options) (result Result[S], retErr error) {
 	if ctx == nil {
 		return Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
@@ -72,6 +73,9 @@ func (e *Execution[S]) Advance(ctx context.Context, inputs []ResumeInput, opts O
 		if header.Completed {
 			return r.resultFromLiveOrEmpty(e.live, StatusFailed, ErrRunCompleted)
 		}
+	}
+	if e.live.header.Completed {
+		return r.resultFromLiveOrEmpty(e.live, StatusFailed, ErrRunCompleted)
 	}
 	return r.advanceLive(ctx, e.live, inputs, opts, activeStore, obs)
 }

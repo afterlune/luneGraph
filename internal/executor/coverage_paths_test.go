@@ -252,35 +252,9 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 			t.Fatalf("expected failure without join: %+v, %v", noJoinRes, err)
 		}
 
-		routingRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
-			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
-				tr := model.FanOut(value, Branch[int]{Target: "a", State: 10})
-				tr.Targets = []string{"a"}
-				return tr, nil
-			}, FailInvocation),
-			executorTestNode("a", executorTestEnd, FailInvocation),
-		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)
-		_, routingRes, err := routingRunner.Start(context.Background(), "routing-err", 0, nil, Options{})
-		if err == nil || routingRes.Status != StatusFailed {
-			t.Fatalf("expected failure with FanOut targets: %+v, %v", routingRes, err)
-		}
-
-		completeRoutingRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
-			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
-				tr := model.CompleteBranch(value)
-				tr.Targets = []string{"done"}
-				return tr, nil
-			}, FailInvocation),
-			executorTestNode("done", executorTestEnd, FailInvocation),
-		}, nil, map[string][]string{"fork": {"done"}}, nil, nil)
-		_, completeRes, err := completeRoutingRunner.Start(context.Background(), "complete-routing", 0, nil, Options{})
-		if err == nil || completeRes.Status != StatusFailed {
-			t.Fatalf("expected failure with CompleteBranch targets: %+v, %v", completeRes, err)
-		}
-
 		negativeTimeoutRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
 			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
-				return model.FanOut(value, Branch[int]{Target: "a", State: 10, Timeout: -1}), nil
+				return model.FanOut(value, Branch[int]{Target: "a", State: 10, EntryTimeout: -1}), nil
 			}, FailInvocation),
 			executorTestNode("a", executorTestEnd, FailInvocation),
 		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)

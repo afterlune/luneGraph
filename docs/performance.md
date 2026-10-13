@@ -22,6 +22,49 @@ go test -run '^$' -bench '^BenchmarkCheckpointCopyInto$' -benchmem -benchtime=30
 go test -run '^$' -bench '^(BenchmarkJSONCheckpointEncoding|BenchmarkCheckpointCAS|BenchmarkSQLiteReopenRecover)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./checkpoint/...
 ```
 
+## Format 8 — control-flow and recovery contract
+
+Compared clean base `e4a39a9` with the format-8 implementation on 2026-10-13,
+Windows/amd64, Go 1.26.5, AMD Ryzen 7 6800H. The candidate seals Transition
+construction, clears entry-timeout overrides at accepted outcomes, counts full-live
+invocation budgets, and preserves nested group failure messages. All tests,
+race checks, vet and the per-production-package 85% coverage check passed.
+
+Benchmarks ran serially, outside test/race workloads, with three 150 ms samples
+at CPU 1 and 8. Cells show median `ns/op / B/op / allocs/op`:
+
+| Workload | CPU | Base | Format 8 |
+| --- | ---: | ---: | ---: |
+| 16-step sequential | 1 | 24,285 / 4,136 / 81 | 29,344 / 4,136 / 81 |
+| 16-step sequential | 8 | 25,839 / 7,640 / 81 | 22,992 / 7,640 / 81 |
+| Width-32 static fan-out/join | 1 | 139,408 / 57,464 / 292 | 150,658 / 57,464 / 292 |
+| Width-32 static fan-out/join | 8 | 185,653 / 61,848 / 299 | 205,272 / 61,835 / 299 |
+| CanMerge early join | 1 | 30,723 / 14,824 / 87 | 30,939 / 14,824 / 87 |
+| CanMerge early join | 8 | 59,105 / 14,838 / 87 | 57,469 / 14,844 / 87 |
+| Durable width-32 Memory fan-out/join | 1 | 534,172 / 409,598 / 1,726 | 531,848 / 409,602 / 1,726 |
+| Durable width-32 Memory fan-out/join | 8 | 687,968 / 414,272 / 1,734 | 717,246 / 414,182 / 1,734 |
+| Warm Memory advance, 32 waiters | 1 | 12,000 / 4,422 / 28 | 12,434 / 4,422 / 28 |
+| Warm Memory advance, 32 waiters | 8 | 17,663 / 4,422 / 28 | 19,907 / 4,422 / 28 |
+
+Allocation counts remain unchanged in all five families. CPU-8 byte differences
+are small scheduling-dependent variations. The candidate's CPU-1 sequential and
+static fan-out medians, and CPU-8 static fan-out/warm-advance medians, are higher;
+these short samples do not establish a stable latency change. For example,
+CPU-1 sequential ranges are 22,800–32,713 versus 26,945–30,384 ns/op, and CPU-8
+warm ranges are 17,600–21,157 versus 19,771–20,054 ns/op. Every compared pair has
+overlapping timing ranges. These measurements preserve an explicit review baseline,
+not a production throughput promise or a claim of performance improvement.
+
+Reproduce both checkouts with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/steps=16$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkCanMergeJoin$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/storage=memory/width=32/concurrency=default$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkSingleRunCheckpoint$/storage=memory/waiters=32/mode=warm-advance$' -benchmem -benchtime=150ms -count=3 -cpu '1,8' ./internal/capacitytest
+```
+
 ## CanMerge API audit baseline
 
 Measured on 2026-10-12 with Go 1.26.5, Windows/amd64 and AMD Ryzen 7 6800H.

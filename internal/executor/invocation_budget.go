@@ -4,12 +4,17 @@ import "errors"
 
 var errInvocationBudget = errors.New("maximum invocation count exceeded")
 
-func checkInvocationBudget[S any](checkpoint *Checkpoint[S], additional, maximum int) error {
-	if maximum == 0 || additional == 0 {
+// invocationBudget counts the full live position, not a partial candidate.
+type invocationBudget struct {
+	retained int
+	maximum  int
+}
+
+func (b invocationBudget) check(additional int) error {
+	if b.maximum == 0 || additional == 0 {
 		return nil
 	}
-	current := len(checkpoint.Invocations)
-	if current > maximum || additional > maximum-current {
+	if b.retained > b.maximum || additional > b.maximum-b.retained {
 		return errInvocationBudget
 	}
 	return nil

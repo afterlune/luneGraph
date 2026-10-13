@@ -50,10 +50,9 @@ func TestCallbackPanicPolicies(t *testing.T) {
 
 func TestIllegalTransitionIsTopLevel(t *testing.T) {
 	for _, tr := range []graph.Transition[int]{
-		{Action: 99},
+		{},
 		graph.To(1, "missing"),
 		graph.Wait(1, "missing", "next"),
-		{Action: graph.ActionContinue, Targets: []string{"next"}, Continuation: "stray"},
 	} {
 		g := graph.New[int]("start")
 		node(t, g, "start", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) { return tr, nil })

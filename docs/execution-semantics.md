@@ -1,4 +1,4 @@
-# Execution semantics — checkpoint format 7
+# Execution semantics — checkpoint format 8
 
 The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
@@ -12,7 +12,10 @@ initial call, and an error. `Result` contains the call status, a metadata
 invocation topology or states. Call `Execution.Checkpoint()` when an independent
 full checkpoint is needed. That operation copies all live invocation states
 with Clone. `Execution.Pending()` returns sorted waiting-invocation identities
-and continuation names without exposing or copying their state. `Fork` returns
+and continuation names without exposing or copying their state. Advance rejects
+all terminal handles with ErrRunCompleted, independently of Store presence or
+inputs; a durable stale
+handle first fails its authoritative revision check. `Fork` returns
 an independent checkpoint and does not return a handle or execution result.
 
 `Execution.Advance(ctx, inputs, opts)` continues the same in-memory scheduler
@@ -22,9 +25,13 @@ running callbacks; this avoids loading or cloning unrelated invocation states.
 It is a conflict check, not a lease. Another Runner or handle can commit after
 the check, so callbacks may still replay and effects remain at-least-once.
 
-Recover is the cold-open path: it loads the full checkpoint once and returns a
-new live handle. Resume opens its supplied checkpoint as a new handle and, when
-a Store is supplied, loads authoritative state and rejects a stale revision.
+Recover is the cold-open path: it loads the full checkpoint once and validates
+its requested RunID, MachineID, format and topology before returning a handle.
+Invalid loaded positions return ErrInvalidCheckpoint and no handle, even when
+cancellation is detected after Load. Valid post-load cancelled positions may
+return a validated handle and StatusCancelled without running callbacks. Resume
+opens its supplied checkpoint as a new handle and, when a Store is supplied,
+loads authoritative state and rejects a stale revision.
 Use the returned handle for repeated in-process advances. After an uncertain
 Store error, the handle retains its last locally accepted position; the next
 Advance detects a committed remote revision through `LoadHeader` and returns
@@ -42,6 +49,9 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   [executable Clone example](../clone_example_test.go) shows a state-specific
   copy for nested byte slices, including nil/empty semantics. This rule applies
   at fan-out and Merge input boundaries as well as before individual callbacks.
+- Transition fields are private. Constructors create supported action shapes;
+  the zero value returned with nil error is invalid. Zero alongside a callback
+  error is permitted. Runtime checks still validate dynamic targets and topology.
 - Static `To(state, target, moreTargets...)` requires at least one declared
   target. Use `ToTargets(state, targets)` for runtime-generated slices; an empty
   slice is rejected when the transition is applied.
@@ -65,7 +75,9 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   checkpoint. Names are qualified by mount path. A mount has at most one exit;
   Return follows it or ends its invocation without an exit. Return outside a
   mount is invalid. EndExecution ends the entire run.
-- To/Wait targets must be declared edges; Wait names a registered continuation.
+- To/Wait targets must be declared edges; Wait names a registered continuation
+  and requires a first target. Apply updates state, then follows the targets saved
+  by Wait. Decisions based on external input belong in the next node.
   EndBranch discards its business result. EndExecution supplies Final. Natural
   completion can have neither Final nor Failure.
 - Returned checkpoints are immutable caller views. Callbacks transfer ownership
@@ -75,19 +87,25 @@ Advance detects a committed remote revision through `LoadHeader` and returns
 
 ## Per-task timeouts
 
-Declarative timeouts are supported for static nodes, join callbacks, and dynamic branches:
-- `NodeSpec.Timeout`: per-invocation deadline for the static node.
-- `JoinSpec.Timeout`: per-execution deadline for the `Merge` callback.
-- `Branch.Timeout`: per-branch deadline created by `FanOut`. Overrides the target node's default timeout for the initial step, then clears upon subsequent single-target transitions so the target node's own `NodeSpec.Timeout` applies.
-- Negative durations are rejected at graph compilation (`AddNode`, `AddJoin`) and at runtime (`FanOut`).
-- When a task has a positive timeout, the scheduler derives a context with `context.WithTimeout(runCtx, task.timeout)` and cancels it immediately upon callback completion.
-- If a callback runs past its deadline, `context.DeadlineExceeded` is propagated even if the callback returned nil.
-- Under `OnError: FailInvocation`, a timed-out branch records its error on the
-  activation branch record and sets its invocation to `InvocationFailed`, while
-  other branches and the eventual join proceed normally. Under `FailGroup` or
-  `FailExecution`, group-level or terminal execution failure semantics apply.
-- Branch timeouts and error strings are stored with activation group payloads
-  and replayed identically during recovery.
+Timeouts describe callback attempts, not a branch's elapsed lifetime:
+
+- `NodeSpec.Timeout` and `JoinSpec.Timeout` bound each Node/Merge callback attempt.
+- `Branch.EntryTimeout` overrides the target node's timeout for each attempt of
+  the initial entry callback. Zero inherits the node default; negative is invalid.
+- A successful entry outcome clears the override in the same atomic commit,
+  whether it routes, loops, waits, creates a nested group, returns, or completes.
+  Later nodes use their own configured timeouts. Apply uses the public call context.
+- Invalid transitions, cloning errors, invocation-budget rejection and unsuccessful
+  Store submissions preserve the accepted entry configuration and callback identity.
+  Recovery replays an uncommitted entry attempt with a fresh duration, not a stored
+  absolute deadline. Failed branch records may retain the entry configuration.
+- The scheduler derives a context with `context.WithTimeout` after admission.
+  If its deadline expires, DeadlineExceeded is propagated even when the callback
+  returns nil. Failure handling uses OnError; cancellation of the public call still
+  takes priority while accepting callback results. Callbacks must cooperate.
+
+Entry timeout configuration and branch error messages are stored on activation
+branch records; no elapsed branch budget or wait-expiry scheduler is provided.
 
 ## Speculative joins and branch pruning
 
@@ -209,10 +227,12 @@ Ordinary node, Merge and Apply errors use declared policy or FailureOverride.
 Apply uses the suspending node's policy.
 
 - FailInvocation is the default. The path fails; enclosing groups continue.
-  HadLocalFailures is persisted. Details are transient events, not growing
-  checkpoint history.
+  HadLocalFailures is persisted. A failed branch retains its error message on
+  the activation until that activation settles; a root local failure retains the
+  marker without its message. Other diagnostic details are transient events.
 - FailGroup removes the activation and descendants, marks its parent failed, and
-  cancels removed workers after accepting the failure commit. Their late results
+  preserves the original message on the parent's enclosing activation branch.
+  It cancels removed workers after accepting the failure commit. Their late results
   are discarded. At the root it becomes FailExecution. A rejected commit can
   replay original pending callbacks.
 - FailExecution commits Completed with Failure and no active topology. The
@@ -222,6 +242,11 @@ Apply uses the suspending node's policy.
   Invalid transitions, cancellation and copy errors preserve the last committed
   checkpoint without a terminal Failure. Store/codec panics are outside the
   callback panic boundary.
+
+Branch error text, terminal Failure.Message and Failure.PanicStack are durable
+metadata. Applications must return errors whose messages are suitable for
+persistence. SQLite serializes this metadata as plain JSON; StateCodec encodes
+S only and does not encrypt or redact metadata. No growing failure history is kept.
 
 Status describes this call, not necessarily the execution's lifetime:
 
@@ -278,7 +303,8 @@ checkpoints does not delete external data or receipts.
 
 ## Store and codec contracts
 
-Store has Create, Load, LoadHeader, Commit and single-run Delete. `LoadHeader`
+Store has Create, Load, LoadHeader, Commit and single-run Delete. All methods
+must support concurrent calls by multiple executions and runners. `LoadHeader`
 returns copied metadata without loading invocation or group records;
 implementations should make it a cheap revision check. Commit takes expected
 revision and a Change: authoritative Header/Final and listed invocation/group
@@ -307,18 +333,21 @@ quiescence and retention; do not reuse IDs while old owners can address them.
 Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
 SQLite pages reusable, without guaranteeing immediate file shrink.
 
-Format 7 rejects format-6 checkpoints and older versions. Existing runs require
+Format 8 rejects format-7 checkpoints and older versions. Existing runs require
 their matching runtime; use a new database for new executions. SQLite schema 2
-remains unchanged, but activation-group payloads have the new branch-record
-shape. No automatic migration or compatibility execution machine is supplied.
+remains unchanged, but activation-group payloads rename Timeout to EntryTimeout
+and follow the entry-only timeout semantics. No automatic migration or
+compatibility execution machine is supplied.
 MachineID remains an application controlled definition identity; change it for
 incompatible graphs.
 
 FanOut atomically commits its parent, activation and child invocation IDs before
 children can start. Each child gets an independent Clone, invocation ID and
 CallID; repeated targets remain distinguishable by branch identity. Zero-child
-groups become ready for Merge immediately. CompleteBranch records a successful
-child result without selecting a fixed join node in application state.
+groups become ready for Merge immediately and remain valid checkpoints if Merge
+is interrupted or its commit is rejected; Resume, Recover and Fork accept them.
+CompleteBranch records a successful child result without selecting a fixed join
+node in application state.
 
 Merge receives cloned parent state plus full branch outcomes (`[]BranchResult[S]`).
 Successful branch states are cloned independently. Failed branches provide their

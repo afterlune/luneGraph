@@ -137,7 +137,7 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 	child := New[int]("begin")
 	var originalTargets = []string{"finish"}
 	addDefinitionNode(t, child, "begin", func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
-		return model.Transition[int]{State: state, Action: model.ActionWait, Targets: originalTargets, Continuation: "resume"}, nil
+		return model.Wait(state, "resume", originalTargets[0]), nil
 	})
 	addDefinitionNode(t, child, "finish", func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
 		return model.Return(state), nil
@@ -180,11 +180,11 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 		t.Fatalf("continuation names = %v", machine.Continuations)
 	}
 	start, err := machine.Nodes["start"].Run(context.Background(), model.CallInfo{}, 3)
-	if err != nil || !reflect.DeepEqual(start.Targets, []string{"worker/begin"}) {
+	if err != nil || !reflect.DeepEqual(model.ReadTransition(start).Targets, []string{"worker/begin"}) {
 		t.Fatalf("parent transition = %+v, %v", start, err)
 	}
 	childTransition, err := machine.Nodes["worker/begin"].Run(context.Background(), model.CallInfo{}, 3)
-	if err != nil || childTransition.Continuation != "worker/resume" || !reflect.DeepEqual(childTransition.Targets, []string{"worker/finish"}) || originalTargets[0] != "finish" {
+	if err != nil || model.ReadTransition(childTransition).Continuation != "worker/resume" || !reflect.DeepEqual(model.ReadTransition(childTransition).Targets, []string{"worker/finish"}) || originalTargets[0] != "finish" {
 		t.Fatalf("child transition = %+v, original targets=%v, err=%v", childTransition, originalTargets, err)
 	}
 }
@@ -405,7 +405,7 @@ func TestRewriteNodePreservesNonRoutingActionsAndErrors(t *testing.T) {
 	})
 	wrapped := rewriteNode(run, map[string]string{"next": "child/next"}, map[string]string{"wait": "child/wait"})
 	transition, err := wrapped(context.Background(), model.CallInfo{}, 3)
-	if err != nil || transition.Action != model.ActionReturn {
+	if err != nil || model.ReadTransition(transition).Action != model.ActionReturn {
 		t.Fatalf("Return changed by wrapper: %+v, %v", transition, err)
 	}
 	wrapped = rewriteNode(func(context.Context, model.CallInfo, int) (model.Transition[int], error) {

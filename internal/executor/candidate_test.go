@@ -40,7 +40,7 @@ func TestCandidateCollectsOnlyAffectedNestedTopology(t *testing.T) {
 		inv, groups []string
 	}{
 		{"join", false, []string{"i3", "i6", "i7"}, []string{"g2", "g5"}},
-		{"failed enclosing group", true, []string{"i1", "i3", "i4", "i6", "i7", "i9", "i10"}, []string{"g2", "g5", "g8"}},
+		{"failed enclosing group", true, []string{"i1", "i3", "i4", "i6", "i7", "i9", "i10"}, []string{"g0", "g2", "g5", "g8"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			before, after := l.workspace.prepare(l, "i3", test.subtree, "g5")

@@ -12,18 +12,20 @@ import (
 )
 
 type (
-	Header              = model.Header
-	Change[S any]       = model.Change[S]
-	Limiter             = limit.Limiter
-	Event               = model.Event
-	EventOperation      = model.EventOperation
-	EventPhase          = model.EventPhase
-	CallbackOutcome     = model.CallbackOutcome
-	Observer            = model.Observer
-	ObserverFunc        = model.ObserverFunc
-	Action              = model.Action
-	ActivationGroup     = model.ActivationGroup
-	ActivationBranch    = model.ActivationBranch
+	Header           = model.Header
+	Change[S any]    = model.Change[S]
+	Limiter          = limit.Limiter
+	Event            = model.Event
+	EventOperation   = model.EventOperation
+	EventPhase       = model.EventPhase
+	CallbackOutcome  = model.CallbackOutcome
+	Observer         = model.Observer
+	ObserverFunc     = model.ObserverFunc
+	Action           = model.Action
+	ActivationGroup  = model.ActivationGroup
+	ActivationBranch = model.ActivationBranch
+	// Branch declares an independently cloned task. EntryTimeout overrides only
+	// each attempt of its initial node callback; zero inherits the node timeout.
 	Branch[S any]       = model.Branch[S]
 	BranchResult[S any] = model.BranchResult[S]
 	// BudgetReason identifies the per-call limit that prevented further progress.
@@ -51,8 +53,11 @@ type (
 	Execution[S any] = executor.Execution[S]
 	Runner[S any]    = executor.Runner[S]
 	// Status describes the outcome of one Start, Resume, Recover, or Advance call.
-	Status            = model.Status
-	Store[S any]      = model.Store[S]
+	Status = model.Status
+	// Store persists independent execution positions and supports concurrent calls.
+	Store[S any] = model.Store[S]
+	// Transition is constructed with the control-flow helpers; its fields are private.
+	// A zero value returned with nil error is an invalid transition.
 	Transition[S any] = model.Transition[S]
 	TransitionError   = model.TransitionError
 )
@@ -182,8 +187,10 @@ func ToTargets[S any](state S, targets []string) Transition[S] {
 }
 
 // Wait commits state and suspends this invocation for a registered continuation.
-func Wait[S any](state S, continuation string, targets ...string) Transition[S] {
-	return model.Wait(state, continuation, targets...)
+// After Apply updates state, execution follows the required target or fans out
+// to additional declared targets.
+func Wait[S any](state S, continuation, target string, additionalTargets ...string) Transition[S] {
+	return model.Wait(state, continuation, target, additionalTargets...)
 }
 
 // FanOut creates one independent child invocation for each branch.

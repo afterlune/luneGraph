@@ -6,79 +6,6 @@ import (
 	"time"
 )
 
-// Action describes the control flow produced by a node.
-type Action uint8
-
-const (
-	ActionContinue Action = iota + 1
-	ActionWait
-	ActionEndBranch
-	ActionEndExecution
-	ActionReturn
-	ActionFanOut
-	ActionCompleteBranch
-)
-
-// Transition contains a node's new state and its explicit control decision.
-type Transition[S any] struct {
-	State        S
-	Action       Action
-	Targets      []string
-	Branches     []Branch[S]
-	Continuation string
-}
-
-// Branch describes one runtime-created child invocation.
-type Branch[S any] struct {
-	Target  string
-	State   S
-	Timeout time.Duration
-}
-
-// To continues to the required target or fans out to additional declared targets.
-func To[S any](state S, target string, additionalTargets ...string) Transition[S] {
-	targets := make([]string, 1, len(additionalTargets)+1)
-	targets[0] = target
-	targets = append(targets, additionalTargets...)
-	return Transition[S]{State: state, Action: ActionContinue, Targets: targets}
-}
-
-// ToTargets continues to the supplied runtime-generated targets. At least one
-// target is required; an empty slice is rejected when the transition is applied.
-func ToTargets[S any](state S, targets []string) Transition[S] {
-	return Transition[S]{State: state, Action: ActionContinue, Targets: append([]string(nil), targets...)}
-}
-
-// Wait suspends this invocation until a continuation receives resume input.
-func Wait[S any](state S, continuation string, targets ...string) Transition[S] {
-	return Transition[S]{State: state, Action: ActionWait, Targets: append([]string(nil), targets...), Continuation: continuation}
-}
-
-// FanOut creates an activation group with one independent child per branch.
-func FanOut[S any](parent S, branches ...Branch[S]) Transition[S] {
-	return Transition[S]{State: parent, Action: ActionFanOut, Branches: append([]Branch[S](nil), branches...)}
-}
-
-// CompleteBranch returns this invocation's state to its activation group's Merge.
-func CompleteBranch[S any](state S) Transition[S] {
-	return Transition[S]{State: state, Action: ActionCompleteBranch}
-}
-
-// EndBranch finishes the current invocation without producing a result.
-func EndBranch[S any]() Transition[S] {
-	return Transition[S]{Action: ActionEndBranch}
-}
-
-// EndExecution finishes the whole run with state as its final result.
-func EndExecution[S any](state S) Transition[S] {
-	return Transition[S]{State: state, Action: ActionEndExecution}
-}
-
-// Return leaves the current subgraph and continues at its mount point.
-func Return[S any](state S) Transition[S] {
-	return Transition[S]{State: state, Action: ActionReturn}
-}
-
 // Node performs one invocation and chooses its next control action. CallInfo
 // carries a stable callback ID across recovery replays.
 type Node[S any] func(context.Context, CallInfo, S) (Transition[S], error)
@@ -148,6 +75,7 @@ type NodeSpec[S any] struct {
 	Name    string
 	Run     Node[S]
 	OnError FailureScope
+	// Timeout bounds each callback attempt after admission. Zero disables it.
 	Timeout time.Duration
 }
 
@@ -158,6 +86,7 @@ type JoinSpec[S any] struct {
 	From    string
 	Merge   Merge[S]
 	OnError FailureScope
+	// Timeout bounds each Merge attempt after admission. Zero disables it.
 	Timeout time.Duration
 	Quorum  int
 	// CanMerge is a fast, deterministic, side-effect-free predicate. It may be

@@ -12,7 +12,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 7
+const CheckpointFormatVersion uint32 = 8
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus string
@@ -51,8 +51,9 @@ type ActivationBranch struct {
 	Target string
 	// Error is the local failure message when the invocation failed.
 	Error string
-	// Timeout is this branch's per-invocation timeout override.
-	Timeout time.Duration
+	// EntryTimeout is the pending entry callback override. Successful node
+	// outcomes clear it atomically; failed branches may retain it for inspection.
+	EntryTimeout time.Duration
 }
 
 // ActivationGroup correlates branches started by one fan-out occurrence.
@@ -132,7 +133,8 @@ type ResumeInput struct {
 // LoadHeader returns copied metadata without loading invocation states. Commit
 // atomically applies a Change at expected+1. ErrConflict guarantees no write;
 // other Store errors can leave the outcome uncertain, so callers must reload
-// before retrying. Writes own independent copies.
+// before retrying. Writes own independent copies. All methods must support
+// concurrent calls from multiple executions and runners.
 type Store[S any] interface {
 	Create(context.Context, Checkpoint[S]) error
 	Load(context.Context, string) (Checkpoint[S], error)

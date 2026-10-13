@@ -186,20 +186,20 @@ func TestCheckpointHeaderAndSharedValidators(t *testing.T) {
 
 func TestTransitionsCopyTargetsAndPreserveActions(t *testing.T) {
 	static := To(3, "first", "second")
-	if !reflect.DeepEqual(static.Targets, []string{"first", "second"}) || static.Action != ActionContinue {
+	if !reflect.DeepEqual(static.data.Targets, []string{"first", "second"}) || static.data.Action != ActionContinue {
 		t.Fatalf("static To transition = %+v", static)
 	}
 	targets := []string{"next"}
 	continued := ToTargets(1, targets)
-	continued.Targets[0] = "changed"
-	if targets[0] != "next" || continued.Action != ActionContinue {
+	continued.data.Targets[0] = "changed"
+	if targets[0] != "next" || continued.data.Action != ActionContinue {
 		t.Fatalf("To transition = %+v, source targets=%v", continued, targets)
 	}
 	wait := Wait(2, "resume", "done")
-	if wait.Action != ActionWait || wait.Continuation != "resume" || !reflect.DeepEqual(wait.Targets, []string{"done"}) {
+	if wait.data.Action != ActionWait || wait.data.Continuation != "resume" || !reflect.DeepEqual(wait.data.Targets, []string{"done"}) {
 		t.Fatalf("Wait transition = %+v", wait)
 	}
-	if EndBranch[int]().Action != ActionEndBranch || EndExecution(4).Action != ActionEndExecution || Return(5).Action != ActionReturn {
+	if EndBranch[int]().data.Action != ActionEndBranch || EndExecution(4).data.Action != ActionEndExecution || Return(5).data.Action != ActionReturn {
 		t.Fatal("terminal transition helper returned the wrong action")
 	}
 }

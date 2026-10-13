@@ -195,37 +195,7 @@ func rewriteNode[S any](run model.Node[S], targets, continuations map[string]str
 		if err != nil {
 			return transition, err
 		}
-		if transition.Action != model.ActionContinue && transition.Action != model.ActionWait && transition.Action != model.ActionFanOut {
-			return transition, nil
-		}
-		if len(transition.Targets) != 0 {
-			transition.Targets = append([]string(nil), transition.Targets...)
-			for index, target := range transition.Targets {
-				if mapped, ok := targets[target]; ok {
-					transition.Targets[index] = mapped
-				} else {
-					transition.Targets[index] = ""
-				}
-			}
-		}
-		if transition.Action == model.ActionFanOut && len(transition.Branches) != 0 {
-			transition.Branches = append([]model.Branch[S](nil), transition.Branches...)
-			for index, branch := range transition.Branches {
-				if mapped, ok := targets[branch.Target]; ok {
-					transition.Branches[index].Target = mapped
-				} else {
-					transition.Branches[index].Target = ""
-				}
-			}
-		}
-		if transition.Action == model.ActionWait {
-			if mapped, ok := continuations[transition.Continuation]; ok {
-				transition.Continuation = mapped
-			} else {
-				transition.Continuation = ""
-			}
-		}
-		return transition, nil
+		return model.RemapTransition(transition, targets, continuations), nil
 	}
 }
 

@@ -4,28 +4,24 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
+
+	"github.com/afterlune/luneGraph/internal/model"
 )
 
-func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, tr Transition[S], maxInvocations int) (bool, error) {
+func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, transition Transition[S], budget invocationBudget) (bool, error) {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return false, &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
 	}
+	tr := model.ReadTransition(transition)
 	source := inv.Node
 	switch tr.Action {
 	case ActionContinue, ActionWait:
-		if len(tr.Branches) != 0 {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("branches supplied with routed transition")}
-		}
 		if err := r.checkTargets(source, tr.Targets); err != nil {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
 		if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-		}
-		if tr.Action == ActionContinue && tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("continuation supplied with Continue")}
 		}
 		if tr.Action == ActionWait {
 			if _, ok := r.continuations[tr.Continuation]; !ok {
@@ -41,7 +37,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			inv.Next = append([]string(nil), tr.Targets...)
 			return false, nil
 		}
-		if err := r.route(s, index, id, source, tr.State, tr.Targets, maxInvocations); err != nil {
+		if err := r.route(s, index, id, source, tr.State, tr.Targets, budget); err != nil {
 			var cloneErr *stateCopyError
 			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
@@ -50,10 +46,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		}
 		return false, nil
 	case ActionFanOut:
-		if len(tr.Targets) != 0 || tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with FanOut")}
-		}
-		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, maxInvocations); err != nil {
+		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, budget); err != nil {
 			var cloneErr *stateCopyError
 			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
@@ -62,9 +55,6 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		}
 		return false, nil
 	case ActionCompleteBranch:
-		if len(tr.Targets) != 0 || len(tr.Branches) != 0 || tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with CompleteBranch")}
-		}
 		if inv.GroupID == "" {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch used outside an activation group")}
 		}
@@ -80,18 +70,12 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		inv.Continuation = ""
 		return false, nil
 	case ActionEndBranch:
-		if len(tr.Targets) != 0 || len(tr.Branches) != 0 || tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with EndBranch")}
-		}
 		inv.Status = InvocationEnded
 		inv.CallID = ""
 		inv.Next = nil
 		inv.Continuation = ""
 		return false, nil
 	case ActionEndExecution:
-		if len(tr.Targets) != 0 || len(tr.Branches) != 0 || tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with EndExecution")}
-		}
 		state := tr.State
 		s.Final = &state
 		s.Completed = true
@@ -100,9 +84,6 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		clearInvocationIndex(index)
 		return true, nil
 	case ActionReturn:
-		if len(tr.Targets) != 0 || len(tr.Branches) != 0 || tr.Continuation != "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("routing supplied with Return")}
-		}
 		target, mounted := r.returnTargets[source]
 		if !mounted {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("Return used outside a subgraph")}
@@ -119,7 +100,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if err := r.checkJoinTargets(s, inv, targets); err != nil {
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		if err := r.route(s, index, id, source, tr.State, targets, maxInvocations); err != nil {
+		if err := r.route(s, index, id, source, tr.State, targets, budget); err != nil {
 			var cloneErr *stateCopyError
 			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
@@ -161,7 +142,7 @@ type stateCopyError struct{ cause error }
 func (e *stateCopyError) Error() string { return e.cause.Error() }
 func (e *stateCopyError) Unwrap() error { return e.cause }
 
-func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string, maxInvocations int) error {
+func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string, budget invocationBudget) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("invocation %q disappeared", id)
@@ -170,19 +151,10 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		inv.State = state
 		inv.Continuation = ""
 		inv.Next = nil
-		if inv.GroupID != "" {
-			_, activation := group(s, inv.GroupID)
-			if activation == nil || inv.BranchIndex < 0 || inv.BranchIndex >= len(activation.Branches) {
-				return fmt.Errorf("invocation %q has invalid group membership", inv.ID)
-			}
-			if activation.Branches[inv.BranchIndex].Timeout != 0 {
-				activation.Branches = slices.Clone(activation.Branches)
-				activation.Branches[inv.BranchIndex].Timeout = 0
-			}
-		}
+
 		return r.setTarget(s, inv, targets[0])
 	}
-	if err := checkInvocationBudget(s, len(targets), maxInvocations); err != nil {
+	if err := budget.check(len(targets)); err != nil {
 		return err
 	}
 	needed := uint64(1) // activation group
@@ -246,13 +218,13 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 }
 
 // fanOut creates a dynamic activation from declared, independently cloned tasks.
-func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], maxInvocations int) error {
+func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], budget invocationBudget) error {
 	joinNode := r.joinBySource[source]
 	if joinNode == "" {
 		return errors.New("FanOut requires a JoinSpec for its source node")
 	}
 	for branchIndex, branch := range branches {
-		if branch.Timeout < 0 {
+		if branch.EntryTimeout < 0 {
 			return fmt.Errorf("branch %d timeout must not be negative", branchIndex)
 		}
 		if _, ok := r.edges[source][branch.Target]; !ok {
@@ -262,7 +234,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			return fmt.Errorf("branch target %q is not an executable node", branch.Target)
 		}
 	}
-	if err := checkInvocationBudget(s, len(branches), maxInvocations); err != nil {
+	if err := budget.check(len(branches)); err != nil {
 		return err
 	}
 	if uint64(len(branches)) > (math.MaxUint64-2)/2 {
@@ -300,7 +272,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			GroupID:     groupID,
 			BranchIndex: branchIndex,
 		}
-		activation.Branches[branchIndex] = ActivationBranch{InvocationID: child.ID, Target: branch.Target, Timeout: branch.Timeout}
+		activation.Branches[branchIndex] = ActivationBranch{InvocationID: child.ID, Target: branch.Target, EntryTimeout: branch.EntryTimeout}
 		childPosition := appendInvocation(index, s, child)
 		if err := r.setTarget(s, childPosition, branch.Target); err != nil {
 			return err

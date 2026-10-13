@@ -148,17 +148,17 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		if group.JoinNode == "" && (len(group.Branches) < 2 || len(group.Branches) > len(r.edges[group.Source])) {
 			return invalidCheckpoint("group %q has invalid unjoined child count", group.ID)
 		}
-		if group.JoinNode != "" && len(group.Branches) == 0 {
-			return invalidCheckpoint("group %q has invalid child count", group.ID)
-		}
 		for index, branch := range group.Branches {
 			childID := branch.InvocationID
 			child, exists := invocations[childID]
 			if !exists || child.GroupID != group.ID || child.BranchIndex != index || childID == group.ParentID {
 				return invalidCheckpoint("group %q has invalid child %q", group.ID, childID)
 			}
-			if _, exists := r.edges[group.Source][branch.Target]; !exists || branch.Timeout < 0 {
+			if _, exists := r.edges[group.Source][branch.Target]; !exists || branch.EntryTimeout < 0 {
 				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
+			}
+			if branch.EntryTimeout > 0 && child.Status != InvocationFailed && (child.Status != InvocationReady || child.Node != branch.Target) {
+				return invalidCheckpoint("group %q retains an entry timeout after branch %d advanced", group.ID, index)
 			}
 			if branch.Error != "" && child.Status != InvocationFailed {
 				return invalidCheckpoint("group %q has an error for non-failed branch %d", group.ID, index)

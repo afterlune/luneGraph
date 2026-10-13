@@ -12,6 +12,8 @@ import (
 // live handle with this call's Result. A terminal run is returned without
 // callbacks or another revision. Failed terminals return ErrRunFailed; inputs
 // return ErrRunCompleted.
+// Loaded positions are validated before exposing a handle, even if cancellation
+// occurs after Load. Invalid positions return ErrInvalidCheckpoint and no handle.
 func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeInput, store Store[S], opts Options) (execution *Execution[S], result Result[S], retErr error) {
 	if ctx == nil {
 		return nil, Result[S]{Status: StatusFailed}, errors.New("context must not be nil")
@@ -47,12 +49,6 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 	if err != nil {
 		return nil, Result[S]{Status: errorStatus(err)}, err
 	}
-	if err = ctx.Err(); err != nil {
-		l := newLive(checkpoint, r.joins)
-		execution = &Execution[S]{runner: r, live: l, store: store}
-		result, retErr = r.resultFromLiveOrEmpty(l, StatusCancelled, err)
-		return execution, result, retErr
-	}
 	if checkpoint.RunID != runID {
 		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 		return nil, result, errors.Join(invalidCheckpoint("loaded run ID does not match requested run"), resultErr)
@@ -63,6 +59,10 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 	}
 	l := newLive(checkpoint, r.joins)
 	execution = &Execution[S]{runner: r, live: l, store: store}
+	if err = ctx.Err(); err != nil {
+		result, retErr = r.resultFromLiveOrEmpty(l, StatusCancelled, err)
+		return execution, result, retErr
+	}
 	if checkpoint.Completed {
 		if len(inputs) != 0 {
 			result, retErr = r.resultFromLiveOrEmpty(l, StatusFailed, ErrRunCompleted)

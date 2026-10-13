@@ -5,7 +5,7 @@ nodes and allowed edges; each execution owns its evolving state. The core
 handles scheduling, branches, joins, waiting and recovery. Models, tools,
 permissions and agent policy belong to applications.
 
-**Current changes are unreleased.** Checkpoint format 7 rejects earlier formats
+**Current changes are unreleased.** Checkpoint format 8 rejects earlier formats
 without automatic migration; SQLite schema 2 remains in use. See
 [CHANGELOG](CHANGELOG.md), [execution contract](docs/execution-semantics.md),
 and [Store guide](docs/store-implementation.md). Requires Go 1.26.5 or newer.
@@ -57,13 +57,19 @@ concurrency safe. Treat returned checkpoints as immutable.
 
 ## Control flow and state
 
+`Transition[S]` is a value constructed only with the functions below. Its fields
+are private; use these constructors instead of raw action/field combinations.
+Returning its zero value with a nil error is an invalid transition. A zero value
+alongside a callback error remains valid error-return syntax. Constructors copy
+target and branch slices; returned state follows the ownership-transfer contract.
+
 | Decision | Behavior |
 | --- | --- |
 | To(state, target, moreTargets...) | Follow declared edges; multiple targets create an activation |
 | ToTargets(state, targets) | Follow a runtime-generated target slice |
 | FanOut(parent, branches...) | Create a dynamic zero-or-more task activation using declared targets |
 | CompleteBranch(state) | Return this task's result to its current group's Merge |
-| Wait(state, continuation, targets...) | Commit state and await invocation input |
+| Wait(state, continuation, target, moreTargets...) | Commit state, await input, then follow declared targets |
 | EndBranch[S]() | End this path and discard its business result |
 | EndExecution(state) | Finish the run, supply Final, cancel/drain other tasks |
 | Return(state) | Leave a mounted subgraph through its sole exit |
@@ -83,15 +89,19 @@ Merge runs independently: branch arrivals commit before Merge starts, and other
 branches can advance while it runs. A rejected Merge replays independently with
 its original CallID. Revision includes Merge commits; Steps counts node outcomes.
 
-Nodes, joins and dynamic branches support declarative timeouts via
-`NodeSpec.Timeout`, `JoinSpec.Timeout` and `Branch.Timeout` (`time.Duration`).
-When configured, the runtime derives a context with `context.WithTimeout`
-for the callback execution. If a deadline expires, `context.DeadlineExceeded`
-is recorded. Under `OnError: FailInvocation`, the failure is isolated to that
-branch and stored on its activation record, allowing sibling branches and
-tolerant joins to proceed. Dynamic branch timeouts override the
-target node's default timeout for the initial step, then clear upon single-target
-routing so subsequent nodes use their own configured timeouts.
+Node and Merge callbacks support per-attempt timeouts through `NodeSpec.Timeout`
+and `JoinSpec.Timeout`. `Branch.EntryTimeout` overrides the entry node timeout
+for each attempt of that branch's initial callback; zero inherits the node default.
+It is not a deadline for the whole branch. A successful entry outcome clears the
+override in the same commit, including Wait, loops, Return and nested fan-out.
+Later nodes use their own timeouts. Rejected outcomes retain the override and
+CallID for replay; each replay gets the configured duration again. Failed branches
+may retain the configured entry timeout for inspection. Negative durations are
+invalid. Callbacks must cooperate with cancellation.
+
+The runtime derives a context with `context.WithTimeout` for callback execution.
+An expired deadline produces `context.DeadlineExceeded` even if the callback
+returns nil. Failure handling follows the callback's `OnError` policy.
 
 Speculative joins and branch pruning are supported via `JoinSpec.Quorum` (integer
 threshold of successful branches) or `JoinSpec.CanMerge` (predicate over parent
@@ -127,7 +137,12 @@ paths. Keep large content externally and store references in S.
 ## Waiting and durable execution
 
 RegisterContinuation adapts a typed payload decoder and handler to persisted
-bytes. RegisterJSONContinuation uses JSON. Wait names that continuation.
+bytes. RegisterJSONContinuation uses JSON. Wait names that continuation and
+requires at least one declared target. Apply updates state; the next node decides
+control flow from that state. Multiple Wait targets create an activation in the
+same Apply commit; children can start after that commit.
+Decode and Clone must be side-effect-free, and callbacks used by shared Runners
+must be concurrency safe.
 Nil interface payloads and typed nil values retain their decoded Go semantics.
 ResumeInput identifies a specific wait using InvocationID and its original
 waiting CallID; both fields are required. Empty or mismatched CallIDs, duplicate
@@ -182,7 +197,12 @@ execution events. When a Store is provided, Fork creates the new run there. Call
 Recover to drive a persisted fork, or Resume the returned checkpoint without a
 Store. Observation begins with that explicit execution call. Completed runs
 cannot be resumed or forked; Recover can inspect terminal results without
-invoking callbacks.
+invoking callbacks. Advance rejects every terminal handle with ErrRunCompleted,
+with or without a Store and regardless of supplied inputs. A durable stale handle
+still fails its Store revision check first. After a successful Load, Recover validates
+the checkpoint identity and topology before exposing a handle; invalid data takes
+precedence over cancellation detected after Load. A valid post-load cancelled
+position can return a handle for later use, without executing callbacks.
 
 ```go
 store, err := sqlite.Open(ctx, "runs.db", checkpoint.JSON[State]{})
@@ -201,7 +221,8 @@ encodes S only; execution metadata is stored separately. Memory Store is in
 checkpoint/memory and requires an independent-copy Clone.
 
 Store.Commit(expectedRevision, Change[S]) atomically applies changed records.
-Custom Stores implement Create, Load, LoadHeader, Commit and single-run Delete.
+Custom Stores implement Create, Load, LoadHeader, Commit and single-run Delete;
+all methods must be safe for concurrent calls across executions and runners.
 LoadHeader returns only revision and scheduling metadata for warm-handle conflict
 checks; it must not materialize invocation states. ErrConflict
 guarantees no write; other Store errors can leave the outcome uncertain. Reload
@@ -216,12 +237,19 @@ repeated Delete calls do not form an atomic batch.
 Nodes, Merge and Apply receive persisted CallInfo.CallID. Use namespace + RunID +
 CallID for idempotency or effect reconciliation. Crash/cancellation can replay a
 pending callback. This is at-least-once; external effects are application owned.
-Clone and Decode should have no effects. [The effect example](examples/effects)
+Clone and Decode must have no effects. [The effect example](examples/effects)
 shows transactional receipts.
+
+Local branch error messages remain in their activation until it settles; terminal
+failure messages and panic stacks remain in the terminal checkpoint. Return errors
+whose text is suitable for persistence and logging. SQLite stores this metadata as
+plain JSON independently of StateCodec; encrypting S alone does not encrypt it.
 
 FailInvocation is the default: local failure can produce nil error and
 StatusCompletedWithFailures. FailGroup removes its activation subtree; at the
-root it becomes FailExecution. FailExecution records a terminal Failure; Recover
+root it becomes FailExecution. When a nested group fails, the parent branch retains
+the original error message for its enclosing Merge. FailExecution records a
+terminal Failure; Recover
 returns ErrRunFailed and its stored message. Invalid transitions, Clone errors
 and cancellation do not create a failed terminal. Callback panics become
 PanicError; Store/codec panics are outside this boundary.
@@ -412,6 +440,20 @@ package. [Performance and graph-level benchmark guide](docs/performance.md) reco
 reproducible measurements and known trade-offs; it does not claim application-level
 production capacity.
 
+## Format-8 migration
+
+Replace raw `Transition` field literals and mutations with the control-flow
+constructors. Wait now requires its first target; continuation Apply remains a
+state-update handler. Rename `Branch.Timeout` and `ActivationBranch.Timeout` to
+`EntryTimeout`. The override covers each attempt of the entry callback only and
+clears on any successfully committed entry transition.
+
+Format 8 rejects format 7 and older checkpoints; there is no compatibility runner
+or automatic migration. Finish existing runs with their matching runtime and use
+a new database for new executions. SQLite remains at schema 2, while activation
+payloads use the renamed entry-timeout field. The earlier migrations below are
+historical descriptions of their respective formats.
+
 ## Format-7 migration
 
 Checkpoint branch metadata now lives in the ordered `ActivationGroup.Branches`
@@ -482,8 +524,8 @@ capture their `(execution, result, error)` returns. Read `result.Header` and
 handle with `execution.Advance(...)` for another in-process call. `Runner.Fork`
 now returns `(checkpoint, error)` and no longer accepts Options: explicitly call
 Recover to drive a persisted fork, or Resume to drive an in-memory fork. Custom
-Store implementations must add `LoadHeader` while leaving checkpoint encoding
-intact.
+Store implementations must add `LoadHeader` and follow the current checkpoint
+format and ownership contract.
 
 Resume inputs now require `CallID`, obtained from the original waiting
 invocation in `Pending()` or a checkpoint. Update every input producer, including

@@ -20,8 +20,7 @@ func TestCheckInvocationBudget(t *testing.T) {
 		{name: "already above limit", current: 4, additional: 1, maximum: 3, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			checkpoint := &Checkpoint[int]{Invocations: make([]Invocation[int], test.current)}
-			err := checkInvocationBudget(checkpoint, test.additional, test.maximum)
+			err := (invocationBudget{retained: test.current, maximum: test.maximum}).check(test.additional)
 			if errors.Is(err, errInvocationBudget) != test.wantErr {
 				t.Fatalf("checkInvocationBudget(%d, %d, %d) = %v", test.current, test.additional, test.maximum, err)
 			}

@@ -92,8 +92,8 @@ func TestDynamicBranchTimeoutOverride(t *testing.T) {
 	g := graph.New[int]("dispatch")
 	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
 		return graph.FanOut(parent,
-			graph.Branch[int]{Target: "worker", State: 10, Timeout: 500 * time.Millisecond},
-			graph.Branch[int]{Target: "worker", State: 20, Timeout: 20 * time.Millisecond},
+			graph.Branch[int]{Target: "worker", State: 10, EntryTimeout: 500 * time.Millisecond},
+			graph.Branch[int]{Target: "worker", State: 20, EntryTimeout: 20 * time.Millisecond},
 		), nil
 	})
 	if err := g.AddNode(graph.NodeSpec[int]{
@@ -240,8 +240,8 @@ func TestTimeoutPersistenceWithSQLite(t *testing.T) {
 	g := graph.New[int]("dispatch")
 	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
 		return graph.FanOut(parent,
-			graph.Branch[int]{Target: "worker", State: 10, Timeout: 500 * time.Millisecond},
-			graph.Branch[int]{Target: "worker", State: 20, Timeout: 25 * time.Millisecond},
+			graph.Branch[int]{Target: "worker", State: 10, EntryTimeout: 500 * time.Millisecond},
+			graph.Branch[int]{Target: "worker", State: 20, EntryTimeout: 25 * time.Millisecond},
 		), nil
 	})
 	if err := g.AddNode(graph.NodeSpec[int]{
@@ -316,8 +316,8 @@ func TestTimeoutPersistenceWithSQLite(t *testing.T) {
 	if failedBranch.InvocationID != failedInv.ID || failedBranch.Error != context.DeadlineExceeded.Error() {
 		t.Fatalf("persisted branch error mismatch: %+v", failedBranch)
 	}
-	if failedBranch.Timeout != 25*time.Millisecond {
-		t.Fatalf("persisted branch timeout mismatch: got %v, want 25ms", failedBranch.Timeout)
+	if failedBranch.EntryTimeout != 25*time.Millisecond {
+		t.Fatalf("persisted branch timeout mismatch: got %v, want 25ms", failedBranch.EntryTimeout)
 	}
 
 	// Replay recovery

@@ -185,7 +185,7 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 		}},
 		{"missing child", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].InvocationID = "i99" }},
 		{"undeclared branch target", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Target = "missing" }},
-		{"negative branch timeout", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Timeout = -1 }},
+		{"negative branch timeout", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].EntryTimeout = -1 }},
 		{"error on non-failed branch", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Error = "stale" }},
 		{"child belongs to another group", func(s *Checkpoint[int]) { _, child := invocation(s, childIDs[0]); child.GroupID = "g99" }},
 		{"child index mismatch", func(s *Checkpoint[int]) { _, child := invocation(s, childIDs[0]); child.BranchIndex = 1 }},
