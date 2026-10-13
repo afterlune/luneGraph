@@ -20,6 +20,9 @@
 
 ### API and execution changes
 
+- Separate scheduler decisions from callback preparation, worker lifecycle, and
+  checkpoint submission inside the executor. Public APIs, checkpoint format 8,
+  callback ordering and recovery contracts remain unchanged.
 - Seal Transition fields and require construction through control-flow helpers.
   Wait now requires its first target; continuation Apply remains state-only.
 - Rename Branch.Timeout and ActivationBranch.Timeout to EntryTimeout. It covers

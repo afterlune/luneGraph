@@ -22,6 +22,55 @@ go test -run '^$' -bench '^BenchmarkCheckpointCopyInto$' -benchmem -benchtime=30
 go test -run '^$' -bench '^(BenchmarkJSONCheckpointEncoding|BenchmarkCheckpointCAS|BenchmarkSQLiteReopenRecover)$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' ./checkpoint/...
 ```
 
+## Scheduler responsibility separation
+
+Compared clean base `96cda22` with the executor organization change on
+2026-10-13, Windows/amd64, Go 1.26.5, AMD Ryzen 7 6800H. Callback preparation,
+worker lifecycle and checkpoint submission now have separate files; the driver
+retains admission, cancellation, budgets and scheduling decisions. No public API
+or checkpoint format changes are involved.
+
+These benchmarks ran serially, outside test/race workloads, with three 300 ms
+samples at CPU 1 and 8. Cells show median `ns/op / B/op / allocs/op`:
+
+| Workload | CPU | Base | Candidate |
+| --- | ---: | ---: | ---: |
+| 16-step sequential | 1 | 29,520 / 4,136 / 81 | 28,769 / 4,184 / 81 |
+| 16-step sequential | 8 | 31,039 / 7,640 / 81 | 33,096 / 7,688 / 81 |
+| Width-32 static fan-out/join | 1 | 217,033 / 57,464 / 292 | 216,799 / 57,424 / 292 |
+| Width-32 static fan-out/join | 8 | 266,470 / 61,811 / 299 | 268,809 / 61,157 / 299 |
+| Width-32 dynamic FanOut | 1 | 140,542 / 56,656 / 257 | 155,268 / 56,616 / 257 |
+| Width-32 dynamic FanOut | 8 | 206,477 / 61,012 / 264 | 207,903 / 60,374 / 264 |
+| Width-128 dynamic FanOut | 1 | 672,617 / 212,664 / 753 | 685,180 / 212,624 / 753 |
+| Width-128 dynamic FanOut | 8 | 852,564 / 217,055 / 760 | 861,476 / 216,375 / 760 |
+| Durable width-32 Memory fan-out/join | 1 | 563,006 / 409,642 / 1,726 | 768,311 / 409,595 / 1,726 |
+| Durable width-32 Memory fan-out/join | 8 | 762,333 / 414,276 / 1,735 | 893,764 / 413,562 / 1,735 |
+
+Allocation counts stayed unchanged. Sequential execution uses 48 more bytes per
+drive because the worker pool owns more fields than the former WaitGroup;
+fan-out uses less memory because worker closures capture the pool rather than
+several independent values. CPU-8 byte differences also include scheduling
+variation.
+
+Some initial candidate medians were higher. Repeated three-sample comparisons
+at 1 s per sample used a detached clean baseline checkout and the candidate,
+serially. CPU-8 sequential medians reversed direction (36,576 versus 31,835
+ns/op). Durable Memory CPU-1 medians also reversed (882,293 versus 663,750 ns/op),
+with overlapping ranges of 695,603–884,562 versus 619,751–737,017 ns/op.
+The repeat runs do not establish a stable latency regression or improvement;
+the initial higher medians remain reported above rather than discarded.
+
+Reproduce in both checkouts:
+
+```sh
+go test -run '^$' -bench '^BenchmarkSequentialExecution$/^steps=16$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^Benchmark(FanoutJoin|DynamicFanOut)$/^width=(32|128)$/^concurrency=default$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
+go test -run '^$' -bench '^BenchmarkDurableFanoutJoin$/^storage=memory$/^width=32$/^concurrency=default$' -benchmem -benchtime=300ms -count=3 -cpu '1,8' .
+```
+
+Repeat the sequential and durable commands with `-benchtime=1s` when reviewing
+the timing variation.
+
 ## Format 8 — control-flow and recovery contract
 
 Compared clean base `e4a39a9` with the format-8 implementation on 2026-10-13,
