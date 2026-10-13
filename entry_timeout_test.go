@@ -200,7 +200,7 @@ func TestEntryTimeoutEndsAtAcceptedEntryOutcome(t *testing.T) {
 }
 
 func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
-	for _, reason := range []string{"budget", "commit", "clone", "invalid"} {
+	for _, reason := range []string{"budget", "commit", "clone before callback", "invalid"} {
 		t.Run(reason, func(t *testing.T) {
 			ctx := context.Background()
 			g := graph.New[int]("dispatch")
@@ -264,7 +264,7 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 				opts.MaxInvocations = 2
 			case "commit":
 				store.reject = true
-			case "clone":
+			case "clone before callback":
 				cloneFails = true
 			case "invalid":
 				invalid = true
@@ -280,6 +280,13 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 			if reason == "commit" && !errors.Is(err, graph.ErrConflict) {
 				t.Fatal(err)
 			}
+			wantCalls := 1
+			if reason == "clone before callback" {
+				wantCalls = 0
+			}
+			if len(callIDs) != wantCalls {
+				t.Fatalf("rejected entry ran %d callbacks, want %d", len(callIDs), wantCalls)
+			}
 			cloneFails, invalid = false, false
 			if !reflect.DeepEqual(mustCheckpoint(e), before) {
 				t.Fatal("rejection changed accepted entry metadata")
@@ -288,6 +295,9 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 			if err != nil || result.Status != graph.StatusBudget || !store.cleared {
 				t.Fatalf("retry: %+v %v", result, err)
 			}
+			if len(callIDs) != wantCalls+1 {
+				t.Fatalf("retry ran %d callbacks, want %d", len(callIDs), wantCalls+1)
+			}
 			for _, id := range callIDs {
 				if id != before.Invocations[1].CallID {
 					t.Fatalf("entry identity changed: %v", callIDs)
@@ -295,6 +305,115 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 			}
 			if _, result, err = runner.Recover(ctx, "entry-retry", nil, store, graph.Options{}); err != nil || result.Status != graph.StatusCompleted {
 				t.Fatalf("finish: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestEntryFanOutCloneFailureRetainsOverrideAndReplaysCallback(t *testing.T) {
+	for _, storage := range []string{"memory", "sqlite"} {
+		t.Run(storage, func(t *testing.T) {
+			ctx := context.Background()
+			g := graph.New[int]("dispatch")
+			var callIDs []string
+			node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+				return graph.FanOut(s, graph.Branch[int]{Target: "entry", State: s, EntryTimeout: 30 * time.Minute}), nil
+			})
+			if err := g.AddNode(graph.NodeSpec[int]{Name: "entry", Timeout: time.Hour, Run: func(ctx context.Context, call graph.CallInfo, s int) (graph.Transition[int], error) {
+				callIDs = append(callIDs, call.CallID)
+				if err := checkCallbackDeadline(ctx, true); err != nil {
+					return graph.Transition[int]{}, err
+				}
+				return graph.FanOut(s,
+					graph.Branch[int]{Target: "leaf", State: 1},
+					graph.Branch[int]{Target: "leaf", State: 2}), nil
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"leaf", "finish"} {
+				node(t, g, name, func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+					return graph.CompleteBranch(s), nil
+				})
+			}
+			node(t, g, "done", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+				return graph.EndExecution(s), nil
+			})
+			for _, join := range []graph.JoinSpec[int]{
+				{Name: "inner", From: "entry", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+					return branches[0].State + branches[1].State, nil
+				}},
+				{Name: "outer", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+					return branches[0].State, nil
+				}},
+			} {
+				if err := g.AddJoin(join); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, pair := range [][2]string{{"dispatch", "entry"}, {"entry", "leaf"}, {"inner", "finish"}, {"outer", "done"}} {
+				edge(t, g, pair[0], pair[1])
+			}
+			boom := errors.New("second branch clone failed")
+			injectFailure := false
+			var clonedBranches []int
+			faults := 0
+			runner, err := g.Compile(graph.Config[int]{MachineID: "entry-fanout-clone", Clone: func(s int) (int, error) {
+				if injectFailure && (s == 1 || s == 2) {
+					clonedBranches = append(clonedBranches, s)
+					if s == 2 {
+						faults++
+						return 0, boom
+					}
+				}
+				return s, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw graph.Store[int] = newMemoryStore(t)
+			if storage == "sqlite" {
+				s, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "runs.db"), checkpoint.JSON[int]{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close() })
+				raw = s
+			}
+			store := &entryTrackingStore{Store: raw}
+			opts := graph.Options{MaxSteps: 1, MaxConcurrency: 1}
+			e, first, err := runner.Start(ctx, "entry-clone", 0, store, opts)
+			if err != nil || first.Status != graph.StatusBudget {
+				t.Fatalf("dispatch: %+v %v", first, err)
+			}
+			before := mustCheckpoint(e)
+			persistedBefore, err := raw.Load(ctx, "entry-clone")
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalCallID := before.Invocations[1].CallID
+			injectFailure = true
+			result, err := e.Advance(ctx, nil, opts)
+			if !errors.Is(err, boom) || result.Status != graph.StatusFailed || len(callIDs) != 1 || faults != 1 || !reflect.DeepEqual(clonedBranches, []int{1, 2}) {
+				t.Fatalf("branch clone rejection: %+v %v calls=%v clones=%v faults=%d", result, err, callIDs, clonedBranches, faults)
+			}
+			injectFailure = false
+			persistedAfter, err := raw.Load(ctx, "entry-clone")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(mustCheckpoint(e), before) || !reflect.DeepEqual(persistedAfter, persistedBefore) || store.cleared || result.Header.Completed || result.Header.Failure != nil || result.Header.HadLocalFailures {
+				t.Fatal("branch clone rejection changed the accepted execution")
+			}
+			e, result, err = runner.Recover(ctx, "entry-clone", nil, store, opts)
+			if err != nil || result.Status != graph.StatusBudget || !store.cleared || !reflect.DeepEqual(callIDs, []string{originalCallID, originalCallID}) {
+				t.Fatalf("entry replay: %+v %v calls=%v cleared=%t", result, err, callIDs, store.cleared)
+			}
+			accepted := mustCheckpoint(e)
+			if len(accepted.Groups) != 2 || accepted.Groups[0].Branches[0].EntryTimeout != 0 || len(accepted.Groups[1].Branches) != 2 || len(accepted.Invocations) != 4 || before.Groups[0].Branches[0].EntryTimeout != 30*time.Minute {
+				t.Fatalf("accepted fan-out or old snapshot changed: %+v", accepted)
+			}
+			if _, result, err = runner.Recover(ctx, "entry-clone", nil, store, graph.Options{MaxConcurrency: 1}); err != nil || result.Status != graph.StatusCompleted || result.Final == nil || *result.Final != 3 || len(callIDs) != 2 {
+				t.Fatalf("finish: %+v %v calls=%v", result, err, callIDs)
 			}
 		})
 	}
