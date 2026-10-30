@@ -24,7 +24,7 @@ type slogObserver struct{ logger *slog.Logger }
 func (o *slogObserver) Observe(ctx context.Context, event graph.Event) {
 	level := slog.LevelDebug
 	switch event.Operation {
-	case graph.OperationStart, graph.OperationResume, graph.OperationRecover:
+	case graph.OperationStart, graph.OperationResume, graph.OperationRecover, graph.OperationAdvance:
 		level = slog.LevelInfo
 	}
 	if event.Err != nil {

@@ -38,7 +38,8 @@ snapshot replacement semantics.
 
 Delete removes every record of one run and reports checkpoint.ErrNotFound when
 missing. Callers ensure quiescence and own retention. Store deletion does not
-implement TTL, effects cleanup, or atomic multi-run deletion.
+implement TTL, effects cleanup, or atomic multi-run deletion. When wrapped for
+observation, single-run deletion emits OperationDelete.
 
 SQLite uses StateCodec[S]. Append must append to and not retain caller buffers;
 Unmarshal must return an independent state. Preserve all application-required

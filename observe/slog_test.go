@@ -17,7 +17,7 @@ import (
 func TestSlogLevelsAndMetadata(t *testing.T) {
 	var output bytes.Buffer
 	observer := observe.NewSlog(slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	for _, operation := range []graph.EventOperation{graph.OperationStart, graph.OperationResume, graph.OperationRecover, graph.OperationNode, graph.OperationJoin, graph.OperationDecode, graph.OperationApply, graph.OperationCreate, graph.OperationLoad, graph.OperationCommit} {
+	for _, operation := range []graph.EventOperation{graph.OperationStart, graph.OperationResume, graph.OperationRecover, graph.OperationAdvance, graph.OperationNode, graph.OperationJoin, graph.OperationDecode, graph.OperationApply, graph.OperationCreate, graph.OperationLoad, graph.OperationCommit, graph.OperationDelete} {
 		for _, failed := range []bool{false, true} {
 			output.Reset()
 			event := graph.Event{Operation: operation, Phase: graph.PhaseFinished, OperationID: 7, RunID: "run", MachineID: "machine", InvocationID: "i1", CallID: "c2", Node: "worker/work", Continuation: "worker/input", Revision: 9, Time: time.Unix(123, 0), Duration: time.Second, Status: graph.StatusWaiting, Action: graph.ActionWait}
@@ -30,7 +30,7 @@ func TestSlogLevelsAndMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantLevel := "DEBUG"
-			if operation == graph.OperationStart || operation == graph.OperationResume || operation == graph.OperationRecover {
+			if operation == graph.OperationStart || operation == graph.OperationResume || operation == graph.OperationRecover || operation == graph.OperationAdvance {
 				wantLevel = "INFO"
 			}
 			if failed {

@@ -27,7 +27,9 @@
   Wait now requires its first target; continuation Apply remains state-only.
 - Rename Branch.Timeout and ActivationBranch.Timeout to EntryTimeout. It covers
   each attempt of the entry callback only and clears atomically on every accepted
-  successful entry transition, including waiting and nested fan-out.
+  successful entry transition, including waiting and nested fan-out. Rejected entry
+  outcomes (including branch clone failures, budget exhaustion, and commit conflicts)
+  retain the override and CallID for replay.
 - Advance rejects all terminal handles consistently, with or without a Store.
   Recover validates loaded positions before returning a handle, including when
   cancellation occurs after Load. Pending zero-child activations are valid recovery

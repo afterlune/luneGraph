@@ -62,7 +62,7 @@ Advance detects a committed remote revision through `LoadHeader` and returns
 - Merge receives a Clone of the activation parent state followed by full branch
   results as `[]BranchResult[S]` in activation order. Each result reports
   `Index`, `Target`, `Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`,
-  `b.Failed()`, `b.Ended()`). Healthy states can be extracted via `BranchValues(branches)`.
+  `b.Failed()`, `b.Ended()`, `b.Resolved()`, `b.Pending()`). Healthy states can be extracted via `BranchValues(branches)`.
   Ended branches (`EndBranch`) and failed branches (`FailInvocation`) do not trigger
   premature failure of the group; parents can inspect errors and handle partial failures
   tolerantly. Nested task groups and loops are allowed.
@@ -239,9 +239,9 @@ Apply uses the suspending node's policy.
   original call returns its Go error; Recover returns ErrRunFailed with the
   recorded message, without reconstructing the original error type.
 - Callback/Clone panics become PanicError; execution failures retain panic stacks.
-  Invalid transitions, cancellation and copy errors preserve the last committed
-  checkpoint without a terminal Failure. Store/codec panics are outside the
-  callback panic boundary.
+  Invalid transitions produce TransitionError; invalid transitions, cancellation and
+  copy errors preserve the last committed checkpoint without a terminal Failure.
+  Store/codec panics are outside the callback panic boundary.
 
 Branch error text, terminal Failure.Message and Failure.PanicStack are durable
 metadata. Applications must return errors whose messages are suitable for
@@ -383,7 +383,8 @@ They can be concurrent and must return promptly. Delivery panics are isolated;
 blocking observers still delay work. Nil observation has no session/ledger/clock
 reads. Started/Finished pair callback work; Resolved marks its individual
 committed/discarded/unknown result. `OperationAdvance` identifies live-handle
-calls separately from checkpoint `OperationResume`. OperationCommit replaces CompareAndSwap.
+calls separately from checkpoint `OperationResume`, and `OperationDelete`
+identifies single-run Store deletion. OperationCommit replaces CompareAndSwap.
 OperationID correlates one process-local public call; RunID/CallID correlate
 replay. Durations exclude their own delivery. Err can contain application text
 and must be treated read-only.

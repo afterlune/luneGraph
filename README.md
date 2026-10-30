@@ -80,7 +80,7 @@ states; zero and one branch still pass through a normal activation and Merge.
 Merge receives a clone of the state saved by FanOut, then ordered branch
 outcomes as `[]BranchResult[S]`. Each `BranchResult` reports `Index`, `Target`,
 `Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`, `b.Failed()`,
-`b.Ended()`). Healthy values can be extracted directly using `BranchValues(branches)`.
+`b.Ended()`, `b.Resolved()`, `b.Pending()`). Healthy values can be extracted directly using `BranchValues(branches)`.
 This gives parent and Lead nodes full visibility into partial branch failures and
 ended tasks, supporting tolerant aggregation. Workers can dispatch nested tasks
 from the same declared graph; CompleteBranch returns to their immediate activation
@@ -310,13 +310,14 @@ graph edges so callbacks return and release their permits before successors run.
 Observer/ObserverFunc deliver synchronous concurrent metadata. Observers must
 return promptly; delivery panics are isolated. Finished does not mean committed:
 Resolved reports committed/discarded/unknown per callback. OperationCommit
-observes delta submission. `OperationAdvance` distinguishes a live-handle call
-from checkpoint `OperationResume`. Nil observation allocates no session or ledger.
+observes delta submission, `OperationAdvance` distinguishes a live-handle call
+from checkpoint `OperationResume`, and `OperationDelete` observes single-run Store
+deletion. Nil observation allocates no session or ledger.
 The observe package provides a slog adapter; events contain no application state
 or input bytes, but errors can contain application text.
 
-Builder.ExportMermaid returns `(string, error)` and rejects recursive mounts;
-Runner.ExportMermaid returns its flattened topology as a string. Generated IDs
+`Graph.ExportMermaid` (the builder) returns `(string, error)` and rejects recursive mounts;
+`Runner.ExportMermaid` returns its flattened topology as a string. Generated IDs
 are deterministic and independent of node names, and labels are escaped.
 
 ## Examples and verification
@@ -481,8 +482,8 @@ live-handle `Advance` from checkpoint `Resume` in observer events.
 
 Merge callbacks now receive `(ctx, call, parentState, branches []BranchResult[S])`.
 Update custom Merge signatures. Inspect individual branch outcomes via `b.OK()`,
-`b.Failed()`, `b.Ended()`, `b.Target` and `b.Error`, or use `BranchValues(branches)`
-to extract healthy states directly.
+`b.Failed()`, `b.Ended()`, `b.Resolved()`, `b.Pending()`, `b.Target`, `b.Node` and `b.Error`,
+or use `BranchValues(branches)` to extract healthy states directly.
 
 Format 6 rejects format-5 and older checkpoints; finish active runs with the
 matching runtime and use a new database for new executions. SQLite schema 2 and
