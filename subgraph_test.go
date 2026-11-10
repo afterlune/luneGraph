@@ -371,15 +371,15 @@ func TestSubgraphCompileRejectsInvalidComposition(t *testing.T) {
 	t.Run("qualified continuation collision", func(t *testing.T) {
 		root := graph.New[int]("worker")
 		child := newReturningChild(t)
-		if err := root.AddSubgraph("worker", child); err != nil {
-			t.Fatal(err)
-		}
 		decode := func(data []byte) (int, error) { return strconv.Atoi(string(data)) }
 		apply := func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) { return state + value, nil }
 		if err := graph.RegisterContinuation(root, "worker/add", decode, apply); err != nil {
 			t.Fatal(err)
 		}
 		if err := graph.RegisterContinuation(child, "add", decode, apply); err != nil {
+			t.Fatal(err)
+		}
+		if err := root.AddSubgraph("worker", child); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := root.Compile(graph.Config[int]{MachineID: "continuation-collision", Clone: func(v int) (int, error) { return v, nil }}); err == nil {

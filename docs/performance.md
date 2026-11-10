@@ -583,12 +583,23 @@ Compared clean baseline with the data-oriented design (DOD) and CPU profiling-dr
 | CanMerge speculative join | 20 | 57,469 / 14,844 / 87 | 26,710 / 14,122 / 67 | **18,560 ns / 9,641 B / 40 allocs** (**3.10x 提速**, -35.1% 内存, **-54.0% 分配**) |
 | Durable width-32 Memory Fanout | 20 | 717,246 / 414,182 / 1,734 | 531,848 / 409,602 / 1,726 | **265,945 ns / 382,081 B / 1,347 allocs** (**2.70x 提速**, **-22.3% 分配**) |
 | Warm Memory advance (32 waiters) | 20 | 19,907 / 4,422 / 28 | 12,434 / 4,422 / 28 | **3,237 ns / 3,159 B / 15 allocs** (**6.15x 提速**, -28.6% 内存, **-46.4% 分配**) |
-| Capacity Compile (128 nodes) | - | 130,077 / 117,734 / 562 | 95,567 / 120,787 / 445 | **95,567 / 120,787 / 445** (**-26.5% latency**, **-20.8% allocs**) |
-| Capacity Compile (1024 nodes) | - | 1,230,021 / 961,403 / 4,175 | 766,880 / 983,144 / 3,167 | **766,880 / 983,144 / 3,167** (**-37.7% latency**, **-24.1% allocs**) |
-| Capacity Compile (8192 nodes) | - | 11,560,422 / 7,688,449 / 33,053 | 7,688,854 / 9,660,378 / 24,902 | **7,688,854 / 9,660,378 / 24,902** (**-33.5% latency**, **-24.7% allocs**) |
+| Capacity Compile (128 nodes) | - | 130,077 / 117,734 / 562 | 95,567 / 120,787 / 445 | **70,162 / 129,512 / 327** (**-46.1% latency**, **-41.8% allocs**) |
+| Capacity Compile (1024 nodes) | - | 1,230,021 / 961,403 / 4,175 | 766,880 / 983,144 / 3,167 | **696,903 / 1,052,138 / 2,159** (**-43.3% latency**, **-48.3% allocs**) |
+| Capacity Compile (8192 nodes) | - | 11,560,422 / 7,688,449 / 33,053 | 7,688,854 / 9,660,378 / 24,902 | **6,693,256 / 10,241,392 / 16,748** (**-42.1% latency**, **-49.3% allocs**) |
+| Nested Subgraph Compile & Run | 20 | 12,305 / 12,344 / 114 | 4,684 / 6,502 / 55 | **4,554 ns / 7,584 B / 49 allocs** (**2.70x 提速**, **-57.0% 分配**) |
 | Capacity Groups (128 groups) | 8 | 10,874,664 / 7,186,537 / 33,207 | 7,883,724 / 6,596,966 / 30,915 | **7,883,724 / 6,596,966 / 30,915** (**-27.5% latency**, **-6.9% allocs**) |
 | SingleRunCheckpoint cold-recover (2048 waiters) | 1 | 5,392,910 B / 26,626 allocs | 3,960,453 B / 22,531 allocs | **3,960,453 B / 22,531 allocs** (**-26.6% heap bytes**, **-15.4% allocs**) |
 | Observation fanout (noop observer) | - | 324 allocs/op | 288 allocs/op | **288 allocs/op** (**-11.1% allocs**) |
+
+### Rust-style flat node vector, integer edges, and immediate subgraph flattening
+
+Eliminated all builder pointer self-references and recursive structures (`subgraphMount.graph *Graph[S]`) by adopting a contiguous flat node vector (`vertices []Vertex[S]`), integer-index directed edges (`Edge{From, To int}`), and immediate subgraph flattening with qualified index ranges (`MountInfo`).
+
+Key outcomes:
+1. **0 Call-Stack Recursion & 0 Pointer Cycles**: Complete structural elimination of self-referential graph pointer trees.
+2. **Compile-time allocation collapse**: 8,192-node graph compilation dropped from 24,902 allocs to 16,748 allocs (-32.7% allocs), compilation latency reduced to 6.69 ms.
+3. **Nested subgraph compile & run**: Reduced to 4.55 µs and 49 allocs (from 114 allocs in baseline, -57.0%).
+4. **Execution hot-path fidelity**: All execution benchmarks retain the zero-allocation per-step invariant (2 allocs/op across 1, 16, and 128 sequential steps).
 
 ## Repository checks
 

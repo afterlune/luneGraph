@@ -9,225 +9,171 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-type childMount struct {
-	name string
-	idx  int
-}
-
-type componentNode[S any] struct {
-	graph        *Graph[S]
-	prefix       string
-	parentIdx    int
-	mountStart   int
-	mountCount   int
-	returnTarget string
-	mounted      bool
-}
-
-func expand[S any](root *Graph[S]) (model.Machine[S], error) {
-	if root == nil {
+func expand[S any](g *Graph[S]) (model.Machine[S], error) {
+	if g == nil {
 		return model.Machine[S]{}, fmt.Errorf("subgraph at %q is nil", "")
 	}
-
-	arena := []componentNode[S]{
-		{graph: root, prefix: "", parentIdx: -1},
+	if g.hasRecursiveMount {
+		return model.Machine[S]{}, fmt.Errorf("recursive subgraph reference at %q", g.recursiveMountName)
 	}
-	var mounts []childMount
 
-	for i := 0; i < len(arena); i++ {
-		g := arena[i].graph
-		if g == nil {
-			return model.Machine[S]{}, fmt.Errorf("subgraph at %q is nil", arena[i].prefix)
+	for _, m := range g.mounts {
+		if m.EntryIdx < 0 || m.ChildStart < 0 || m.ChildStart > m.ChildEnd {
+			return model.Machine[S]{}, fmt.Errorf("subgraph %q is nil", m.Name)
 		}
-		subList := make([]subgraphMount[S], len(g.subgraphs))
-		copy(subList, g.subgraphs)
-		slices.SortFunc(subList, func(a, b subgraphMount[S]) int {
-			return strings.Compare(a.name, b.name)
-		})
+	}
 
-		arena[i].mountStart = len(mounts)
-		arena[i].mountCount = len(subList)
+	entryIdx := g.entryVertexIdx()
+	if entryIdx < 0 || entryIdx >= len(g.vertices) {
+		return model.Machine[S]{}, fmt.Errorf("entry vertex %q in graph %q is not registered", g.entry, "")
+	}
+	if g.vertices[entryIdx].Kind == VertexJoin {
+		return model.Machine[S]{}, fmt.Errorf("entry %q in graph %q is a join", g.entry, "")
+	}
+	rootEntry := g.vertices[entryIdx].Name
 
-		for _, sub := range subList {
-			if sub.graph == nil {
-				return model.Machine[S]{}, fmt.Errorf("subgraph %q is nil", sub.name)
+	// Validate mount edges
+	mountOutgoing := make(map[string][]string)
+	for _, me := range g.mountEdges {
+		mountOutgoing[me.from] = append(mountOutgoing[me.from], me.to)
+		if len(mountOutgoing[me.from]) > 1 {
+			return model.Machine[S]{}, fmt.Errorf("mounted graph %q may have at most one outgoing edge", me.from)
+		}
+	}
+
+	// Validate edges
+	for _, e := range g.edges {
+		if e.From < 0 || e.From >= len(g.vertices) {
+			return model.Machine[S]{}, fmt.Errorf("unknown edge source in graph %q", "")
+		}
+		if e.To < 0 || e.To >= len(g.vertices) {
+			return model.Machine[S]{}, fmt.Errorf("unknown edge target in graph %q", "")
+		}
+	}
+
+	// Validate joins and count outgoing edges
+	joinBySource := make(map[string]string)
+	joinOutgoing := make(map[int]int)
+	for _, e := range g.edges {
+		if g.vertices[e.From].Kind == VertexJoin {
+			joinOutgoing[e.From]++
+			if joinOutgoing[e.From] > 1 {
+				return model.Machine[S]{}, fmt.Errorf("join %q must have at most one outgoing edge", g.vertices[e.From].Name)
 			}
-			childPrefix := qualify(arena[i].prefix, sub.name)
-			for p := i; p != -1; p = arena[p].parentIdx {
-				if arena[p].graph == sub.graph {
-					return model.Machine[S]{}, fmt.Errorf("recursive subgraph reference at %q", childPrefix)
+		}
+	}
+
+	// Vertex name collision check
+	vertexNames := make(map[string]string)
+	for _, v := range g.vertices {
+		if prev, exists := vertexNames[v.Name]; exists {
+			return model.Machine[S]{}, fmt.Errorf("flattened vertex name %q collides between %s and vertex %q", v.Name, prev, v.Name)
+		}
+		vertexNames[v.Name] = v.Name
+	}
+
+	for _, v := range g.vertices {
+		if v.Kind == VertexJoin {
+			fromIdx := g.findVertexIdx(v.Join.From)
+			if fromIdx < 0 || g.vertices[fromIdx].Kind != VertexNode {
+				return model.Machine[S]{}, fmt.Errorf("join %q has unknown fan-out source %q", v.Join.Name, v.Join.From)
+			}
+			if prev, exists := joinBySource[v.Join.From]; exists {
+				return model.Machine[S]{}, fmt.Errorf("fan-out %q has more than one join (%s, %s)", v.Join.From, prev, v.Join.Name)
+			}
+			joinBySource[v.Join.From] = v.Join.Name
+		}
+	}
+
+	// Continuation name collision check
+	continuationNames := make(map[string]string)
+	for _, c := range g.continuations {
+		if prev, exists := continuationNames[c.Key]; exists {
+			return model.Machine[S]{}, fmt.Errorf("flattened continuation name %q collides with %s", c.Key, prev)
+		}
+		continuationNames[c.Key] = fmt.Sprintf("continuation %q", c.Key)
+	}
+
+	// Build target maps for scopes
+	type scopeTargets struct {
+		targets       map[string]string
+		continuations map[string]string
+	}
+	scopeMaps := make(map[string]*scopeTargets)
+	getScope := func(scope string) *scopeTargets {
+		st, ok := scopeMaps[scope]
+		if !ok {
+			st = &scopeTargets{
+				targets:       make(map[string]string),
+				continuations: make(map[string]string),
+			}
+			scopeMaps[scope] = st
+		}
+		return st
+	}
+
+	for _, v := range g.vertices {
+		st := getScope(v.Scope)
+		localName := v.Name
+		if v.Scope != "" {
+			localName = strings.TrimPrefix(v.Name, v.Scope+"/")
+		}
+		st.targets[localName] = v.Name
+	}
+
+	for _, m := range g.mounts {
+		if m.EntryIdx >= 0 && m.EntryIdx < len(g.vertices) {
+			entryName := g.vertices[m.EntryIdx].Name
+			parentScope := ""
+			localMountName := m.Name
+			if idx := strings.LastIndex(m.Name, "/"); idx >= 0 {
+				parentScope = m.Name[:idx]
+				localMountName = m.Name[idx+1:]
+			}
+			st := getScope(parentScope)
+			st.targets[localMountName] = entryName
+		}
+	}
+
+	for _, c := range g.continuations {
+		for scope, st := range scopeMaps {
+			if scope == "" {
+				if !strings.Contains(c.Key, "/") {
+					st.continuations[c.Key] = c.Key
 				}
+			} else if strings.HasPrefix(c.Key, scope+"/") {
+				localKey := strings.TrimPrefix(c.Key, scope+"/")
+				st.continuations[localKey] = c.Key
 			}
-			childIdx := len(arena)
-			mounts = append(mounts, childMount{name: sub.name, idx: childIdx})
-			arena = append(arena, componentNode[S]{
-				graph:     sub.graph,
-				prefix:    childPrefix,
-				parentIdx: i,
-			})
 		}
-	}
-
-	rootEntry, err := componentEntry(arena, mounts, 0)
-	if err != nil {
-		return model.Machine[S]{}, err
 	}
 
 	type rawNode struct {
 		spec         model.NodeSpec[S]
-		mounted      bool
 		returnTarget string
+		mounted      bool
 	}
 	var allNodes []rawNode
 	var allJoins []model.JoinSpec[S]
-	var allContinuations []model.CompiledContinuation[S]
-	type rawEdge struct {
-		from string
-		to   string
-	}
-	var allEdges []rawEdge
 
-	vertices := make(map[string]string)
-	continuationNames := make(map[string]string)
-	joinBySource := make(map[string]string)
-
-	for i := 0; i < len(arena); i++ {
-		c := &arena[i]
-
-		targets := make(map[string]string, len(c.graph.nodes)+len(c.graph.joins)+c.mountCount)
-		for _, n := range c.graph.nodes {
-			targets[n.Name] = qualify(c.prefix, n.Name)
-		}
-		for _, j := range c.graph.joins {
-			targets[j.Name] = qualify(c.prefix, j.Name)
-		}
-		for m := c.mountStart; m < c.mountStart+c.mountCount; m++ {
-			entry, err := componentEntry(arena, mounts, mounts[m].idx)
-			if err != nil {
-				return model.Machine[S]{}, err
+	for _, v := range g.vertices {
+		if v.Kind == VertexNode {
+			run := v.Node.Run
+			if st, ok := scopeMaps[v.Scope]; ok && (len(st.targets) > 0 || len(st.continuations) > 0) {
+				run = rewriteNode(v.Node.Run, st.targets, st.continuations)
 			}
-			targets[mounts[m].name] = entry
-		}
-
-		continuationTargets := make(map[string]string, len(c.graph.continuations))
-		for _, cont := range c.graph.continuations {
-			continuationTargets[cont.Key] = qualify(c.prefix, cont.Key)
-		}
-
-		sortedNodes := make([]model.NodeSpec[S], len(c.graph.nodes))
-		copy(sortedNodes, c.graph.nodes)
-		slices.SortFunc(sortedNodes, func(a, b model.NodeSpec[S]) int { return strings.Compare(a.Name, b.Name) })
-
-		needsRewrite := c.prefix != "" || c.mountCount != 0
-		for _, nodeSpec := range sortedNodes {
-			qualified := qualify(c.prefix, nodeSpec.Name)
-			if prev, exists := vertices[qualified]; exists {
-				return model.Machine[S]{}, fmt.Errorf("flattened vertex name %q collides between %s and node %q", qualified, prev, nodeSpec.Name)
-			}
-			vertices[qualified] = fmt.Sprintf("node %q", nodeSpec.Name)
-
-			run := nodeSpec.Run
-			if needsRewrite {
-				run = rewriteNode(nodeSpec.Run, targets, continuationTargets)
-			}
-			nodeSpec.Name = qualified
-			nodeSpec.Run = run
 			allNodes = append(allNodes, rawNode{
-				spec:         nodeSpec,
-				mounted:      c.mounted,
-				returnTarget: c.returnTarget,
+				spec: model.NodeSpec[S]{
+					Name:    v.Name,
+					Run:     run,
+					OnError: v.Node.OnError,
+					Timeout: v.Node.Timeout,
+				},
+				returnTarget: v.ReturnTarget,
+				mounted:      v.Mounted,
 			})
-		}
-
-		sortedJoins := make([]model.JoinSpec[S], len(c.graph.joins))
-		copy(sortedJoins, c.graph.joins)
-		slices.SortFunc(sortedJoins, func(a, b model.JoinSpec[S]) int { return strings.Compare(a.Name, b.Name) })
-
-		for _, joinSpec := range sortedJoins {
-			if !c.graph.isNode(joinSpec.From) {
-				return model.Machine[S]{}, fmt.Errorf("join %q has unknown fan-out source %q", joinSpec.Name, joinSpec.From)
-			}
-			qualified := qualify(c.prefix, joinSpec.Name)
-			if prev, exists := vertices[qualified]; exists {
-				return model.Machine[S]{}, fmt.Errorf("flattened vertex name %q collides between %s and join %q", qualified, prev, joinSpec.Name)
-			}
-			vertices[qualified] = fmt.Sprintf("join %q", joinSpec.Name)
-
-			sourceTarget := targets[joinSpec.From]
-			if _, exists := joinBySource[sourceTarget]; exists {
-				return model.Machine[S]{}, fmt.Errorf("fan-out %q has more than one join", sourceTarget)
-			}
-			joinBySource[sourceTarget] = qualified
-			joinSpec.Name = qualified
-			joinSpec.From = sourceTarget
-			allJoins = append(allJoins, joinSpec)
-		}
-
-		sortedConts := make([]model.CompiledContinuation[S], len(c.graph.continuations))
-		copy(sortedConts, c.graph.continuations)
-		slices.SortFunc(sortedConts, func(a, b model.CompiledContinuation[S]) int { return strings.Compare(a.Key, b.Key) })
-
-		for _, cont := range sortedConts {
-			qualified := continuationTargets[cont.Key]
-			if prev, exists := continuationNames[qualified]; exists {
-				return model.Machine[S]{}, fmt.Errorf("flattened continuation name %q collides with %s", qualified, prev)
-			}
-			continuationNames[qualified] = fmt.Sprintf("continuation %q", cont.Key)
-			allContinuations = append(allContinuations, model.CompiledContinuation[S]{
-				Key:  qualified,
-				Cont: cont.Cont,
-			})
-		}
-
-		childOutgoing := make(map[string][]string)
-		joinOutgoing := make(map[string][]string)
-		for _, e := range c.graph.edges {
-			if c.graph.isSubgraph(e.from) {
-				childOutgoing[e.from] = append(childOutgoing[e.from], e.to)
-			} else if c.graph.isJoin(e.from) {
-				joinOutgoing[e.from] = append(joinOutgoing[e.from], e.to)
-			}
-		}
-
-		for m := c.mountStart; m < c.mountStart+c.mountCount; m++ {
-			subName := mounts[m].name
-			outs := childOutgoing[subName]
-			if len(outs) > 1 {
-				return model.Machine[S]{}, fmt.Errorf("subgraph %q must have at most one outgoing edge", subName)
-			}
-			childComp := &arena[mounts[m].idx]
-			childComp.mounted = true
-			if len(outs) == 1 {
-				local := outs[0]
-				mapped, exists := targets[local]
-				if !exists {
-					return model.Machine[S]{}, fmt.Errorf("subgraph %q returns to unknown vertex %q", subName, local)
-				}
-				childComp.returnTarget = mapped
-			} else {
-				childComp.returnTarget = ""
-			}
-		}
-
-		for _, j := range c.graph.joins {
-			if len(joinOutgoing[j.Name]) > 1 {
-				return model.Machine[S]{}, fmt.Errorf("join %q must have at most one outgoing edge", j.Name)
-			}
-		}
-
-		for _, e := range c.graph.edges {
-			if c.graph.isSubgraph(e.from) {
-				continue
-			}
-			qFrom, ok := targets[e.from]
-			if !ok {
-				return model.Machine[S]{}, fmt.Errorf("unknown edge source %q in graph %q", e.from, c.prefix)
-			}
-			qTo, ok := targets[e.to]
-			if !ok {
-				return model.Machine[S]{}, fmt.Errorf("unknown edge target %q in graph %q", e.to, c.prefix)
-			}
-			allEdges = append(allEdges, rawEdge{from: qFrom, to: qTo})
+		} else {
+			allJoins = append(allJoins, v.Join)
 		}
 	}
 
@@ -237,6 +183,9 @@ func expand[S any](root *Graph[S]) (model.Machine[S], error) {
 	slices.SortFunc(allJoins, func(a, b model.JoinSpec[S]) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+
+	allContinuations := make([]model.CompiledContinuation[S], len(g.continuations))
+	copy(allContinuations, g.continuations)
 	slices.SortFunc(allContinuations, func(a, b model.CompiledContinuation[S]) int {
 		return strings.Compare(a.Key, b.Key)
 	})
@@ -251,8 +200,10 @@ func expand[S any](root *Graph[S]) (model.Machine[S], error) {
 	}
 
 	edgesByFrom := make(map[string][]string)
-	for _, e := range allEdges {
-		edgesByFrom[e.from] = append(edgesByFrom[e.from], e.to)
+	for _, e := range g.edges {
+		fromName := g.vertices[e.From].Name
+		toName := g.vertices[e.To].Name
+		edgesByFrom[fromName] = append(edgesByFrom[fromName], toName)
 	}
 	for from := range edgesByFrom {
 		targets := edgesByFrom[from]
@@ -289,25 +240,25 @@ func expand[S any](root *Graph[S]) (model.Machine[S], error) {
 
 	for i := range allNodes {
 		n := allNodes[i]
-		start := len(edgeTargets)
+		edgeStart := len(compiledEdges)
 		targets := edgesByFrom[n.spec.Name]
-		edgeTargets = append(edgeTargets, targets...)
 		for _, target := range targets {
-			nIdx := -1
+			edgeTargets = append(edgeTargets, target)
+			nodeIdx := -1
+			joinIdx := -1
 			if idx, exists := nodeIndices[target]; exists {
-				nIdx = idx
+				nodeIdx = idx
 			}
-			jIdx := -1
 			if idx, exists := joinIndices[target]; exists {
-				jIdx = idx
+				joinIdx = idx
 			}
 			compiledEdges = append(compiledEdges, model.CompiledEdge{
 				Target:    target,
-				NodeIndex: nIdx,
-				JoinIndex: jIdx,
+				NodeIndex: nodeIdx,
+				JoinIndex: joinIdx,
 			})
 		}
-		end := len(edgeTargets)
+		edgeEnd := len(compiledEdges)
 
 		joinIdx := -1
 		if jName, ok := joinBySource[n.spec.Name]; ok {
@@ -335,12 +286,12 @@ func expand[S any](root *Graph[S]) (model.Machine[S], error) {
 			ReturnNodeIndex: retNodeIdx,
 			ReturnJoinIndex: retJoinIdx,
 			Mounted:         n.mounted,
-			EdgeStart:       start,
-			EdgeEnd:         end,
+			EdgeStart:       edgeStart,
+			EdgeEnd:         edgeEnd,
 		}
 	}
 
-	entryIdx := -1
+	entryIdx = -1
 	if idx, exists := nodeIndices[rootEntry]; exists {
 		entryIdx = idx
 	}
@@ -354,31 +305,6 @@ func expand[S any](root *Graph[S]) (model.Machine[S], error) {
 		Joins:         compiledJoins,
 		Continuations: allContinuations,
 	}, nil
-}
-
-func componentEntry[S any](arena []componentNode[S], mounts []childMount, compIdx int) (string, error) {
-	curr := compIdx
-	for {
-		c := &arena[curr]
-		if c.graph.isNode(c.graph.entry) {
-			return qualify(c.prefix, c.graph.entry), nil
-		}
-		if c.graph.isJoin(c.graph.entry) {
-			return "", fmt.Errorf("entry %q in graph %q is a join", c.graph.entry, c.prefix)
-		}
-		childComp := -1
-		for m := c.mountStart; m < c.mountStart+c.mountCount; m++ {
-			if mounts[m].name == c.graph.entry {
-				childComp = mounts[m].idx
-				break
-			}
-		}
-		if childComp >= 0 {
-			curr = childComp
-			continue
-		}
-		return "", fmt.Errorf("entry vertex %q in graph %q is not registered", c.graph.entry, c.prefix)
-	}
 }
 
 func rewriteNode[S any](run model.Node[S], targets, continuations map[string]string) model.Node[S] {

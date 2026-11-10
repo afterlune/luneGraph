@@ -84,12 +84,14 @@ func entryTimeoutGraph(t *testing.T, mode string) *graph.Graph[int] {
 	owner := g
 	if mode == "return" {
 		owner = graph.New[int]("entry")
-		if err := g.AddSubgraph("child", owner); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := owner.AddNode(graph.NodeSpec[int]{Name: "entry", OnError: graph.FailExecution, Timeout: time.Hour, Run: entry}); err != nil {
 		t.Fatal(err)
+	}
+	if mode == "return" {
+		if err := g.AddSubgraph("child", owner); err != nil {
+			t.Fatal(err)
+		}
 	}
 	edge(t, g, "dispatch", target)
 	if err := g.AddNode(graph.NodeSpec[int]{Name: "next", OnError: graph.FailExecution, Timeout: time.Hour, Run: func(ctx context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
