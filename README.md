@@ -13,8 +13,10 @@ and [Store guide](docs/store-implementation.md). Requires Go 1.26.5 or newer.
 The standard-library core is imported as `graph` from
 `github.com/afterlune/luneGraph`. Optional SQLite persistence uses modernc.org/sqlite.
 Implementation is separated into internal/definition, internal/executor,
-internal/model and internal/observation. Persistence and logging are separate
-packages. License: Apache-2.0.
+internal/model and internal/observation. The execution engine uses a cache-friendly
+Compressed Sparse Row (CSR) vector topology, zero-alloc ID lookup tables, and in-place
+fast commit for high-throughput single-step and fan-out execution. Persistence and
+logging are separate packages. License: Apache-2.0.
 
 ## A small graph
 

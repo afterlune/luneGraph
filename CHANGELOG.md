@@ -18,6 +18,16 @@
   Credentials stay in provider-specific environment variables, and automated
   provider tests use local HTTP servers.
 
+### Performance and architecture
+
+- Adapt graph execution runtime to modern processor cache hierarchies and data-oriented design (DOD):
+  - Transition graph topology to a Compressed Sparse Row (CSR) vector layout with contiguous slices (`Nodes`, `Edges`, `Joins`, `Continuations`) and compile-time pre-resolved indices (`NodeIndex`, `JoinIndex`), eliminating all runtime hash map lookups on hot execution paths.
+  - Implement static small ID lookup tables (`AllocID`) to eliminate per-step ID string formatting heap allocations.
+  - Implement direct fast commit (`commitFast`) for linear and fan-out paths across in-memory and durable stores (`store != nil`), bypassing full workspace cloning and diffing.
+  - Add synchronous driver execution fast-path for non-concurrent steps, deferring worker channel and pool allocations.
+  - Compact `InvocationStatus` into an ordered `uint8` enum with branchless evaluation arithmetic.
+  - Optimize memory store with pre-sorted binary-search slices, speeding up recovery and warm advance scaling.
+
 ### API and execution changes
 
 - Separate scheduler decisions from callback preparation, worker lifecycle, and
