@@ -2,6 +2,7 @@ package graph_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
@@ -290,4 +291,132 @@ func benchmarkSingleNodeRunner(b *testing.B) *graph.Runner[int] {
 		b.Fatal(err)
 	}
 	return runner
+}
+
+func BenchmarkNestedSubgraphCompileAndRun(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		leaf := graph.New[int]("leaf")
+		if err := leaf.AddNode(graph.NodeSpec[int]{Name: "leaf", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.Return(state + 1), nil
+		}}); err != nil {
+			b.Fatal(err)
+		}
+		mid := graph.New[int]("sub")
+		if err := mid.AddSubgraph("sub", leaf); err != nil {
+			b.Fatal(err)
+		}
+		if err := mid.AddNode(graph.NodeSpec[int]{Name: "after", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.Return(state + 2), nil
+		}}); err != nil {
+			b.Fatal(err)
+		}
+		if err := mid.AddEdge("sub", "after"); err != nil {
+			b.Fatal(err)
+		}
+		root := graph.New[int]("m")
+		if err := root.AddSubgraph("m", mid); err != nil {
+			b.Fatal(err)
+		}
+		if err := root.AddNode(graph.NodeSpec[int]{Name: "final", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.EndExecution(state + 3), nil
+		}}); err != nil {
+			b.Fatal(err)
+		}
+		if err := root.AddEdge("m", "final"); err != nil {
+			b.Fatal(err)
+		}
+		runner, err := root.Compile(graph.Config[int]{MachineID: "bench-sub", Clone: func(v int) (int, error) { return v, nil }})
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, result, err := runner.Start(context.Background(), "subgraph-run", 0, nil, graph.Options{})
+		if err != nil || result.Status != graph.StatusCompleted || *result.Final != 6 {
+			b.Fatalf("nested subgraph run failed: %+v %v", result, err)
+		}
+	}
+}
+
+func BenchmarkNestedFailGroup(b *testing.B) {
+	g := graph.New[int]("fork")
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "fork", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "branch1", "branch2"), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "branch1", OnError: graph.FailGroup, Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "sub1", "sub2"), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "branch2", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "outer-join"), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "sub1", OnError: graph.FailGroup, Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.Transition[int]{}, errors.New("sub1 fail")
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "sub2", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state, "inner-join"), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner-join", From: "branch1", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
+		return p, nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer-join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
+		return p, nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddNode(graph.NodeSpec[int]{Name: "done", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.EndExecution(state), nil
+	}}); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("inner-join", "outer-join"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("outer-join", "done"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("fork", "branch1"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("fork", "branch2"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("branch1", "sub1"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("branch1", "sub2"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("sub1", "inner-join"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("sub2", "inner-join"); err != nil {
+		b.Fatal(err)
+	}
+	if err := g.AddEdge("branch2", "outer-join"); err != nil {
+		b.Fatal(err)
+	}
+	runner, err := g.Compile(graph.Config[int]{MachineID: "bench-failgroup", Clone: func(v int) (int, error) { return v, nil }})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_, result, _ := runner.Start(context.Background(), "fail-group", 0, nil, graph.Options{})
+		if result.Status != graph.StatusCompletedWithFailures {
+			b.Fatalf("failgroup run status = %v", result.Status)
+		}
+	}
 }

@@ -6,19 +6,25 @@ import (
 )
 
 type taskRef struct {
-	id   string
-	join bool
+	id      string
+	slot    int
+	nodeIdx int
+	join    bool
 }
 
 // readyQueue owns FIFO storage only. The live position decides task eligibility.
 type readyQueue struct {
-	items []taskRef
-	head  int
+	inline [4]taskRef
+	items  []taskRef
+	head   int
 }
 
 func (q *readyQueue) len() int { return len(q.items) - q.head }
 
 func (q *readyQueue) push(ref taskRef) {
+	if q.items == nil {
+		q.items = q.inline[:0]
+	}
 	if q.head == len(q.items) {
 		q.items = q.items[:0]
 		q.head = 0

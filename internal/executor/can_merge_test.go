@@ -18,7 +18,12 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 			return parent, nil
 		},
 	}
-	runner := &Runner[int]{id: "machine", clone: clone, joins: map[string]JoinSpec[int]{"join": spec}}
+	runner := &Runner[int]{
+		id:        "machine",
+		clone:     clone,
+		joins:     []CompiledJoin[int]{{Spec: spec}},
+		joinIndex: map[string]int{"join": 0},
+	}
 	secondStatus := InvocationReady
 	secondNode := "worker"
 	if allResolved {
@@ -37,7 +42,7 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 			Branches: []ActivationBranch{{InvocationID: "i3", Target: "worker"}, {InvocationID: "i5", Target: "worker"}},
 		}},
 	}
-	return runner, newLive(checkpoint, runner.joins)
+	return runner, newLive(checkpoint, runner)
 }
 
 func TestPrepareCanMergeTaskIsolatesPredicateInputs(t *testing.T) {

@@ -116,7 +116,12 @@ func TestRunnerStartBudgetAndInputErrors(t *testing.T) {
 		t.Fatalf("cancelled start = %+v, %v", result, err)
 	}
 
-	cloneFailure, err := New(Machine[int]{ID: "clone", Entry: "node", Clone: func(int) (int, error) { return 0, errors.New("clone") }, Nodes: map[string]NodeSpec[int]{"node": executorTestNode("node", executorTestEnd, FailInvocation)}})
+	cloneFailure, err := New(Machine[int]{
+		ID:    "clone",
+		Entry: "node",
+		Clone: func(int) (int, error) { return 0, errors.New("clone") },
+		Nodes: []CompiledNode[int]{{Spec: executorTestNode("node", executorTestEnd, FailInvocation), JoinIndex: -1, ReturnNodeIndex: -1}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +224,9 @@ func nextReady[S any](s Checkpoint[S], running map[string]context.CancelFunc, cu
 	if !ok {
 		return nil
 	}
-	v, _ := l.invocation(ref.id)
+	v, ok := l.getInvocation(ref.id)
+	if !ok {
+		return nil
+	}
 	return &v
 }

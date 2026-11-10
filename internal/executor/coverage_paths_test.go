@@ -132,7 +132,7 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 	}
 
 	call := CallInfo{RunID: "observed-run", InvocationID: "i1", CallID: "c2"}
-	_, err := runner.observedNode(context.Background(), newSession(), 4, call, runner.nodes["node"], 5)
+	_, err := runner.observedNode(context.Background(), newSession(), 4, call, runner.node("node").Spec, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 		t.Fatalf("node event correlation = %+v", events)
 	}
 
-	merge := runner.joins["join"]
+	merge := runner.join("join").Spec
 	if _, err := runner.observedMerge(context.Background(), newSession(), 5, call, merge, 5, []BranchResult[int]{{State: 6, Status: InvocationJoined}}); err != nil {
 		t.Fatal(err)
 	}

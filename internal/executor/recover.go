@@ -57,8 +57,9 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 		return nil, result, errors.Join(err, resultErr)
 	}
-	l := newLive(checkpoint, r.joins)
-	execution = &Execution[S]{runner: r, live: l, store: store}
+	execution = &Execution[S]{runner: r, store: store}
+	l := initLive(&execution.liveVal, checkpoint, r)
+	execution.live = l
 	if err = ctx.Err(); err != nil {
 		result, retErr = r.resultFromLiveOrEmpty(l, StatusCancelled, err)
 		return execution, result, retErr

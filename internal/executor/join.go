@@ -10,16 +10,27 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 	scope := FailInvocation
 	node := ""
 	if out.ref.join {
-		g := l.groups[id]
+		lg, _, _ := l.group(id, out.ref.slot)
+		g := lg.group
 		id = g.ParentID
 		node = g.JoinNode
-		if node != "" {
-			scope = r.joins[node].OnError
+		if lg.join != nil {
+			scope = lg.join.Spec.OnError
+		} else if node != "" {
+			if j := r.join(node); j != nil {
+				scope = j.Spec.OnError
+			}
 		}
 	} else {
-		inv, _ := l.invocation(id)
-		node = inv.Node
-		scope = r.nodes[node].OnError
+		inv, _, _ := l.invocation(id, out.ref.slot)
+		if inv != nil {
+			node = inv.Node
+		}
+		if out.node != nil && out.node.Spec.Name == node {
+			scope = out.node.Spec.OnError
+		} else if n := r.node(node); n != nil {
+			scope = n.Spec.OnError
+		}
 	}
 	// Caller applies its per-invocation override before invoking this method.
 	if l.failureOverride != nil {
@@ -33,7 +44,7 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 	index := newInvocationIndex(after)
 	var terminalErr error
 	if out.ref.join {
-		g := l.groups[out.ref.id]
+		g, _ := l.getGroup(out.ref.id)
 		remove := make(map[string]bool, len(g.Branches))
 		for _, branch := range g.Branches {
 			remove[branch.InvocationID] = true
@@ -57,8 +68,8 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 		} else {
 			parent.State = out.state
 			next := ""
-			for target := range r.edges[g.JoinNode] {
-				next = target
+			if j := r.join(g.JoinNode); j != nil {
+				next = j.NextTarget
 			}
 			if next == "" {
 				parent.Status = InvocationEnded

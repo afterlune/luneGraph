@@ -27,9 +27,21 @@ type Transition[S any] struct {
 type TransitionData[S any] struct {
 	State        S
 	Action       Action
+	Target       string
 	Targets      []string
 	Branches     []Branch[S]
 	Continuation string
+}
+
+// AllTargets returns all targets as a slice.
+func (d TransitionData[S]) AllTargets() []string {
+	if len(d.Targets) > 0 {
+		return d.Targets
+	}
+	if d.Target != "" {
+		return []string{d.Target}
+	}
+	return nil
 }
 
 // Branch describes one runtime-created child invocation.
@@ -43,16 +55,38 @@ type Branch[S any] struct {
 
 // To continues to the required target or fans out to additional declared targets.
 func To[S any](state S, target string, additionalTargets ...string) Transition[S] {
+	if len(additionalTargets) == 0 {
+		return Transition[S]{data: TransitionData[S]{
+			State:  state,
+			Action: ActionContinue,
+			Target: target,
+		}}
+	}
 	targets := make([]string, 1, len(additionalTargets)+1)
 	targets[0] = target
 	targets = append(targets, additionalTargets...)
-	return Transition[S]{data: TransitionData[S]{State: state, Action: ActionContinue, Targets: targets}}
+	return Transition[S]{data: TransitionData[S]{
+		State:   state,
+		Action:  ActionContinue,
+		Target:  target,
+		Targets: targets,
+	}}
 }
 
 // ToTargets continues to the supplied runtime-generated targets. At least one
 // target is required; an empty slice is rejected when the transition is applied.
 func ToTargets[S any](state S, targets []string) Transition[S] {
-	return Transition[S]{data: TransitionData[S]{State: state, Action: ActionContinue, Targets: append([]string(nil), targets...)}}
+	t := append([]string(nil), targets...)
+	var single string
+	if len(t) == 1 {
+		single = t[0]
+	}
+	return Transition[S]{data: TransitionData[S]{
+		State:   state,
+		Action:  ActionContinue,
+		Target:  single,
+		Targets: t,
+	}}
 }
 
 // Wait suspends this invocation for a continuation, then follows the required
@@ -98,6 +132,9 @@ func RemapTransition[S any](tr Transition[S], targets, continuations map[string]
 	d := &tr.data
 	if d.Action != ActionContinue && d.Action != ActionWait && d.Action != ActionFanOut {
 		return tr
+	}
+	if d.Target != "" {
+		d.Target = targets[d.Target]
 	}
 	if len(d.Targets) != 0 {
 		d.Targets = append([]string(nil), d.Targets...)

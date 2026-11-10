@@ -15,8 +15,8 @@ import (
 
 type record[S any] struct {
 	header graph.Checkpoint[S]
-	inv    map[string]graph.Invocation[S]
-	groups map[string]graph.ActivationGroup
+	inv    []graph.Invocation[S]
+	groups []graph.ActivationGroup
 }
 
 // Store owns its states. Calls, including Load and Commit, are concurrent safe.
@@ -52,15 +52,17 @@ func (s *Store[S]) Create(ctx context.Context, cp graph.Checkpoint[S]) error {
 	if err != nil {
 		return err
 	}
-	rec := &record[S]{header: copied, inv: make(map[string]graph.Invocation[S]), groups: make(map[string]graph.ActivationGroup)}
+	rec := &record[S]{
+		header: copied,
+		inv:    make([]graph.Invocation[S], len(copied.Invocations)),
+		groups: make([]graph.ActivationGroup, len(copied.Groups)),
+	}
 	rec.header.Invocations = nil
 	rec.header.Groups = nil
-	for _, v := range copied.Invocations {
-		rec.inv[v.ID] = v
-	}
-	for _, g := range copied.Groups {
-		rec.groups[g.ID] = g
-	}
+	copy(rec.inv, copied.Invocations)
+	copy(rec.groups, copied.Groups)
+	slices.SortFunc(rec.inv, func(a, b graph.Invocation[S]) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(rec.groups, func(a, b graph.ActivationGroup) int { return cmp.Compare(a.ID, b.ID) })
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -89,15 +91,11 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 		return graph.Checkpoint[S]{}, fmt.Errorf("run %q: %w", id, checkpoint.ErrNotFound)
 	}
 	cp := rec.header
-	for _, v := range rec.inv {
-		cp.Invocations = append(cp.Invocations, v)
-	}
-	for _, g := range rec.groups {
-		cp.Groups = append(cp.Groups, g)
-	}
+	cp.Invocations = make([]graph.Invocation[S], len(rec.inv))
+	copy(cp.Invocations, rec.inv)
+	cp.Groups = make([]graph.ActivationGroup, len(rec.groups))
+	copy(cp.Groups, rec.groups)
 	s.mu.RUnlock()
-	slices.SortFunc(cp.Invocations, func(a, b graph.Invocation[S]) int { return cmp.Compare(a.ID, b.ID) })
-	slices.SortFunc(cp.Groups, func(a, b graph.ActivationGroup) int { return cmp.Compare(a.ID, b.ID) })
 	return cp.Clone(s.clone)
 }
 
@@ -149,21 +147,57 @@ func (s *Store[S]) Commit(ctx context.Context, expected uint64, c graph.Change[S
 	rec.header.Invocations = nil
 	rec.header.Groups = nil
 	if c.Header.Completed {
-		clear(rec.inv)
-		clear(rec.groups)
+		rec.inv = nil
+		rec.groups = nil
 		return nil
 	}
-	for _, id := range owned.DeleteInvocations {
-		delete(rec.inv, id)
+	if len(owned.DeleteInvocations) > 0 {
+		del := make(map[string]bool, len(owned.DeleteInvocations))
+		for _, id := range owned.DeleteInvocations {
+			del[id] = true
+		}
+		kept := rec.inv[:0]
+		for _, v := range rec.inv {
+			if !del[v.ID] {
+				kept = append(kept, v)
+			}
+		}
+		clear(rec.inv[len(kept):])
+		rec.inv = kept
 	}
 	for _, v := range owned.UpsertInvocations {
-		rec.inv[v.ID] = v
+		idx, found := slices.BinarySearchFunc(rec.inv, v, func(a, b graph.Invocation[S]) int {
+			return cmp.Compare(a.ID, b.ID)
+		})
+		if found {
+			rec.inv[idx] = v
+		} else {
+			rec.inv = slices.Insert(rec.inv, idx, v)
+		}
 	}
-	for _, id := range owned.DeleteGroups {
-		delete(rec.groups, id)
+	if len(owned.DeleteGroups) > 0 {
+		del := make(map[string]bool, len(owned.DeleteGroups))
+		for _, id := range owned.DeleteGroups {
+			del[id] = true
+		}
+		kept := rec.groups[:0]
+		for _, g := range rec.groups {
+			if !del[g.ID] {
+				kept = append(kept, g)
+			}
+		}
+		clear(rec.groups[len(kept):])
+		rec.groups = kept
 	}
 	for _, g := range owned.UpsertGroups {
-		rec.groups[g.ID] = g
+		idx, found := slices.BinarySearchFunc(rec.groups, g, func(a, b graph.ActivationGroup) int {
+			return cmp.Compare(a.ID, b.ID)
+		})
+		if found {
+			rec.groups[idx] = g
+		} else {
+			rec.groups = slices.Insert(rec.groups, idx, g)
+		}
 	}
 	return nil
 }

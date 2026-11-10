@@ -4,37 +4,123 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/afterlune/luneGraph/internal/testchange"
+	"slices"
 	"testing"
 
 	"github.com/afterlune/luneGraph/internal/model"
+	"github.com/afterlune/luneGraph/internal/testchange"
 )
 
 func executorTestRunner(t *testing.T, entry string, nodes []NodeSpec[int], joins []JoinSpec[int], edges map[string][]string, continuations map[string]Continuation[int], returnTargets map[string]string) *Runner[int] {
 	t.Helper()
+	nodeIdx := make(map[string]int, len(nodes))
+	for i, node := range nodes {
+		nodeIdx[node.Name] = i
+	}
+	joinIdx := make(map[string]int, len(joins))
+	for i, join := range joins {
+		joinIdx[join.Name] = i
+	}
+
+	compiledJoins := make([]CompiledJoin[int], len(joins))
+	for i, join := range joins {
+		nextTarget := ""
+		if targets := edges[join.Name]; len(targets) > 0 {
+			nextTarget = targets[0]
+		}
+		nIdx := -1
+		if idx, ok := nodeIdx[nextTarget]; ok {
+			nIdx = idx
+		}
+		jIdx := -1
+		if idx, ok := joinIdx[nextTarget]; ok {
+			jIdx = idx
+		}
+		compiledJoins[i] = CompiledJoin[int]{
+			Spec:          join,
+			NextTarget:    nextTarget,
+			NextNodeIndex: nIdx,
+			NextJoinIndex: jIdx,
+		}
+	}
+
+	joinBySource := make(map[string]int, len(joins))
+	for i, join := range joins {
+		joinBySource[join.From] = i
+	}
+
+	var edgeTargets []string
+	compiledNodes := make([]CompiledNode[int], len(nodes))
+	for i, node := range nodes {
+		jIdx := -1
+		if idx, ok := joinBySource[node.Name]; ok {
+			jIdx = idx
+		}
+		returnTarget := ""
+		mounted := false
+		if target, ok := returnTargets[node.Name]; ok {
+			returnTarget = target
+			mounted = true
+		}
+		returnNodeIdx := -1
+		if idx, ok := nodeIdx[returnTarget]; ok {
+			returnNodeIdx = idx
+		}
+
+		targets := edges[node.Name]
+		edgeStart := len(edgeTargets)
+		edgeTargets = append(edgeTargets, targets...)
+		edgeEnd := len(edgeTargets)
+
+		compiledNodes[i] = CompiledNode[int]{
+			Spec:            node,
+			JoinIndex:       jIdx,
+			ReturnTarget:    returnTarget,
+			ReturnNodeIndex: returnNodeIdx,
+			Mounted:         mounted,
+			EdgeStart:       edgeStart,
+			EdgeEnd:         edgeEnd,
+		}
+	}
+
+	for from, target := range returnTargets {
+		if _, ok := nodeIdx[from]; !ok {
+			nodeIdx[from] = len(compiledNodes)
+			rIdx := -1
+			if idx, ok := nodeIdx[target]; ok {
+				rIdx = idx
+			}
+			compiledNodes = append(compiledNodes, CompiledNode[int]{
+				Spec:            NodeSpec[int]{Name: from},
+				JoinIndex:       -1,
+				ReturnTarget:    target,
+				ReturnNodeIndex: rIdx,
+				Mounted:         true,
+			})
+		}
+	}
+
+	keys := make([]string, 0, len(continuations))
+	for k := range continuations {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	compiledContinuations := make([]CompiledContinuation[int], len(keys))
+	for i, k := range keys {
+		compiledContinuations[i] = CompiledContinuation[int]{
+			Key:  k,
+			Cont: continuations[k],
+		}
+	}
+
 	machine := Machine[int]{
 		ID:            "machine-v1",
 		Entry:         entry,
 		Clone:         func(value int) (int, error) { return value, nil },
-		Nodes:         make(map[string]NodeSpec[int], len(nodes)),
-		Joins:         make(map[string]JoinSpec[int], len(joins)),
-		JoinBySource:  make(map[string]string),
-		Edges:         make(map[string]map[string]struct{}),
-		Continuations: continuations,
-		ReturnTargets: returnTargets,
-	}
-	for _, node := range nodes {
-		machine.Nodes[node.Name] = node
-	}
-	for _, join := range joins {
-		machine.Joins[join.Name] = join
-		machine.JoinBySource[join.From] = join.Name
-	}
-	for from, targets := range edges {
-		machine.Edges[from] = make(map[string]struct{}, len(targets))
-		for _, target := range targets {
-			machine.Edges[from][target] = struct{}{}
-		}
+		Nodes:         compiledNodes,
+		EdgeTargets:   edgeTargets,
+		Joins:         compiledJoins,
+		Continuations: compiledContinuations,
 	}
 	runner, err := New(machine)
 	if err != nil {

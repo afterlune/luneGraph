@@ -1,13 +1,21 @@
 package executor
 
+type groupWorkItem struct {
+	id       string
+	children bool
+}
+
 // candidateWorkspace owns reusable, speculative topology slices. They never
 // alias the slices that store the accepted position. User states are borrowed
 // read-only until callback results transfer ownership through a Change.
 type candidateWorkspace[S any] struct {
+	beforeInvInline           [2]Invocation[S]
+	afterInvInline            [2]Invocation[S]
 	beforeInv, afterInv       []Invocation[S]
 	beforeGroups, afterGroups []ActivationGroup
 	membership                map[string]bool
 	groupsBefore              map[string]ActivationGroup
+	groupQueue                []groupWorkItem
 }
 
 type candidateMembers struct {
@@ -40,7 +48,7 @@ func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *Checkpoint[S], id 
 			}
 		}
 	}
-	v, ok := l.invocation(id)
+	v, ok := l.getInvocation(id)
 	if !ok {
 		return
 	}
@@ -50,40 +58,53 @@ func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *Checkpoint[S], id 
 	cp.Invocations = append(cp.Invocations, v)
 }
 
-func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], id string, children bool, m *candidateMembers) {
-	if m.groups != nil {
-		if m.groups[id] {
-			return
-		}
-	} else {
-		for _, g := range cp.Groups {
-			if g.ID == id {
-				return
+func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], startID string, startChildren bool, m *candidateMembers) {
+	w.groupQueue = append(w.groupQueue[:0], groupWorkItem{id: startID, children: startChildren})
+	for len(w.groupQueue) > 0 {
+		curr := w.groupQueue[len(w.groupQueue)-1]
+		w.groupQueue = w.groupQueue[:len(w.groupQueue)-1]
+
+		id := curr.id
+		children := curr.children
+		if m.groups != nil {
+			if m.groups[id] {
+				continue
 			}
-		}
-		if len(cp.Groups) >= invocationIndexThreshold {
-			m.groups = make(map[string]bool, len(cp.Groups)+1)
+		} else {
+			found := false
 			for _, g := range cp.Groups {
-				m.groups[g.ID] = true
+				if g.ID == id {
+					found = true
+					break
+				}
+			}
+			if found {
+				continue
+			}
+			if len(cp.Groups) >= invocationIndexThreshold {
+				m.groups = make(map[string]bool, len(cp.Groups)+1)
+				for _, g := range cp.Groups {
+					m.groups[g.ID] = true
+				}
 			}
 		}
-	}
-	g, ok := l.groups[id]
-	if !ok {
-		return
-	}
-	if m.groups != nil {
-		m.groups[id] = true
-	}
-	cp.Groups = append(cp.Groups, g)
-	if children {
-		w.addInvocation(l, cp, g.ParentID, m)
-		for _, branch := range g.Branches {
-			child := branch.InvocationID
-			w.addInvocation(l, cp, child, m)
-			descendant, exists := l.invocation(child)
-			if nested := descendant.ChildGroupID; exists && nested != "" {
-				w.addGroup(l, cp, nested, true, m)
+		g, ok := l.getGroup(id)
+		if !ok {
+			continue
+		}
+		if m.groups != nil {
+			m.groups[id] = true
+		}
+		cp.Groups = append(cp.Groups, g)
+		if children {
+			w.addInvocation(l, cp, g.ParentID, m)
+			for _, branch := range g.Branches {
+				child := branch.InvocationID
+				w.addInvocation(l, cp, child, m)
+				descendant, exists := l.getInvocation(child)
+				if nested := descendant.ChildGroupID; exists && nested != "" {
+					w.groupQueue = append(w.groupQueue, groupWorkItem{id: nested, children: true})
+				}
 			}
 		}
 	}
@@ -91,6 +112,9 @@ func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], id strin
 
 func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joinGroupID string) Checkpoint[S] {
 	cp := l.header
+	if w.beforeInv == nil {
+		w.beforeInv = w.beforeInvInline[:0]
+	}
 	clear(w.beforeInv)
 	clear(w.beforeGroups)
 	cp.Invocations = w.beforeInv[:0]
@@ -99,17 +123,20 @@ func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joi
 	if joinGroupID != "" {
 		// A pending join already knows its local child count. Reserve that
 		// set when it crosses the indexing threshold, not the whole run.
-		members.invocationHint = len(l.groups[joinGroupID].Branches) + 1
+		if g, ok := l.getGroup(joinGroupID); ok {
+			members.invocationHint = len(g.Branches) + 1
+		}
 	}
 	w.addInvocation(l, &cp, id, &members)
-	if v, ok := l.invocation(id); ok && v.GroupID != "" {
+	if v, ok := l.getInvocation(id); ok && v.GroupID != "" {
 		w.addGroup(l, &cp, v.GroupID, subtree, &members)
 		if subtree {
 			// FailGroup marks this activation's parent failed. Include its outer
 			// branch metadata without collecting unrelated outer descendants.
-			g := l.groups[v.GroupID]
-			if parent, exists := l.invocation(g.ParentID); exists && parent.GroupID != "" {
-				w.addGroup(l, &cp, parent.GroupID, false, &members)
+			if g, exists := l.getGroup(v.GroupID); exists {
+				if parent, pExists := l.getInvocation(g.ParentID); pExists && parent.GroupID != "" {
+					w.addGroup(l, &cp, parent.GroupID, false, &members)
+				}
 			}
 		}
 	}
@@ -123,6 +150,9 @@ func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joi
 
 // prepare creates independent structural working slices for one outcome.
 func (w *candidateWorkspace[S]) prepare(l *live[S], id string, subtree bool, joinGroupID string) (Checkpoint[S], Checkpoint[S]) {
+	if w.afterInv == nil {
+		w.afterInv = w.afterInvInline[:0]
+	}
 	before := w.collect(l, id, subtree, joinGroupID)
 	after := before
 	clear(w.afterInv)

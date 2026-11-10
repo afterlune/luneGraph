@@ -9,15 +9,20 @@ import (
 // workerPool owns callback workers only. Admission and cancellation remain with
 // the driver, which drains results before closing the pool.
 type workerPool[S any] struct {
-	runner  *Runner[S]
-	limiter *limit.Limiter
-	tasks   chan workerTask[S]
-	results chan workResult[S]
-	workers sync.WaitGroup
-	count   int
+	runner   *Runner[S]
+	limiter  *limit.Limiter
+	capacity int
+	tasks    chan workerTask[S]
+	results  chan workResult[S]
+	workers  sync.WaitGroup
+	count    int
 }
 
 func (p *workerPool[S]) dispatch(task workerTask[S], running int) {
+	if p.tasks == nil {
+		p.tasks = make(chan workerTask[S], p.capacity)
+		p.results = make(chan workResult[S], p.capacity)
+	}
 	if running > p.count {
 		p.count++
 		p.workers.Add(1)
@@ -34,6 +39,8 @@ func (p *workerPool[S]) dispatch(task workerTask[S], running int) {
 }
 
 func (p *workerPool[S]) close() {
-	close(p.tasks)
-	p.workers.Wait()
+	if p.tasks != nil {
+		close(p.tasks)
+		p.workers.Wait()
+	}
 }

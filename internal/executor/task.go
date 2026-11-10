@@ -11,6 +11,7 @@ import (
 type workResult[S any] struct {
 	ref        taskRef
 	callID     string
+	node       *CompiledNode[S]
 	transition Transition[S]
 	state      S
 	err        error
@@ -19,6 +20,7 @@ type workerTask[S any] struct {
 	ctx          context.Context
 	ref          taskRef
 	call         CallInfo
+	node         *CompiledNode[S]
 	spec         NodeSpec[S]
 	join         JoinSpec[S]
 	timeout      time.Duration
@@ -31,7 +33,7 @@ type workerTask[S any] struct {
 }
 
 func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
-	out := workResult[S]{ref: t.ref, callID: t.call.CallID}
+	out := workResult[S]{ref: t.ref, callID: t.call.CallID, node: t.node}
 	if t.ref.join {
 		if t.join.Merge != nil {
 			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.state, t.branches)
@@ -47,19 +49,30 @@ func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, obs *observation.Session) (workerTask[S], error) {
 	t := workerTask[S]{ctx: ctx, ref: ref, obs: obs, revision: l.header.Revision, ready: true}
 	if ref.join {
-		g := l.groups[ref.id]
-		parent, _ := l.invocation(g.ParentID)
-		t.join = r.joins[g.JoinNode]
+		lg, _, ok := l.group(ref.id, ref.slot)
+		if !ok {
+			return t, invalidCheckpoint("join group %q missing", ref.id)
+		}
+		g := lg.group
+		parent, _, exists := l.invocation(g.ParentID, -1)
+		if !exists {
+			return t, invalidCheckpoint("join group %q parent %q missing", ref.id, g.ParentID)
+		}
+		if lg.join != nil {
+			t.join = lg.join.Spec
+		} else if j := r.join(g.JoinNode); j != nil {
+			t.join = j.Spec
+		}
 		t.timeout = t.join.Timeout
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
-		if t.join.CanMerge != nil && l.remaining[ref.id] > 0 {
+		if t.join.CanMerge != nil && lg.remaining > 0 {
 			canMergeParent, err := r.cloneState(parent.State, parent.ID)
 			if err != nil {
 				return t, fmt.Errorf("clone speculative join parent: %w", err)
 			}
 			canMergeBranches := make([]BranchResult[S], 0, len(g.Branches))
 			for branchIndex, branch := range g.Branches {
-				child, exists := l.invocation(branch.InvocationID)
+				child, _, exists := l.invocation(branch.InvocationID, -1)
 				if !exists {
 					return t, invalidCheckpoint("join group %q has missing branch %q", ref.id, branch.InvocationID)
 				}
@@ -87,7 +100,7 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		t.branches = make([]BranchResult[S], 0, len(g.Branches))
 		for branchIndex, branch := range g.Branches {
 			id := branch.InvocationID
-			child, exists := l.invocation(id)
+			child, _, exists := l.invocation(id, -1)
 			if !exists {
 				return t, invalidCheckpoint("join group %q has missing branch %q", ref.id, id)
 			}
@@ -108,16 +121,28 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 			t.branches = append(t.branches, res)
 		}
 	} else {
-		v, _ := l.invocation(ref.id)
+		v, _, ok := l.invocation(ref.id, ref.slot)
+		if !ok {
+			return t, invalidCheckpoint("node invocation %q missing", ref.id)
+		}
 		state, err := r.cloneState(v.State, v.ID)
 		if err != nil {
 			return t, fmt.Errorf("clone node state: %w", err)
 		}
 		t.state = state
-		t.spec = r.nodes[v.Node]
+		var n *CompiledNode[S]
+		if uint(ref.nodeIdx) < uint(len(r.nodes)) && r.nodes[ref.nodeIdx].Spec.Name == v.Node {
+			n = &r.nodes[ref.nodeIdx]
+		} else {
+			n = r.node(v.Node)
+		}
+		if n != nil {
+			t.node = n
+			t.spec = n.Spec
+		}
 		if v.GroupID != "" {
-			if activation, ok := l.groups[v.GroupID]; ok && v.BranchIndex >= 0 && v.BranchIndex < len(activation.Branches) {
-				t.timeout = activation.Branches[v.BranchIndex].EntryTimeout
+			if activation, _, ok := l.group(v.GroupID, -1); ok && v.BranchIndex >= 0 && v.BranchIndex < len(activation.group.Branches) {
+				t.timeout = activation.group.Branches[v.BranchIndex].EntryTimeout
 			}
 		}
 		if t.timeout <= 0 {

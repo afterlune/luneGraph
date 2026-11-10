@@ -21,7 +21,13 @@ func benchmarkContinuationAdapter[P any](b *testing.B, payload P) {
 		func(_ context.Context, _ model.CallInfo, state int, _ P) (int, error) { return state + 1, nil }); err != nil {
 		b.Fatal(err)
 	}
-	c := g.continuations["input"]
+	var c model.Continuation[int]
+	for _, item := range g.continuations {
+		if item.Key == "input" {
+			c = item.Cont
+			break
+		}
+	}
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()

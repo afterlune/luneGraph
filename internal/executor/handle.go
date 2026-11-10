@@ -11,9 +11,10 @@ import (
 // Execution owns the live scheduler state for one run. Its methods must be
 // called by only one goroutine at a time.
 type Execution[S any] struct {
-	runner *Runner[S]
-	live   *live[S]
-	store  Store[S]
+	runner  *Runner[S]
+	live    *live[S]
+	store   Store[S]
+	liveVal live[S]
 }
 
 // Pending returns sorted identities for continuations currently waiting on input.

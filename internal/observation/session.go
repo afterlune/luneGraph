@@ -20,7 +20,7 @@ type Session struct {
 	id               uint64
 	machineID, runID string
 	mu               sync.Mutex
-	pending          map[string]pendingCallback
+	pending          []pendingCallback
 	// Resolution is driven by the public-call goroutine, never a worker.
 	// Reuse its delivery buffer without retaining delivered metadata.
 	resolved []model.Event
@@ -45,10 +45,17 @@ func (s *Session) Begin(ctx context.Context, event model.Event) Span {
 	event.Phase, event.Time = model.PhaseStarted, time.Now()
 	if executionCallback(event.Operation) {
 		s.mu.Lock()
-		if s.pending == nil {
-			s.pending = make(map[string]pendingCallback)
+		found := false
+		for i := range s.pending {
+			if s.pending[i].callID == event.CallID {
+				s.pending[i] = pendingCallback{callID: event.CallID, event: event, selected: event.Operation == model.OperationApply}
+				found = true
+				break
+			}
 		}
-		s.pending[event.CallID] = pendingCallback{event: event, selected: event.Operation == model.OperationApply}
+		if !found {
+			s.pending = append(s.pending, pendingCallback{callID: event.CallID, event: event, selected: event.Operation == model.OperationApply})
+		}
 		s.mu.Unlock()
 	}
 	s.deliver(ctx, event)
@@ -62,9 +69,12 @@ func (span Span) End(ctx context.Context, result model.Event) {
 	event.Status, event.Action, event.Revision, event.Err = result.Status, result.Action, result.Revision, result.Err
 	if executionCallback(event.Operation) {
 		span.session.mu.Lock()
-		pending := span.session.pending[event.CallID]
-		pending.event.Action = event.Action
-		span.session.pending[event.CallID] = pending
+		for i := range span.session.pending {
+			if span.session.pending[i].callID == event.CallID {
+				span.session.pending[i].event.Action = event.Action
+				break
+			}
+		}
 		span.session.mu.Unlock()
 	}
 	span.session.deliver(ctx, event)

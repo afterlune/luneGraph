@@ -42,13 +42,16 @@ func BenchmarkObservation(b *testing.B) {
 				case "memory":
 					store = memoryStore(b)
 				case "sqlite":
-					store, err := sqlite.Open(ctx, filepath.Join(b.TempDir(), "runs.db"), checkpoint.JSON[int]{})
+					var err error
+					store, err = sqlite.Open(ctx, filepath.Join(b.TempDir(), "runs.db"), checkpoint.JSON[int]{})
 					if err != nil {
 						b.Fatal(err)
 					}
 					b.Cleanup(func() {
-						if err := store.Close(); err != nil {
-							b.Error(err)
+						if closer, ok := store.(interface{ Close() error }); ok {
+							if err := closer.Close(); err != nil {
+								b.Error(err)
+							}
 						}
 					})
 				}

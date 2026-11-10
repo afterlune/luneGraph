@@ -39,7 +39,7 @@ func FuzzCheckpointValidation(f *testing.F) {
 			s.FormatVersion = uint32(data[0])
 		}
 		if len(data) > 1 {
-			s.Invocations[0].Status = graph.InvocationStatus(data[1:2])
+			s.Invocations[0].Status = graph.InvocationStatus(data[1])
 		}
 		if len(data) > 2 {
 			s.Invocations[0].BranchIndex = int(data[2])

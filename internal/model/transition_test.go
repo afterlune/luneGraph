@@ -12,8 +12,8 @@ func TestReusableTransitionRemapsBranchesWithoutChangingCallerOrOtherMount(t *te
 	if a.Branches[0].Target != "a/entry" || b.Branches[0].Target != "b/entry" || original.Branches[0].Target != "entry" || original.Branches[1].State != 3 {
 		t.Fatalf("shared remapping: original=%+v a=%+v b=%+v", original, a, b)
 	}
-	unknown := ReadTransition(RemapTransition(Wait(1, "input", "missing"), nil, nil))
-	if unknown.Targets[0] != "" || unknown.Continuation != "" {
+	unknown := ReadTransition(RemapTransition(Wait(1, "input", "missing", "also-missing"), nil, nil))
+	if unknown.Target != "" || unknown.Continuation != "" || len(unknown.Targets) != 2 || unknown.Targets[0] != "" || unknown.Targets[1] != "" {
 		t.Fatalf("unknown local names escaped: %+v", unknown)
 	}
 }

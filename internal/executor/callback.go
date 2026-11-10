@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime/debug"
 )
 
@@ -64,7 +65,11 @@ func (r *Runner[S]) decodeInput(id, key string, payload []byte) (out any, err er
 			err = panicAsError("decode "+key, id, value)
 		}
 	}()
-	return r.continuations[key].Decode(payload)
+	c := r.continuation(key)
+	if c == nil || c.Decode == nil {
+		return nil, fmt.Errorf("unknown continuation %q", key)
+	}
+	return c.Decode(payload)
 }
 
 func (r *Runner[S]) applyInput(ctx context.Context, call CallInfo, key string, state S, value any) (out S, err error) {
@@ -73,7 +78,11 @@ func (r *Runner[S]) applyInput(ctx context.Context, call CallInfo, key string, s
 			err = panicAsError("apply "+key, call.InvocationID, recovered)
 		}
 	}()
-	return r.continuations[key].Apply(ctx, call, state, value)
+	c := r.continuation(key)
+	if c == nil || c.Apply == nil {
+		return state, fmt.Errorf("unknown continuation %q", key)
+	}
+	return c.Apply(ctx, call, state, value)
 }
 
 func panicStack(err error) string {

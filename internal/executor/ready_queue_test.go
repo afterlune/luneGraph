@@ -79,12 +79,13 @@ func TestLiveNextFiltersTasksAndDrainsJoinsAtBudget(t *testing.T) {
 		{ID: "i9", Status: InvocationGroup, ChildGroupID: "g11"},
 		{ID: "i10", Status: InvocationJoined, GroupID: "g11"},
 	}, Groups: []ActivationGroup{{ID: "g11", ParentID: "i9", Branches: []ActivationBranch{{InvocationID: "i10"}}}}}, nil)
-	l.ready.clear()
+	l.nodeQueue.clear()
+	l.joinQueue.clear()
 	for _, ref := range []taskRef{{id: "missing"}, {id: "i2"}, {id: "i3"}, {id: "i1"}, {id: "g11", join: true}} {
 		l.enqueue(ref)
 	}
 	running := map[taskRef]context.CancelFunc{{id: "i3"}: func() {}}
-	if ref, ok := l.next(false, running); !ok || ref != (taskRef{id: "g11", join: true}) {
+	if ref, ok := l.next(false, running); !ok || ref.id != "g11" || !ref.join {
 		t.Fatalf("budget did not drain join: %+v %v", ref, ok)
 	}
 	if ref, ok := l.next(false, running); ok {

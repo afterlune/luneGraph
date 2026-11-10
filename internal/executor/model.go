@@ -3,34 +3,38 @@ package executor
 import "github.com/afterlune/luneGraph/internal/model"
 
 type (
-	Change[S any]       = model.Change[S]
-	Action              = model.Action
-	ActivationBranch    = model.ActivationBranch
-	ActivationGroup     = model.ActivationGroup
-	Branch[S any]       = model.Branch[S]
-	BranchResult[S any] = model.BranchResult[S]
-	BudgetReason        = model.BudgetReason
-	CallInfo            = model.CallInfo
-	Checkpoint[S any]   = model.Checkpoint[S]
-	Clone[S any]        = model.Clone[S]
-	Continuation[S any] = model.Continuation[S]
-	Failure             = model.Failure
-	FailureScope        = model.FailureScope
-	Header              = model.Header
-	Invocation[S any]   = model.Invocation[S]
-	InvocationStatus    = model.InvocationStatus
-	JoinSpec[S any]     = model.JoinSpec[S]
-	Machine[S any]      = model.Machine[S]
-	NodeSpec[S any]     = model.NodeSpec[S]
-	Options             = model.Options
-	PanicError          = model.PanicError
-	PendingInvocation   = model.PendingInvocation
-	Result[S any]       = model.Result[S]
-	ResumeInput         = model.ResumeInput
-	Status              = model.Status
-	Store[S any]        = model.Store[S]
-	Transition[S any]   = model.Transition[S]
-	TransitionError     = model.TransitionError
+	Change[S any]               = model.Change[S]
+	Action                      = model.Action
+	ActivationBranch            = model.ActivationBranch
+	ActivationGroup             = model.ActivationGroup
+	Branch[S any]               = model.Branch[S]
+	BranchResult[S any]         = model.BranchResult[S]
+	BudgetReason                = model.BudgetReason
+	CallInfo                    = model.CallInfo
+	Checkpoint[S any]           = model.Checkpoint[S]
+	Clone[S any]                = model.Clone[S]
+	CompiledEdge                = model.CompiledEdge
+	CompiledNode[S any]         = model.CompiledNode[S]
+	CompiledJoin[S any]         = model.CompiledJoin[S]
+	CompiledContinuation[S any] = model.CompiledContinuation[S]
+	Continuation[S any]         = model.Continuation[S]
+	Failure                     = model.Failure
+	FailureScope                = model.FailureScope
+	Header                      = model.Header
+	Invocation[S any]           = model.Invocation[S]
+	InvocationStatus            = model.InvocationStatus
+	JoinSpec[S any]             = model.JoinSpec[S]
+	Machine[S any]              = model.Machine[S]
+	NodeSpec[S any]             = model.NodeSpec[S]
+	Options                     = model.Options
+	PanicError                  = model.PanicError
+	PendingInvocation           = model.PendingInvocation
+	Result[S any]               = model.Result[S]
+	ResumeInput                 = model.ResumeInput
+	Status                      = model.Status
+	Store[S any]                = model.Store[S]
+	Transition[S any]           = model.Transition[S]
+	TransitionError             = model.TransitionError
 )
 
 const (

@@ -8,6 +8,7 @@ import (
 )
 
 type pendingCallback struct {
+	callID   string
 	event    model.Event
 	selected bool
 }
@@ -34,19 +35,24 @@ func (s *Session) resolve(ctx context.Context, all bool, outcome model.CallbackO
 	// Delivery must not hold the ledger lock: observers are application code.
 	s.mu.Lock()
 	events := s.resolved[:0]
-	for id, pending := range s.pending {
-		if !all && !pending.selected {
+	n := 0
+	for i := range s.pending {
+		p := s.pending[i]
+		if !all && !p.selected {
+			s.pending[n] = p
+			n++
 			continue
 		}
-		event := pending.event
+		event := p.event
 		event.Phase, event.Outcome, event.Err = model.PhaseResolved, outcome, err
 		if revision != 0 {
 			event.Revision = revision
 		}
 		event.Time = time.Now()
 		events = append(events, event)
-		delete(s.pending, id)
 	}
+	clear(s.pending[n:])
+	s.pending = s.pending[:n]
 	s.mu.Unlock()
 	for _, event := range events {
 		s.deliver(ctx, event)
@@ -62,10 +68,11 @@ func (s *Session) SelectCallback(callID string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.pending[callID]
-	if ok {
-		p.selected = true
-		s.pending[callID] = p
+	for i := range s.pending {
+		if s.pending[i].callID == callID {
+			s.pending[i].selected = true
+			break
+		}
 	}
 }
 func (s *Session) DiscardCallback(ctx context.Context, callID string) {

@@ -538,6 +538,58 @@ go test -run '^$' -bench '^BenchmarkFanoutJoin$/width=32/concurrency=default$' -
 go test -run '^$' -bench '^BenchmarkDynamicFanOut/width=(32|128)/concurrency=default$' -benchmem -benchtime=300ms -count=3 -cpu 1 .
 ```
 
+### Vector iteration, zero-allocation fast commit, and modern CPU cache architecture upgrade
+
+Compared clean baseline with the data-oriented design (DOD) and CPU profiling-driven architecture upgrade on Linux/amd64, Intel Core i9-10850K @ 3.60GHz (20 logical processors).
+
+#### Key architectural optimizations:
+1. **CSR (Compressed Sparse Row) & Arena vector topology**:
+   - Replaced map-heavy graph topology with contiguous slices (`Nodes []CompiledNode[S]`, `EdgeTargets []string`, `Edges []CompiledEdge`, `Joins []CompiledJoin[S]`, `Continuations []CompiledContinuation[S]`).
+   - Every outgoing edge pre-resolves destination `NodeIndex` and `JoinIndex` at compile time, eliminating all runtime string hash map accesses on the execution hot path.
+   - Subgraph expansion and mermaid export use flat arena slices and iterative traversal, eliminating recursive stack calls.
+2. **Static Small ID Lookup Tables (0-alloc / 1-cycle ID generation)**:
+   - Pre-allocated immutable lookup arrays `smallCallIDs [1024]string`, `smallInvIDs [1024]string`, and `smallGroupIDs [256]string`.
+   - `AllocID` directly returns pre-interned strings for IDs `< 1024`, completely eliminating per-step heap string format allocations (`strconv.AppendUint`).
+3. **In-Place Fast Commit (`commitFast`)**:
+   - Bypasses the speculative candidate workspace (`prepare`, `collect`, `change` diff, `complete`, `install`) for error-free transitions on linear and fan-out paths.
+   - When running in memory (`store == nil`), directly updates live records in place with full transactional atomicity and rollback safety on errors.
+   - Retains tightly bounded inline buffers in `Execution` (`liveVal`), `live[S]` (`[4]Invocation[S]`, `[2]liveGroup`), and `readyQueue` (`inline [4]taskRef`).
+4. **Synchronous Driver Fast-Path & Adaptive Task Scheduling**:
+   - Replaced per-step worker pool dispatching, background goroutine round-trips, channel synchronization, and context cancellation allocations on non-concurrent paths with direct driver-thread execution.
+   - Unbuffered worker channel creation is deferred lazily until true multi-task concurrency is required.
+5. **Branchless arithmetic and ordered uint8 status**:
+   - Replaced string status with compact `uint8` status values, enabling single-cycle branchless arithmetic (`b2i`) and range checks (`status.Resolved()`).
+6. **Memory Store Pre-Sorted Slices**:
+   - Maintains sorted slices via binary search insertion, completely avoiding map-to-slice conversion and sorting on `Load()`.
+
+#### Benchmark comparison:
+
+| Workload | CPU | Baseline | Candidate | Breakthrough Result & Delta |
+| --- | ---: | ---: | ---: | ---: |
+| 1-step sequential | 20 | 3,673 / 7,472 / 33 | 1,324 / 2,672 / 9 | **568 ns / 2,312 B / 2 allocs** (**6.47x 提速**, -69.1% 内存, **-93.9% 分配**) |
+| 16-step sequential | 20 | 20,268 / 8,432 / 93 | 9,518 / 2,720 / 24 | **1,471 ns / 2,312 B / 2 allocs** (**13.78x 提速**, -72.6% 内存, **-97.8% 分配，每步 0 堆分配！**) |
+| 128-step sequential | 20 | 147,573 / 15,632 / 541 | 65,477 / 3,096 / 136 | **7,744 ns / 2,312 B / 2 allocs** (**19.05x 提速**, -85.2% 内存, **-99.6% 分配，每步纯 0 堆分配！**) |
+| Concurrent runs (none) | 20 | 2,750 / 7,500 / 34 | 769.6 / 2,680 / 10 | **476 ns / 2,320 B / 3 allocs** (**5.77x 提速**, -69.1% 内存, **-91.2% 分配**) |
+| Concurrent runs (memory) | 20 | 5,420 / 11,200 / 78 | 1,685 / 3,637 / 25 | **1,587 ns / 3,436 B / 21 allocs** (**3.41x 提速**, -69.3% 内存, **-73.1% 分配**) |
+| Nested Subgraph Compile & Run | 20 | 12,305 / 12,344 / 114 | 6,417 / 6,775 / 64 | **4,684 ns / 6,502 B / 55 allocs** (**2.63x 提速**, -47.3% 内存, **-51.8% 分配**) |
+| Width-2 static Fanout (serial) | 20 | 23,400 / 11,200 / 76 | 15,042 / 7,056 / 47 | **3,265 ns / 4,072 B / 11 allocs** (**7.17x 提速**, -63.6% 内存, **-85.5% 分配**) |
+| Width-2 static Fanout (default) | 20 | 33,100 / 23,500 / 98 | 19,019 / 17,671 / 50 | **13,080 ns / 17,364 B / 26 allocs** (**2.53x 提速**, -26.1% 内存, **-73.5% 分配**) |
+| Width-8 static Fanout (serial) | 20 | 54,000 / 29,800 / 145 | 33,919 / 23,032 / 97 | **9,089 ns / 14,328 B / 25 allocs** (**5.94x 提速**, -51.9% 内存, **-82.8% 分配**) |
+| Width-8 static Fanout (default) | 20 | 67,200 / 42,800 / 179 | 43,942 / 33,816 / 106 | **29,440 ns / 28,358 B / 58 allocs** (**2.28x 提速**, -33.7% 内存, **-67.6% 分配**) |
+| Width-32 static Fanout (serial) | 20 | 181,700 / 87,700 / 387 | 103,006 / 60,400 / 215 | **28,388 ns / 37,632 B / 38 allocs** (**6.40x 提速**, -57.1% 内存, **-90.2% 分配**) |
+| Width-32 static Fanout (default) | 20 | 196,500 / 100,700 / 439 | 148,830 / 72,929 / 241 | **88,234 ns / 54,379 B / 132 allocs** (**2.23x 提速**, -46.0% 内存, **-69.9% 分配**) |
+| Width-32 Dynamic FanOut (serial) | 20 | 181,349 / 66,304 / 257 | 81,609 / 59,976 / 222 | **19,860 ns / 25,248 B / 24 allocs** (**9.13x 提速**, -61.9% 内存, **-90.7% 分配**) |
+| Width-128 Dynamic FanOut (serial)| 20 | 763,040 / 254,057 / 753| 305,908 / 233,136 / 624| **71,310 ns / 98,272 B / 32 allocs** (**10.70x 提速**, -61.3% 内存, **-95.7% 分配**) |
+| CanMerge speculative join | 20 | 57,469 / 14,844 / 87 | 26,710 / 14,122 / 67 | **18,560 ns / 9,641 B / 40 allocs** (**3.10x 提速**, -35.1% 内存, **-54.0% 分配**) |
+| Durable width-32 Memory Fanout | 20 | 717,246 / 414,182 / 1,734 | 531,848 / 409,602 / 1,726 | **265,945 ns / 382,081 B / 1,347 allocs** (**2.70x 提速**, **-22.3% 分配**) |
+| Warm Memory advance (32 waiters) | 20 | 19,907 / 4,422 / 28 | 12,434 / 4,422 / 28 | **3,237 ns / 3,159 B / 15 allocs** (**6.15x 提速**, -28.6% 内存, **-46.4% 分配**) |
+| Capacity Compile (128 nodes) | - | 130,077 / 117,734 / 562 | 95,567 / 120,787 / 445 | **95,567 / 120,787 / 445** (**-26.5% latency**, **-20.8% allocs**) |
+| Capacity Compile (1024 nodes) | - | 1,230,021 / 961,403 / 4,175 | 766,880 / 983,144 / 3,167 | **766,880 / 983,144 / 3,167** (**-37.7% latency**, **-24.1% allocs**) |
+| Capacity Compile (8192 nodes) | - | 11,560,422 / 7,688,449 / 33,053 | 7,688,854 / 9,660,378 / 24,902 | **7,688,854 / 9,660,378 / 24,902** (**-33.5% latency**, **-24.7% allocs**) |
+| Capacity Groups (128 groups) | 8 | 10,874,664 / 7,186,537 / 33,207 | 7,883,724 / 6,596,966 / 30,915 | **7,883,724 / 6,596,966 / 30,915** (**-27.5% latency**, **-6.9% allocs**) |
+| SingleRunCheckpoint cold-recover (2048 waiters) | 1 | 5,392,910 B / 26,626 allocs | 3,960,453 B / 22,531 allocs | **3,960,453 B / 22,531 allocs** (**-26.6% heap bytes**, **-15.4% allocs**) |
+| Observation fanout (noop observer) | - | 324 allocs/op | 288 allocs/op | **288 allocs/op** (**-11.1% allocs**) |
+
 ## Repository checks
 
 The project checks formatting, all tests, race behavior, static analysis, and an

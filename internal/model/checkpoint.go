@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -15,16 +16,108 @@ import (
 const CheckpointFormatVersion uint32 = 8
 
 // InvocationStatus describes one path's scheduling state.
-type InvocationStatus string
+type InvocationStatus uint8
 
 const (
-	InvocationReady   InvocationStatus = "ready"
-	InvocationWaiting InvocationStatus = "waiting"
-	InvocationGroup   InvocationStatus = "group"
-	InvocationJoined  InvocationStatus = "joined"
-	InvocationEnded   InvocationStatus = "ended"
-	InvocationFailed  InvocationStatus = "failed"
+	InvocationReady   InvocationStatus = 1
+	InvocationWaiting InvocationStatus = 2
+	InvocationGroup   InvocationStatus = 3
+	InvocationJoined  InvocationStatus = 4
+	InvocationEnded   InvocationStatus = 5
+	InvocationFailed  InvocationStatus = 6
 )
+
+func (s InvocationStatus) String() string {
+	switch s {
+	case 0:
+		return ""
+	case InvocationReady:
+		return "ready"
+	case InvocationWaiting:
+		return "waiting"
+	case InvocationGroup:
+		return "group"
+	case InvocationJoined:
+		return "joined"
+	case InvocationEnded:
+		return "ended"
+	case InvocationFailed:
+		return "failed"
+	default:
+		return fmt.Sprintf("InvocationStatus(%d)", s)
+	}
+}
+
+func (s InvocationStatus) Resolved() bool {
+	return s >= InvocationJoined && s <= InvocationFailed
+}
+
+func (s InvocationStatus) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+func (s *InvocationStatus) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "", "0":
+		*s = 0
+	case "ready", "1":
+		*s = InvocationReady
+	case "waiting", "2":
+		*s = InvocationWaiting
+	case "group", "3":
+		*s = InvocationGroup
+	case "joined", "4":
+		*s = InvocationJoined
+	case "ended", "5":
+		*s = InvocationEnded
+	case "failed", "6":
+		*s = InvocationFailed
+	default:
+		return fmt.Errorf("invalid invocation status %q", string(text))
+	}
+	return nil
+}
+
+func (s InvocationStatus) MarshalJSON() ([]byte, error) {
+	switch s {
+	case 0:
+		return []byte(`""`), nil
+	case InvocationReady:
+		return []byte(`"ready"`), nil
+	case InvocationWaiting:
+		return []byte(`"waiting"`), nil
+	case InvocationGroup:
+		return []byte(`"group"`), nil
+	case InvocationJoined:
+		return []byte(`"joined"`), nil
+	case InvocationEnded:
+		return []byte(`"ended"`), nil
+	case InvocationFailed:
+		return []byte(`"failed"`), nil
+	default:
+		return json.Marshal(s.String())
+	}
+}
+
+func (s *InvocationStatus) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*s = 0
+		return nil
+	}
+	if data[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		return s.UnmarshalText([]byte(str))
+	}
+	var num uint8
+	if err := json.Unmarshal(data, &num); err != nil {
+		return err
+	}
+	*s = InvocationStatus(num)
+	return nil
+}
 
 // Invocation is a resumable path. Node is the next node when ready and the
 // suspending node when waiting. CallID identifies its pending node or
@@ -213,10 +306,49 @@ func FindGroup[S any](s *Checkpoint[S], id string) (int, *ActivationGroup) {
 	return -1, nil
 }
 
-func NewID[S any](s *Checkpoint[S], prefix string) string {
+const (
+	smallIDLimit      = 1024
+	smallGroupIDLimit = 256
+)
+
+var (
+	smallCallIDs  [smallIDLimit]string
+	smallInvIDs   [smallIDLimit]string
+	smallGroupIDs [smallGroupIDLimit]string
+)
+
+func init() {
+	for i := range smallIDLimit {
+		s := strconv.Itoa(i)
+		smallCallIDs[i] = "c" + s
+		smallInvIDs[i] = "i" + s
+		if i < smallGroupIDLimit {
+			smallGroupIDs[i] = "g" + s
+		}
+	}
+}
+
+func AllocID(nextID *uint64, prefix string) string {
+	id := *nextID
+	*nextID = id + 1
+	if id < smallIDLimit {
+		switch prefix {
+		case "c":
+			return smallCallIDs[id]
+		case "i":
+			return smallInvIDs[id]
+		case "g":
+			if id < smallGroupIDLimit {
+				return smallGroupIDs[id]
+			}
+		}
+	}
 	var buf [32]byte
 	n := copy(buf[:], prefix)
-	b := strconv.AppendUint(buf[:n], s.NextID, 10)
-	s.NextID++
+	b := strconv.AppendUint(buf[:n], id, 10)
 	return string(b)
+}
+
+func NewID[S any](s *Checkpoint[S], prefix string) string {
+	return AllocID(&s.NextID, prefix)
 }

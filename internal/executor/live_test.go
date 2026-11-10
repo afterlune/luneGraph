@@ -16,8 +16,9 @@ func TestLiveReadinessAndCandidateIsolation(t *testing.T) {
 		c := l.workspace.change(before, after)
 		l.install(c)
 	}
-	if l.remaining["g3"] != 0 {
-		t.Fatal(l.remaining)
+	lg, _, ok := l.group("g3", -1)
+	if !ok || lg.remaining != 0 {
+		t.Fatal(lg)
 	}
 	ref, ok := l.next(false, nil)
 	if !ok || !ref.join || ref.id != "g3" {

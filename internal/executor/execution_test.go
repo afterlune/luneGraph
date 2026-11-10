@@ -301,16 +301,20 @@ func TestCallbackPanicWrappers(t *testing.T) {
 	if _, err := callClone[int](func(int) (int, error) { panic(boom) }, 1, "i1"); !errors.Is(err, boom) {
 		t.Fatalf("clone panic wrapper = %v", err)
 	}
-	if _, err := runner.runNode(context.Background(), CallInfo{InvocationID: "i1"}, runner.nodes["node"], 1); !errors.Is(err, boom) {
+	if _, err := runner.runNode(context.Background(), CallInfo{InvocationID: "i1"}, runner.node("node").Spec, 1); !errors.Is(err, boom) {
 		t.Fatalf("node panic wrapper = %v", err)
 	}
 	if _, err := runner.mergeStates(context.Background(), CallInfo{InvocationID: "i1"}, JoinSpec[int]{Name: "join", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { panic(boom) }}, 0, nil); !errors.Is(err, boom) {
 		t.Fatalf("join panic wrapper = %v", err)
 	}
-	runner.continuations = map[string]Continuation[int]{"panic": {
-		Decode: func([]byte) (any, error) { panic(boom) },
-		Apply:  func(context.Context, CallInfo, int, any) (int, error) { panic(boom) },
+	runner.continuations = []CompiledContinuation[int]{{
+		Key: "panic",
+		Cont: Continuation[int]{
+			Decode: func([]byte) (any, error) { panic(boom) },
+			Apply:  func(context.Context, CallInfo, int, any) (int, error) { panic(boom) },
+		},
 	}}
+	runner.contIndex = map[string]int{"panic": 0}
 	if _, err := runner.decodeInput("i1", "panic", nil); !errors.Is(err, boom) {
 		t.Fatalf("decode panic wrapper = %v", err)
 	}

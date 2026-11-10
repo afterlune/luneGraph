@@ -196,7 +196,7 @@ func TestTransitionsCopyTargetsAndPreserveActions(t *testing.T) {
 		t.Fatalf("To transition = %+v, source targets=%v", continued, targets)
 	}
 	wait := Wait(2, "resume", "done")
-	if wait.data.Action != ActionWait || wait.data.Continuation != "resume" || !reflect.DeepEqual(wait.data.Targets, []string{"done"}) {
+	if wait.data.Action != ActionWait || wait.data.Continuation != "resume" || !reflect.DeepEqual(wait.data.AllTargets(), []string{"done"}) {
 		t.Fatalf("Wait transition = %+v", wait)
 	}
 	if EndBranch[int]().data.Action != ActionEndBranch || EndExecution(4).data.Action != ActionEndExecution || Return(5).data.Action != ActionReturn {

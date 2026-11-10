@@ -122,7 +122,13 @@ func TestGraphBuilderValidation(t *testing.T) {
 	if err := RegisterContinuation[int, int](g, "typed", decode, apply); err == nil {
 		t.Fatal("duplicate continuation accepted")
 	}
-	continuation := g.continuations["typed"]
+	var continuation model.Continuation[int]
+	for _, c := range g.continuations {
+		if c.Key == "typed" {
+			continuation = c.Cont
+			break
+		}
+	}
 	value, err := continuation.Decode(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -167,26 +173,60 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 	if machine.Entry != "start" || len(machine.Nodes) != 4 {
 		t.Fatalf("flattened machine entry=%q nodes=%v", machine.Entry, machine.Nodes)
 	}
-	if _, ok := machine.Edges["start"]["worker/begin"]; !ok {
-		t.Fatalf("parent edge was not expanded: %v", machine.Edges)
+	if !hasMachineEdge(machine, "start", "worker/begin") {
+		t.Fatalf("parent edge was not expanded: targets=%v", machine.EdgeTargets)
 	}
-	if _, exists := machine.Edges["worker"]; exists {
-		t.Fatalf("mount alias became a runtime source: %v", machine.Edges["worker"])
+	if findMachineNode(machine, "worker") != nil {
+		t.Fatalf("mount alias became a runtime source")
 	}
-	if _, ok := machine.Edges["worker/begin"]["worker/finish"]; !ok || machine.ReturnTargets["worker/begin"] != "after" || machine.ReturnTargets["worker/finish"] != "after" {
-		t.Fatalf("flattened child edges=%v return targets=%v", machine.Edges, machine.ReturnTargets)
+	startNode := findMachineNode(machine, "start")
+	beginNode := findMachineNode(machine, "worker/begin")
+	finishNode := findMachineNode(machine, "worker/finish")
+	if !hasMachineEdge(machine, "worker/begin", "worker/finish") || beginNode.ReturnTarget != "after" || finishNode.ReturnTarget != "after" {
+		t.Fatalf("flattened child edges or return targets mismatch")
 	}
-	if _, ok := machine.Continuations["worker/resume"]; !ok {
+	if !hasMachineContinuation(machine, "worker/resume") {
 		t.Fatalf("continuation names = %v", machine.Continuations)
 	}
-	start, err := machine.Nodes["start"].Run(context.Background(), model.CallInfo{}, 3)
-	if err != nil || !reflect.DeepEqual(model.ReadTransition(start).Targets, []string{"worker/begin"}) {
+	start, err := startNode.Spec.Run(context.Background(), model.CallInfo{}, 3)
+	if err != nil || !reflect.DeepEqual(model.ReadTransition(start).AllTargets(), []string{"worker/begin"}) {
 		t.Fatalf("parent transition = %+v, %v", start, err)
 	}
-	childTransition, err := machine.Nodes["worker/begin"].Run(context.Background(), model.CallInfo{}, 3)
-	if err != nil || model.ReadTransition(childTransition).Continuation != "worker/resume" || !reflect.DeepEqual(model.ReadTransition(childTransition).Targets, []string{"worker/finish"}) || originalTargets[0] != "finish" {
+	childTransition, err := beginNode.Spec.Run(context.Background(), model.CallInfo{}, 3)
+	if err != nil || model.ReadTransition(childTransition).Continuation != "worker/resume" || !reflect.DeepEqual(model.ReadTransition(childTransition).AllTargets(), []string{"worker/finish"}) || originalTargets[0] != "finish" {
 		t.Fatalf("child transition = %+v, original targets=%v, err=%v", childTransition, originalTargets, err)
 	}
+}
+
+func findMachineNode[S any](m model.Machine[S], name string) *model.CompiledNode[S] {
+	for i := range m.Nodes {
+		if m.Nodes[i].Spec.Name == name {
+			return &m.Nodes[i]
+		}
+	}
+	return nil
+}
+
+func hasMachineEdge[S any](m model.Machine[S], from, to string) bool {
+	n := findMachineNode(m, from)
+	if n == nil {
+		return false
+	}
+	for _, target := range m.EdgeTargets[n.EdgeStart:n.EdgeEnd] {
+		if target == to {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMachineContinuation[S any](m model.Machine[S], key string) bool {
+	for _, c := range m.Continuations {
+		if c.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExpandHandlesNestedAndRepeatedMounts(t *testing.T) {
@@ -211,11 +251,13 @@ func TestExpandHandlesNestedAndRepeatedMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := machine.Nodes["first/run"]; !ok {
+	firstRun := findMachineNode(machine, "first/run")
+	secondRun := findMachineNode(machine, "second/run")
+	if firstRun == nil {
 		t.Fatalf("first mount missing: %v", machine.Nodes)
 	}
-	if _, ok := machine.Nodes["second/run"]; !ok || machine.ReturnTargets["first/run"] != "second/run" {
-		t.Fatalf("repeated mounts nodes=%v returns=%v", machine.Nodes, machine.ReturnTargets)
+	if secondRun == nil || firstRun.ReturnTarget != "second/run" {
+		t.Fatalf("repeated mounts nodes=%v first return=%v", machine.Nodes, firstRun.ReturnTarget)
 	}
 
 	inner := New[int]("inner-run")
@@ -243,8 +285,10 @@ func TestExpandHandlesNestedAndRepeatedMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Entry != "outer/nested/inner-run" || machine.ReturnTargets["outer/nested/inner-run"] != "outer/outer-run" || machine.ReturnTargets["outer/outer-run"] != "done" {
-		t.Fatalf("nested entry=%q returns=%v", machine.Entry, machine.ReturnTargets)
+	innerRun := findMachineNode(machine, "outer/nested/inner-run")
+	outerRun := findMachineNode(machine, "outer/outer-run")
+	if machine.Entry != "outer/nested/inner-run" || innerRun == nil || outerRun == nil || innerRun.ReturnTarget != "outer/outer-run" || outerRun.ReturnTarget != "done" {
+		t.Fatalf("nested entry=%q inner return=%v outer return=%v", machine.Entry, innerRun.ReturnTarget, outerRun.ReturnTarget)
 	}
 }
 
@@ -337,19 +381,19 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 		{name: "nil child from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.subgraphs["broken"] = nil
+			g.subgraphs = append(g.subgraphs, subgraphMount[int]{name: "broken", graph: nil})
 			return g
 		}, match: "is nil"},
 		{name: "unknown edge source from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.edges["missing"] = map[string]struct{}{"entry": {}}
+			g.edges = append(g.edges, edgeSpec{from: "missing", to: "entry"})
 			return g
 		}, match: "unknown edge source"},
 		{name: "unknown edge target from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.edges["entry"] = map[string]struct{}{"missing": {}}
+			g.edges = append(g.edges, edgeSpec{from: "entry", to: "missing"})
 			return g
 		}, match: "unknown edge target"},
 	}
@@ -361,8 +405,8 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 			}
 		})
 	}
-	if _, err := buildComponent[int](nil, "", nil); err == nil {
-		t.Fatal("buildComponent accepted nil graph")
+	if _, err := expand[int](nil); err == nil {
+		t.Fatal("expand accepted nil graph")
 	}
 	if _, err := (*Graph[int])(nil).Compile(model.Config[int]{MachineID: "m", Clone: identity}); err == nil {
 		t.Fatal("Compile accepted nil graph")

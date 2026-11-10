@@ -68,8 +68,9 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 		result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 		return nil, result, errors.Join(fmt.Errorf("clone resume checkpoint: %w", err), resultErr)
 	}
-	l := newLive(owned, r.joins)
-	execution = &Execution[S]{runner: r, live: l, store: store}
+	execution = &Execution[S]{runner: r, store: store}
+	l := initLive(&execution.liveVal, owned, r)
+	execution.live = l
 	result, retErr = r.advanceLive(ctx, l, inputs, opts, activeStore, obs)
 	return execution, result, retErr
 }
@@ -91,7 +92,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: duplicate input for %q", ErrInvalidResumeInput, input.InvocationID))
 		}
 		seen[input.InvocationID] = true
-		inv, ok := l.invocation(input.InvocationID)
+		inv, ok := l.getInvocation(input.InvocationID)
 		if !ok || inv.Status != InvocationWaiting {
 			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is not waiting", ErrInvalidResumeInput, input.InvocationID))
 		}
@@ -108,7 +109,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 		if l.header.Revision == math.MaxUint64 {
 			return r.resultFromLiveOrEmpty(l, StatusFailed, ErrExecutionLimit)
 		}
-		inv, ok := l.invocation(input.id)
+		inv, ok := l.getInvocation(input.id)
 		if !ok || inv.Status != InvocationWaiting {
 			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is no longer waiting", ErrInvalidResumeInput, input.id))
 		}

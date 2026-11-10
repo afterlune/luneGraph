@@ -52,7 +52,7 @@ func (b BranchResult[S]) Failed() bool { return b.Status == InvocationFailed }
 func (b BranchResult[S]) Ended() bool { return b.Status == InvocationEnded }
 
 // Resolved reports whether the branch reached a terminal status (joined, failed, or ended).
-func (b BranchResult[S]) Resolved() bool { return b.OK() || b.Failed() || b.Ended() }
+func (b BranchResult[S]) Resolved() bool { return b.Status.Resolved() }
 
 // Pending reports whether the branch was still pending/running when the join was evaluated.
 func (b BranchResult[S]) Pending() bool { return !b.Resolved() }
@@ -108,17 +108,51 @@ type Config[S any] struct {
 	Clone     Clone[S]
 }
 
+// CompiledEdge holds a pre-resolved outgoing edge target and its node/join index.
+type CompiledEdge struct {
+	Target    string
+	NodeIndex int // index in Machine.Nodes, or -1
+	JoinIndex int // index in Machine.Joins, or -1
+}
+
+// CompiledNode combines node specification, joined spec index, return targets, and CSR edge offsets in contiguous memory.
+type CompiledNode[S any] struct {
+	Spec            NodeSpec[S]
+	Index           int    // index in Machine.Nodes
+	JoinIndex       int    // index in Machine.Joins, or -1 if no join for this fanout source
+	ReturnTarget    string // return target vertex name if mounted, or ""
+	ReturnNodeIndex int    // index in Machine.Nodes of ReturnTarget, or -1
+	ReturnJoinIndex int    // index in Machine.Joins of ReturnTarget, or -1
+	Mounted         bool
+	EdgeStart       int // start index in Machine.EdgeTargets / Machine.Edges
+	EdgeEnd         int // end index in Machine.EdgeTargets / Machine.Edges
+}
+
+// CompiledJoin combines join specification and its unique outgoing edge target.
+type CompiledJoin[S any] struct {
+	Spec          JoinSpec[S]
+	NextTarget    string // destination of outgoing edge from join, or ""
+	NextNodeIndex int    // index in Machine.Nodes of NextTarget, or -1
+	NextJoinIndex int    // index in Machine.Joins of NextTarget, or -1
+}
+
+// CompiledContinuation holds registered typed continuation with sorted key.
+type CompiledContinuation[S any] struct {
+	Key  string
+	Cont Continuation[S]
+}
+
 // Machine is the immutable definition consumed by the executor.
 type Machine[S any] struct {
 	ID            string
 	Entry         string
+	EntryIndex    int
 	Clone         Clone[S]
-	Nodes         map[string]NodeSpec[S]
-	Joins         map[string]JoinSpec[S]
-	JoinBySource  map[string]string
-	Edges         map[string]map[string]struct{}
-	Continuations map[string]Continuation[S]
-	ReturnTargets map[string]string
+	Nodes         []CompiledNode[S]
+	EdgeTargets   []string
+	Edges         []CompiledEdge
+	Joins         []CompiledJoin[S]
+	Continuations []CompiledContinuation[S]
 }
 
 func ValidName(name string) bool {

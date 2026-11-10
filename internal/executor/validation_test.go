@@ -119,7 +119,7 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 			s.Invocations[0].Next = nil
 		}},
 		{"invalid status", func(s *Checkpoint[int]) {
-			s.Invocations[0].Status = InvocationStatus("unknown")
+			s.Invocations[0].Status = InvocationStatus(255)
 			s.Invocations[0].CallID = ""
 			s.Invocations[0].Continuation = ""
 			s.Invocations[0].Next = nil

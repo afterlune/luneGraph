@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/afterlune/luneGraph/internal/diagram"
@@ -13,26 +14,60 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
+type subgraphMount[S any] struct {
+	name  string
+	graph *Graph[S]
+}
+
+type edgeSpec struct {
+	from string
+	to   string
+}
+
 // Graph is a mutable builder. Compile copies its definition into a Runner.
 type Graph[S any] struct {
 	entry         string
-	nodes         map[string]model.NodeSpec[S]
-	joins         map[string]model.JoinSpec[S]
-	subgraphs     map[string]*Graph[S]
-	edges         map[string]map[string]struct{}
-	continuations map[string]model.Continuation[S]
+	nodes         []model.NodeSpec[S]
+	joins         []model.JoinSpec[S]
+	subgraphs     []subgraphMount[S]
+	edges         []edgeSpec
+	continuations []model.CompiledContinuation[S]
 }
 
 // New creates a graph builder with the given entry vertex name.
 func New[S any](entry string) *Graph[S] {
-	return &Graph[S]{entry: entry, nodes: make(map[string]model.NodeSpec[S]), joins: make(map[string]model.JoinSpec[S]), subgraphs: make(map[string]*Graph[S]), edges: make(map[string]map[string]struct{}), continuations: make(map[string]model.Continuation[S])}
+	return &Graph[S]{entry: entry}
+}
+
+func (g *Graph[S]) isNode(name string) bool {
+	for i := range g.nodes {
+		if g.nodes[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Graph[S]) isJoin(name string) bool {
+	for i := range g.joins {
+		if g.joins[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Graph[S]) isSubgraph(name string) bool {
+	for i := range g.subgraphs {
+		if g.subgraphs[i].name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Graph[S]) occupied(name string) bool {
-	_, node := g.nodes[name]
-	_, join := g.joins[name]
-	_, subgraph := g.subgraphs[name]
-	return node || join || subgraph
+	return g.isNode(name) || g.isJoin(name) || g.isSubgraph(name)
 }
 
 // AddNode registers a named node.
@@ -55,10 +90,7 @@ func (g *Graph[S]) AddNode(spec model.NodeSpec[S]) error {
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}
-	if g.nodes == nil {
-		g.nodes = make(map[string]model.NodeSpec[S])
-	}
-	g.nodes[spec.Name] = spec
+	g.nodes = append(g.nodes, spec)
 	return nil
 }
 
@@ -85,10 +117,7 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}
-	if g.joins == nil {
-		g.joins = make(map[string]model.JoinSpec[S])
-	}
-	g.joins[spec.Name] = spec
+	g.joins = append(g.joins, spec)
 	return nil
 }
 
@@ -108,10 +137,7 @@ func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 	if g.occupied(name) {
 		return fmt.Errorf("duplicate vertex %q", name)
 	}
-	if g.subgraphs == nil {
-		g.subgraphs = make(map[string]*Graph[S])
-	}
-	g.subgraphs[name] = child
+	g.subgraphs = append(g.subgraphs, subgraphMount[S]{name: name, graph: child})
 	return nil
 }
 
@@ -126,16 +152,12 @@ func (g *Graph[S]) AddEdge(from, to string) error {
 	if !g.occupied(to) {
 		return fmt.Errorf("unknown target %q", to)
 	}
-	if g.edges == nil {
-		g.edges = make(map[string]map[string]struct{})
+	for _, edge := range g.edges {
+		if edge.from == from && edge.to == to {
+			return fmt.Errorf("duplicate edge %q -> %q", from, to)
+		}
 	}
-	if g.edges[from] == nil {
-		g.edges[from] = make(map[string]struct{})
-	}
-	if _, exists := g.edges[from][to]; exists {
-		return fmt.Errorf("duplicate edge %q -> %q", from, to)
-	}
-	g.edges[from][to] = struct{}{}
+	g.edges = append(g.edges, edgeSpec{from: from, to: to})
 	return nil
 }
 
@@ -149,21 +171,23 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 	if !model.ValidName(key) || decode == nil || apply == nil {
 		return errors.New("continuation needs a valid key, decoder and handler")
 	}
-	if g.continuations == nil {
-		g.continuations = make(map[string]model.Continuation[S])
+	for _, c := range g.continuations {
+		if c.Key == key {
+			return fmt.Errorf("duplicate continuation %q", key)
+		}
 	}
-	if _, exists := g.continuations[key]; exists {
-		return fmt.Errorf("duplicate continuation %q", key)
-	}
-	g.continuations[key] = model.Continuation[S]{
-		Decode: func(payload []byte) (any, error) {
-			value, err := decode(payload)
-			return continuationValue[P]{value: value}, err
+	g.continuations = append(g.continuations, model.CompiledContinuation[S]{
+		Key: key,
+		Cont: model.Continuation[S]{
+			Decode: func(payload []byte) (any, error) {
+				value, err := decode(payload)
+				return continuationValue[P]{value: value}, err
+			},
+			Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
+				return apply(ctx, call, state, value.(continuationValue[P]).value)
+			},
 		},
-		Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
-			return apply(ctx, call, state, value.(continuationValue[P]).value)
-		},
-	}
+	})
 	return nil
 }
 
@@ -194,10 +218,10 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range sortedKeys(definition.Joins) {
-		join := definition.Joins[name]
+	for i := range definition.Joins {
+		join := definition.Joins[i].Spec
 		if join.Quorum > 0 && join.CanMerge != nil {
-			return nil, fmt.Errorf("join %q cannot configure both quorum and can-merge", name)
+			return nil, fmt.Errorf("join %q cannot configure both quorum and can-merge", join.Name)
 		}
 	}
 	definition.ID = config.MachineID
@@ -213,41 +237,96 @@ func (g *Graph[S]) ExportMermaid() (string, error) {
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
 	var names diagram.Names
-	if err := renderGraphMermaid(&sb, g, "", "    ", &names, make(map[*Graph[S]]bool)); err != nil {
-		return "", err
-	}
-	return sb.String(), nil
-}
 
-func renderGraphMermaid[S any](sb *strings.Builder, g *Graph[S], path, indent string, names *diagram.Names, active map[*Graph[S]]bool) error {
-	if active[g] {
-		return fmt.Errorf("recursive subgraph reference at %q", path)
+	type mermaidFrame struct {
+		g         *Graph[S]
+		path      string
+		indent    string
+		subIdx    int
+		subgraphs []subgraphMount[S]
 	}
-	active[g] = true
-	defer delete(active, g)
-	id := func(name string) string { return names.ID(fmt.Sprintf("%s%d:%s", path, len(name), name)) }
-	if g.entry != "" {
-		fmt.Fprintf(sb, "%s%s([\"%s (entry)\"])\n", indent, id(g.entry), diagram.Label(g.entry))
+
+	ancestors := []*Graph[S]{g}
+	subList := make([]subgraphMount[S], len(g.subgraphs))
+	copy(subList, g.subgraphs)
+	slices.SortFunc(subList, func(a, b subgraphMount[S]) int { return strings.Compare(a.name, b.name) })
+
+	stack := []mermaidFrame{
+		{g: g, path: "", indent: "    ", subgraphs: subList},
 	}
-	for _, name := range sortedKeys(g.nodes) {
-		if name != g.entry {
-			fmt.Fprintf(sb, "%s%s[\"%s\"]\n", indent, id(name), diagram.Label(name))
+
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		if frame.subIdx == 0 {
+			// Emit entry, nodes, joins for frame.g
+			id := func(name string) string { return names.ID(fmt.Sprintf("%s%d:%s", frame.path, len(name), name)) }
+			if frame.g.entry != "" {
+				fmt.Fprintf(&sb, "%s%s([\"%s (entry)\"])\n", frame.indent, id(frame.g.entry), diagram.Label(frame.g.entry))
+			}
+			nodes := make([]model.NodeSpec[S], len(frame.g.nodes))
+			copy(nodes, frame.g.nodes)
+			slices.SortFunc(nodes, func(a, b model.NodeSpec[S]) int { return strings.Compare(a.Name, b.Name) })
+			for _, node := range nodes {
+				if node.Name != frame.g.entry {
+					fmt.Fprintf(&sb, "%s%s[\"%s\"]\n", frame.indent, id(node.Name), diagram.Label(node.Name))
+				}
+			}
+			joins := make([]model.JoinSpec[S], len(frame.g.joins))
+			copy(joins, frame.g.joins)
+			slices.SortFunc(joins, func(a, b model.JoinSpec[S]) int { return strings.Compare(a.Name, b.Name) })
+			for _, join := range joins {
+				fmt.Fprintf(&sb, "%s%s{{\"%s (join)\"}}\n", frame.indent, id(join.Name), diagram.Label(join.Name))
+			}
 		}
-	}
-	for _, name := range sortedKeys(g.joins) {
-		fmt.Fprintf(sb, "%s%s{{\"%s (join)\"}}\n", indent, id(name), diagram.Label(name))
-	}
-	for _, name := range sortedKeys(g.subgraphs) {
-		fmt.Fprintf(sb, "%ssubgraph %s [\"%s\"]\n", indent, id(name), diagram.Label(name))
-		if err := renderGraphMermaid(sb, g.subgraphs[name], fmt.Sprintf("%s%d:%s", path, len(name), name), indent+"    ", names, active); err != nil {
-			return err
+
+		if frame.subIdx < len(frame.subgraphs) {
+			sub := frame.subgraphs[frame.subIdx]
+			frame.subIdx++
+			childPath := fmt.Sprintf("%s%d:%s", frame.path, len(sub.name), sub.name)
+			// Cycle check
+			for _, anc := range ancestors {
+				if anc == sub.graph {
+					return "", fmt.Errorf("recursive subgraph reference at %q", childPath)
+				}
+			}
+			id := names.ID(childPath)
+			fmt.Fprintf(&sb, "%ssubgraph %s [\"%s\"]\n", frame.indent, id, diagram.Label(sub.name))
+			ancestors = append(ancestors, sub.graph)
+			childSubList := make([]subgraphMount[S], len(sub.graph.subgraphs))
+			copy(childSubList, sub.graph.subgraphs)
+			slices.SortFunc(childSubList, func(a, b subgraphMount[S]) int { return strings.Compare(a.name, b.name) })
+			stack = append(stack, mermaidFrame{
+				g:         sub.graph,
+				path:      childPath,
+				indent:    frame.indent + "    ",
+				subgraphs: childSubList,
+			})
+			continue
 		}
-		fmt.Fprintf(sb, "%send\n", indent)
-	}
-	for _, from := range sortedKeys(g.edges) {
-		for _, to := range sortedKeys(g.edges[from]) {
-			fmt.Fprintf(sb, "%s%s --> %s\n", indent, id(from), id(to))
+
+		// Finished all subgraphs of frame.g, now emit edges
+		id := func(name string) string { return names.ID(fmt.Sprintf("%s%d:%s", frame.path, len(name), name)) }
+		edges := make([]edgeSpec, len(frame.g.edges))
+		copy(edges, frame.g.edges)
+		slices.SortFunc(edges, func(a, b edgeSpec) int {
+			if c := strings.Compare(a.from, b.from); c != 0 {
+				return c
+			}
+			return strings.Compare(a.to, b.to)
+		})
+		for _, e := range edges {
+			fmt.Fprintf(&sb, "%s%s --> %s\n", frame.indent, id(e.from), id(e.to))
 		}
+
+		if len(stack) > 1 {
+			// Close subgraph block
+			indent := frame.indent[:len(frame.indent)-4]
+			fmt.Fprintf(&sb, "%send\n", indent)
+		}
+
+		ancestors = ancestors[:len(ancestors)-1]
+		stack = stack[:len(stack)-1]
 	}
-	return nil
+
+	return sb.String(), nil
 }
