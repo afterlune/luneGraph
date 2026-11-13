@@ -91,10 +91,8 @@ func (s *Store[S]) Load(ctx context.Context, id string) (graph.Checkpoint[S], er
 		return graph.Checkpoint[S]{}, fmt.Errorf("run %q: %w", id, checkpoint.ErrNotFound)
 	}
 	cp := rec.header
-	cp.Invocations = make([]graph.Invocation[S], len(rec.inv))
-	copy(cp.Invocations, rec.inv)
-	cp.Groups = make([]graph.ActivationGroup, len(rec.groups))
-	copy(cp.Groups, rec.groups)
+	cp.Invocations = slices.Clone(rec.inv)
+	cp.Groups = slices.Clone(rec.groups)
 	s.mu.RUnlock()
 	return cp.Clone(s.clone)
 }

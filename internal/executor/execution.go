@@ -30,8 +30,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			inv.Continuation = ""
 			inv.Next = nil
 			if err := r.setTargetEdge(s, inv, edge); err != nil {
-				var cloneErr *stateCopyError
-				if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
+				if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 					return false, err
 				}
 				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -45,8 +44,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
 		if err := r.route(s, index, id, source, tr.State, tr.Targets, budget); err != nil {
-			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
+			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -92,8 +90,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		return false, nil
 	case ActionFanOut:
 		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, budget); err != nil {
-			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
+			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
@@ -150,8 +147,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		inv.Continuation = ""
 		inv.Next = nil
 		if err := r.setTargetEdge(s, inv, edge); err != nil {
-			var cloneErr *stateCopyError
-			if errors.As(err, &cloneErr) || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
+			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
 				return false, err
 			}
 			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}

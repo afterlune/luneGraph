@@ -184,8 +184,7 @@ func expand[S any](g *Graph[S]) (model.Machine[S], error) {
 		return strings.Compare(a.Name, b.Name)
 	})
 
-	allContinuations := make([]model.CompiledContinuation[S], len(g.continuations))
-	copy(allContinuations, g.continuations)
+	allContinuations := slices.Clone(g.continuations)
 	slices.SortFunc(allContinuations, func(a, b model.CompiledContinuation[S]) int {
 		return strings.Compare(a.Key, b.Key)
 	})

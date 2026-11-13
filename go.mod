@@ -1,6 +1,6 @@
 module github.com/afterlune/luneGraph
 
-go 1.26.5
+go 1.27.4
 
 require modernc.org/sqlite v1.59.0
 

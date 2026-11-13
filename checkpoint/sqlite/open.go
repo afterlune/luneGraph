@@ -96,8 +96,7 @@ func openAndInitialize(ctx context.Context, db *sql.DB) error {
 		if err == nil {
 			return nil
 		}
-		var sqliteErr *sqliteDriver.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
+		if sqliteErr, ok := errors.AsType[*sqliteDriver.Error](err); !ok || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
 			return fmt.Errorf("open checkpoint database: %w", err)
 		}
 		if ctx.Err() != nil {

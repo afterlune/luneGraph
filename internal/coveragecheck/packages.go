@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"sort"
+	"slices"
 )
 
 type packageInfo struct {
@@ -56,6 +56,6 @@ func productionPackages(input io.Reader) ([]string, error) {
 	if len(packages) == 0 {
 		return nil, fmt.Errorf("go list found no production packages")
 	}
-	sort.Strings(packages)
+	slices.Sort(packages)
 	return packages, nil
 }

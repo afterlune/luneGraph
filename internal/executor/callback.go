@@ -86,8 +86,7 @@ func (r *Runner[S]) applyInput(ctx context.Context, call CallInfo, key string, s
 }
 
 func panicStack(err error) string {
-	var panicErr *PanicError
-	if errors.As(err, &panicErr) {
+	if panicErr, ok := errors.AsType[*PanicError](err); ok {
 		return string(panicErr.Stack)
 	}
 	return ""

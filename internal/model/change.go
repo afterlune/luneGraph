@@ -33,27 +33,23 @@ func copyFailure(f *Failure) *Failure {
 	if f == nil {
 		return nil
 	}
-	c := *f
-	return &c
+	return new(*f)
 }
 
 // Change returns upserts for all records in s. Omitted records are not deleted,
 // except when s is terminal. Executors submit only changed records.
 func (s Checkpoint[S]) Change() Change[S] {
-	inv := make([]Invocation[S], len(s.Invocations))
-	copy(inv, s.Invocations)
+	inv := slices.Clone(s.Invocations)
 	for i := range inv {
 		inv[i].Next = slices.Clone(s.Invocations[i].Next)
 	}
-	groups := make([]ActivationGroup, len(s.Groups))
-	copy(groups, s.Groups)
+	groups := slices.Clone(s.Groups)
 	for i := range groups {
 		groups[i].Branches = slices.Clone(s.Groups[i].Branches)
 	}
 	var final *S
 	if s.Final != nil {
-		v := *s.Final
-		final = &v
+		final = new(*s.Final)
 	}
 	return Change[S]{Header: s.Header(), Final: final, UpsertInvocations: inv, UpsertGroups: groups}
 }
@@ -63,8 +59,7 @@ func (c Change[S]) Checkpoint() Checkpoint[S] {
 	h := c.Header
 	var final *S
 	if c.Final != nil {
-		v := *c.Final
-		final = &v
+		final = new(*c.Final)
 	}
 	return Copy(Checkpoint[S]{FormatVersion: h.FormatVersion, RunID: h.RunID, MachineID: h.MachineID, Revision: h.Revision, Steps: h.Steps, NextID: h.NextID, ScheduleCursor: h.ScheduleCursor, Completed: h.Completed, HadLocalFailures: h.HadLocalFailures, Failure: copyFailure(h.Failure), Final: final, Invocations: c.UpsertInvocations, Groups: c.UpsertGroups})
 }

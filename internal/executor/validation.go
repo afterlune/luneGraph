@@ -24,7 +24,7 @@ func checkpointID(id, prefix string) (uint64, bool) {
 		return n, err == nil
 	}
 	var n uint64
-	for i := 0; i < len(numStr); i++ {
+	for i := range len(numStr) {
 		c := numStr[i]
 		if c < '0' || c > '9' {
 			return 0, false

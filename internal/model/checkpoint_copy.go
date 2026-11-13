@@ -17,12 +17,10 @@ func CopyInto[S any](dst *Checkpoint[S], s Checkpoint[S]) {
 	out.Invocations = copyInvocations(previous.Invocations, s.Invocations)
 	out.Groups = copyGroups(previous.Groups, s.Groups)
 	if s.Failure != nil {
-		failure := *s.Failure
-		out.Failure = &failure
+		out.Failure = new(*s.Failure)
 	}
 	if s.Final != nil {
-		value := *s.Final
-		out.Final = &value
+		out.Final = new(*s.Final)
 	}
 	*dst = out
 }

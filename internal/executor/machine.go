@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/afterlune/luneGraph/internal/diagram"
@@ -175,10 +176,8 @@ func (r *Runner[S]) checkTargets(from string, targets []string) error {
 			if !containsTarget(allowed, target) {
 				return fmt.Errorf("node %q selected unknown edge to %q", from, target)
 			}
-			for j := 0; j < i; j++ {
-				if targets[j] == target {
-					return fmt.Errorf("node %q selected duplicate target %q", from, target)
-				}
+			if slices.Contains(targets[:i], target) {
+				return fmt.Errorf("node %q selected duplicate target %q", from, target)
 			}
 		}
 		return nil

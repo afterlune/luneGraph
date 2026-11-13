@@ -81,12 +81,7 @@ func New[S any](entry string) *Graph[S] {
 }
 
 func (g *Graph[S]) hasAncestor(id uint64) bool {
-	for _, anc := range g.ancestorIDs {
-		if anc == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(g.ancestorIDs, id)
 }
 
 func (g *Graph[S]) addAncestor(id uint64) {
