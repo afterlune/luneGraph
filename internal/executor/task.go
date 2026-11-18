@@ -21,8 +21,7 @@ type workerTask[S any] struct {
 	ref          taskRef
 	call         CallInfo
 	node         *CompiledNode[S]
-	spec         NodeSpec[S]
-	join         JoinSpec[S]
+	joinSpec     JoinSpec[S]
 	timeout      time.Duration
 	state        S
 	branches     []BranchResult[S]
@@ -34,21 +33,21 @@ type workerTask[S any] struct {
 
 func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 	out := workResult[S]{ref: t.ref, callID: t.call.CallID, node: t.node}
-	if t.ref.join {
-		if t.join.Merge != nil {
-			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.join, t.state, t.branches)
+	if t.ref.isJoin {
+		if t.joinSpec.Merge != nil {
+			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.joinSpec, t.state, t.branches)
 		}
 	} else if t.obs == nil {
-		out.transition, out.err = r.runNode(t.ctx, t.call, t.spec, t.state)
+		out.transition, out.err = r.runNode(t.ctx, t.call, t.node.Spec, t.state)
 	} else {
-		out.transition, out.err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.spec, t.state)
+		out.transition, out.err = r.observedNode(t.ctx, t.obs, t.revision, t.call, t.node.Spec, t.state)
 	}
 	return out
 }
 
 func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, obs *observation.Session) (workerTask[S], error) {
 	t := workerTask[S]{ctx: ctx, ref: ref, obs: obs, revision: l.header.Revision, ready: true}
-	if ref.join {
+	if ref.isJoin {
 		lg, _, ok := l.group(ref.id, ref.slot)
 		if !ok {
 			return t, invalidCheckpoint("join group %q missing", ref.id)
@@ -59,13 +58,13 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 			return t, invalidCheckpoint("join group %q parent %q missing", ref.id, g.ParentID)
 		}
 		if lg.join != nil {
-			t.join = lg.join.Spec
+			t.joinSpec = lg.join.Spec
 		} else if j := r.join(g.JoinNode); j != nil {
-			t.join = j.Spec
+			t.joinSpec = j.Spec
 		}
-		t.timeout = t.join.Timeout
+		t.timeout = t.joinSpec.Timeout
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
-		if t.join.CanMerge != nil && lg.remaining > 0 {
+		if t.joinSpec.CanMerge != nil && lg.remaining > 0 {
 			canMergeParent, err := r.cloneState(parent.State, parent.ID)
 			if err != nil {
 				return t, fmt.Errorf("clone speculative join parent: %w", err)
@@ -82,7 +81,7 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 				}
 				canMergeBranches = append(canMergeBranches, BranchResult[S]{Index: branchIndex, Target: branch.Target, Node: child.Node, Status: child.Status, State: state, Error: branch.Error})
 			}
-			ready, err := canMerge(t.join, t.call, canMergeParent, canMergeBranches)
+			ready, err := canMerge(t.joinSpec, t.call, canMergeParent, canMergeBranches)
 			if err != nil {
 				t.preflightErr = err
 				return t, nil
@@ -136,17 +135,17 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		} else {
 			n = r.node(v.Node)
 		}
-		if n != nil {
-			t.node = n
-			t.spec = n.Spec
+		if n == nil {
+			return t, invalidCheckpoint("invocation %q has unknown node %q", v.ID, v.Node)
 		}
+		t.node = n
 		if v.GroupID != "" {
 			if activation, _, ok := l.group(v.GroupID, -1); ok && v.BranchIndex >= 0 && v.BranchIndex < len(activation.group.Branches) {
 				t.timeout = activation.group.Branches[v.BranchIndex].EntryTimeout
 			}
 		}
 		if t.timeout <= 0 {
-			t.timeout = t.spec.Timeout
+			t.timeout = t.node.Spec.Timeout
 		}
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: v.ID, CallID: v.CallID, Node: v.Node, Step: l.header.Steps, BranchIndex: v.BranchIndex}
 	}

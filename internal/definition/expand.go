@@ -113,10 +113,10 @@ func expand[S any](g *Graph[S]) (model.CompiledGraph[S], error) {
 	}
 
 	for _, v := range g.vertices {
-		st := getScope(v.Scope)
+		st := getScope(v.MountPrefix)
 		localName := v.Name
-		if v.Scope != "" {
-			localName = strings.TrimPrefix(v.Name, v.Scope+"/")
+		if v.MountPrefix != "" {
+			localName = strings.TrimPrefix(v.Name, v.MountPrefix+"/")
 		}
 		st.targets[localName] = v.Name
 	}
@@ -159,7 +159,7 @@ func expand[S any](g *Graph[S]) (model.CompiledGraph[S], error) {
 	for _, v := range g.vertices {
 		if v.Kind == VertexNode {
 			run := v.Node.Run
-			if st, ok := scopeMaps[v.Scope]; ok && (len(st.targets) > 0 || len(st.continuations) > 0) {
+			if st, ok := scopeMaps[v.MountPrefix]; ok && (len(st.targets) > 0 || len(st.continuations) > 0) {
 				run = rewriteNode(v.Node.Run, st.targets, st.continuations)
 			}
 			allNodes = append(allNodes, rawNode{

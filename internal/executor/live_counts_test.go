@@ -51,25 +51,25 @@ func TestLiveInstallKeepsCountsAcrossNestedSettlementAndFailure(t *testing.T) {
 	assertLiveCounts(t, l)
 	inv, _ := l.getInvocation("i9")
 	inv.Status = InvocationWaiting
-	l.install(Change[int]{Header: l.header.Header(), UpsertInvocations: []Invocation[int]{inv}})
+	l.install(Change[int]{Header: l.header.Clone(), UpsertInvocations: []Invocation[int]{inv}})
 	assertLiveCounts(t, l)
 	inv, _ = l.getInvocation("i10")
 	inv.Status = InvocationReady
-	l.install(Change[int]{Header: l.header.Header(), UpsertInvocations: []Invocation[int]{inv}})
+	l.install(Change[int]{Header: l.header.Clone(), UpsertInvocations: []Invocation[int]{inv}})
 	assertLiveCounts(t, l)
 	// Settle one nested activation while its sibling and outer waiter remain.
 	inv, _ = l.getInvocation("i3")
 	inv.Status, inv.ChildGroupID = InvocationJoined, ""
-	l.install(Change[int]{Header: l.header.Header(), UpsertInvocations: []Invocation[int]{inv}, DeleteInvocations: []string{"i6", "i7"}, DeleteGroups: []string{"g5"}})
+	l.install(Change[int]{Header: l.header.Clone(), UpsertInvocations: []Invocation[int]{inv}, DeleteInvocations: []string{"i6", "i7"}, DeleteGroups: []string{"g5"}})
 	assertLiveCounts(t, l)
-	if l.valid(taskRef{id: "g5", join: true}) {
+	if l.valid(taskRef{id: "g5", isJoin: true}) {
 		t.Fatal("settled activation is still runnable")
 	}
 	r := executorTestRunner(t, "unused", nil, []JoinSpec[int]{{Name: "inner-join", OnError: FailGroup}}, nil, nil, nil)
 	// Test the same enclosing-group collection used when a Merge fails. g5 is
 	// ready in a fresh position, so no user callback or scheduling is needed.
 	l = newLive(nestedCandidatePosition(), nil)
-	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", join: true}, err: errors.New("merge failed")}, 0)
+	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", isJoin: true}, err: errors.New("merge failed")}, 0)
 	change := candidate.Change
 	if err != nil || candidate.TerminalErr != nil {
 		t.Fatalf("local failure = %v %v", err, candidate.TerminalErr)
@@ -82,10 +82,10 @@ func TestLiveInstallKeepsCountsAcrossNestedSettlementAndFailure(t *testing.T) {
 	}
 	parent, _ := l.getInvocation("i1")
 	other, ok := l.getInvocation("i90")
-	if parent.Status != InvocationFailed || !ok || other.Status != InvocationWaiting || l.valid(taskRef{id: "g5", join: true}) {
+	if parent.Status != InvocationFailed || !ok || other.Status != InvocationWaiting || l.valid(taskRef{id: "g5", isJoin: true}) {
 		t.Fatal("failure affected unrelated waiter or retained a removed task")
 	}
-	header := l.header.Header()
+	header := l.header.Clone()
 	header.Completed = true
 	l.install(Change[int]{Header: header})
 	assertLiveCounts(t, l)

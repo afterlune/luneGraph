@@ -80,7 +80,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			if !ok {
 				break
 			}
-			if lg, _, ok := l.group(ref.id, ref.slot); ref.join && ok && lg.group.JoinNode == "" {
+			if lg, _, ok := l.group(ref.id, ref.slot); ref.isJoin && ok && lg.group.JoinNode == "" {
 				outcome := r.commitResult(ctx, l, workResult[S]{ref: ref}, opts.MaxInvocations, cursor, store, obs, prepared)
 				if err := outcome.CommitErr; err != nil {
 					l.enqueue(ref)
@@ -90,12 +90,12 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 					return finish(StatusFailed, outcome.TerminalErr)
 				}
 				if l.header.Completed {
-					return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
+					return finish(statusOf(l.header, l.readyNodes, false), nil)
 				}
 				cancelInvalidTasks(l, running)
 				continue
 			}
-			if l.header.Revision == math.MaxUint64 || (!ref.join && l.header.Steps == math.MaxUint64) {
+			if l.header.Revision == math.MaxUint64 || (!ref.isJoin && l.header.Steps == math.MaxUint64) {
 				return finish(StatusFailed, ErrExecutionLimit)
 			}
 
@@ -103,7 +103,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			var err error
 			// Ready join inputs cannot change while this activation is pending.
 			// Reuse admission-blocked inputs rather than cloning on every result.
-			if ref.join {
+			if ref.isJoin {
 				var cached bool
 				task, cached = prepared[ref.id]
 				if !cached {
@@ -139,7 +139,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				break
 			}
 			reserved = false
-			if !ref.join {
+			if !ref.isJoin {
 				task, err = r.prepareTask(ctx, l, ref, obs)
 				if err != nil {
 					limit.Release(opts.Limiter)
@@ -155,13 +155,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 
 			// When no other task is running and no concurrent task can be dispatched,
 			// execute directly on the driver to avoid worker pool channel and context overhead.
-			if len(running) == 0 && (workerLimit == 1 || (l.joinQueue.len() == 0 && (l.nodeQueue.len() == 0 || (!ref.join && used+1 >= opts.MaxSteps)))) {
+			if len(running) == 0 && (workerLimit == 1 || (l.joinQueue.len() == 0 && (l.nodeQueue.len() == 0 || (!ref.isJoin && used+1 >= opts.MaxSteps)))) {
 				task.call.Step = l.header.Steps
 				task.revision = l.header.Revision
-				if ref.join && prepared != nil {
+				if ref.isJoin && prepared != nil {
 					delete(prepared, ref.id)
 				}
-				if !ref.join {
+				if !ref.isJoin {
 					used++
 					cursor = invocationNumber(ref.id)
 				}
@@ -194,7 +194,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				running = make(map[taskRef]context.CancelFunc, workerLimit)
 			}
 			running[ref] = cancel
-			if !ref.join {
+			if !ref.isJoin {
 				runningNodes++
 				used++
 				cursor = invocationNumber(ref.id)
@@ -209,12 +209,12 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				return finish(StatusFailed, ErrExecutionLimit)
 			}
 			if l.header.Completed {
-				return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
+				return finish(statusOf(l.header, l.readyNodes, false), nil)
 			}
 			if !l.hasReadyNode() && len(l.groups) > 0 && l.waitingInvocations == 0 {
 				return finish(StatusFailed, invalidCheckpoint("unresolved execution has no runnable work"))
 			}
-			status := statusOf(l.header.Header(), l.readyNodes, used >= opts.MaxSteps)
+			status := statusOf(l.header, l.readyNodes, used >= opts.MaxSteps)
 			if status == StatusBudget {
 				budgetReason = BudgetMaxSteps
 			}
@@ -222,7 +222,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 		}
 		var slots chan<- struct{}
 		if blocked {
-			slots = limit.Slots(opts.Limiter)
+			slots = limit.AcquireChan(opts.Limiter)
 		}
 		var out workResult[S]
 		if immediate {
@@ -242,7 +242,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			}
 			running[out.ref]()
 			delete(running, out.ref)
-			if !out.ref.join {
+			if !out.ref.isJoin {
 				runningNodes--
 			}
 		}
@@ -277,7 +277,7 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			return finish(StatusFailed, outcome.TerminalErr)
 		}
 		if l.header.Completed {
-			return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
+			return finish(statusOf(l.header, l.readyNodes, false), nil)
 		}
 	}
 }

@@ -15,6 +15,12 @@ type Header struct {
 	Failure                                 *Failure
 }
 
+// Clone returns a copy of h with an independent Failure record.
+func (h Header) Clone() Header {
+	h.Failure = copyFailure(h.Failure)
+	return h
+}
+
 // Change atomically updates only listed records. Final and Header are
 // authoritative; a completed Header removes all active records.
 type Change[S any] struct {
@@ -26,8 +32,8 @@ type Change[S any] struct {
 	DeleteGroups      []string
 }
 
-func (s Checkpoint[S]) Header() Header {
-	return Header{s.FormatVersion, s.RunID, s.DefinitionID, s.Revision, s.Steps, s.NextID, s.ScheduleCursor, s.Completed, s.HadLocalFailures, copyFailure(s.Failure)}
+func (cp Checkpoint[S]) Header() Header {
+	return Header{cp.FormatVersion, cp.RunID, cp.DefinitionID, cp.Revision, cp.Steps, cp.NextID, cp.ScheduleCursor, cp.Completed, cp.HadLocalFailures, copyFailure(cp.Failure)}
 }
 
 func copyFailure(f *Failure) *Failure {
@@ -37,22 +43,22 @@ func copyFailure(f *Failure) *Failure {
 	return new(*f)
 }
 
-// Change returns upserts for all records in s. Omitted records are not deleted,
-// except when s is terminal. Executors submit only changed records.
-func (s Checkpoint[S]) Change() Change[S] {
-	inv := slices.Clone(s.Invocations)
+// Change returns upserts for all records in cp. Omitted records are not deleted,
+// except when cp is terminal. Executors submit only changed records.
+func (cp Checkpoint[S]) Change() Change[S] {
+	inv := slices.Clone(cp.Invocations)
 	for i := range inv {
-		inv[i].Next = slices.Clone(s.Invocations[i].Next)
+		inv[i].Next = slices.Clone(cp.Invocations[i].Next)
 	}
-	groups := slices.Clone(s.Groups)
+	groups := slices.Clone(cp.Groups)
 	for i := range groups {
-		groups[i].Branches = slices.Clone(s.Groups[i].Branches)
+		groups[i].Branches = slices.Clone(cp.Groups[i].Branches)
 	}
 	var final *S
-	if s.Final != nil {
-		final = new(*s.Final)
+	if cp.Final != nil {
+		final = new(*cp.Final)
 	}
-	return Change[S]{Header: s.Header(), Final: final, UpsertInvocations: inv, UpsertGroups: groups}
+	return Change[S]{Header: cp.Header(), Final: final, UpsertInvocations: inv, UpsertGroups: groups}
 }
 
 // Checkpoint materializes the records in this change, not the full execution.

@@ -11,7 +11,7 @@ import (
 
 func (f *failureFixture) diagnose(t *testing.T, phase string) {
 	t.Helper()
-	slots := limit.Slots(f.limiter)
+	slots := limit.AcquireChan(f.limiter)
 	t.Logf("phase=%s limiter=%d/%d", phase, len(slots), cap(slots))
 	events := f.log.snapshot()
 	// Keep callback progress visible even when its event is outside the tail.

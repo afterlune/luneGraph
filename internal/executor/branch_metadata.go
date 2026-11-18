@@ -7,14 +7,14 @@ import (
 
 // activationBranch borrows the current branch record. Mutations must first
 // copy the activation's slice to preserve the accepted position's ownership.
-func activationBranch[S any](s *candidatePosition[S], inv *Invocation[S]) (*ActivationBranch, *ActivationGroup, error) {
+func activationBranch[S any](pos *candidatePosition[S], inv *Invocation[S]) (*ActivationBranch, *ActivationGroup, error) {
 	if inv == nil {
 		return nil, nil, fmt.Errorf("invocation disappeared")
 	}
 	if inv.GroupID == "" {
 		return nil, nil, nil
 	}
-	activation := findActivationGroup(s.Groups, inv.GroupID)
+	activation := findActivationGroup(pos.Groups, inv.GroupID)
 	if activation == nil || inv.BranchIndex < 0 || inv.BranchIndex >= len(activation.Branches) || activation.Branches[inv.BranchIndex].InvocationID != inv.ID {
 		return nil, nil, fmt.Errorf("invocation %q has invalid group membership", inv.ID)
 	}
@@ -23,8 +23,8 @@ func activationBranch[S any](s *candidatePosition[S], inv *Invocation[S]) (*Acti
 
 // clearEntryTimeout is applied only to a successful node outcome's candidate.
 // If transition construction or submission fails, the accepted override survives.
-func clearEntryTimeout[S any](s *candidatePosition[S], inv *Invocation[S]) error {
-	branch, activation, err := activationBranch(s, inv)
+func clearEntryTimeout[S any](pos *candidatePosition[S], inv *Invocation[S]) error {
+	branch, activation, err := activationBranch(pos, inv)
 	if err != nil {
 		return err
 	}

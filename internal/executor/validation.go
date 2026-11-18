@@ -34,32 +34,32 @@ func checkpointID(id, prefix string) (uint64, bool) {
 	return n, true
 }
 
-func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
+func (r *Runner[S]) validateCheckpoint(cp Checkpoint[S]) error {
 	if r == nil {
 		return errors.New("runner is nil")
 	}
-	if s.FormatVersion != CheckpointFormatVersion {
-		return invalidCheckpoint("unsupported format version %d", s.FormatVersion)
+	if cp.FormatVersion != CheckpointFormatVersion {
+		return invalidCheckpoint("unsupported format version %d", cp.FormatVersion)
 	}
-	if !validName(s.RunID) || s.DefinitionID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 3 || s.ScheduleCursor >= s.NextID {
+	if !validName(cp.RunID) || cp.DefinitionID != r.definitionID || cp.Revision == 0 || (!cp.Completed && cp.Final != nil) || cp.NextID < 3 || cp.ScheduleCursor >= cp.NextID {
 		return invalidCheckpoint("invalid execution header")
 	}
-	if s.Failure != nil {
-		n, valid := checkpointID(s.Failure.InvocationID, "i")
-		node := r.node(s.Failure.Node) != nil
-		join := r.join(s.Failure.Node) != nil
-		if !s.Completed || s.Final != nil || !valid || n >= s.NextID || (!node && !join) {
+	if cp.Failure != nil {
+		n, valid := checkpointID(cp.Failure.InvocationID, "i")
+		node := r.node(cp.Failure.Node) != nil
+		join := r.join(cp.Failure.Node) != nil
+		if !cp.Completed || cp.Final != nil || !valid || n >= cp.NextID || (!node && !join) {
 			return invalidCheckpoint("invalid execution failure")
 		}
 	}
-	invIndices := make(map[string]int, len(s.Invocations))
-	groupIndices := make(map[string]int, len(s.Groups))
+	invIndices := make(map[string]int, len(cp.Invocations))
+	groupIndices := make(map[string]int, len(cp.Groups))
 	var maxID uint64
 	active := false
 	callIDs := make(map[string]struct{})
-	for i, inv := range s.Invocations {
+	for i, inv := range cp.Invocations {
 		n, valid := checkpointID(inv.ID, "i")
-		if !valid || n >= s.NextID {
+		if !valid || n >= cp.NextID {
 			return invalidCheckpoint("invalid invocation ID %q", inv.ID)
 		}
 		if n > maxID {
@@ -67,7 +67,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 		if inv.CallID != "" {
 			callID, valid := checkpointID(inv.CallID, "c")
-			if !valid || callID >= s.NextID {
+			if !valid || callID >= cp.NextID {
 				return invalidCheckpoint("invalid callback ID %q for invocation %q", inv.CallID, inv.ID)
 			}
 			if _, exists := callIDs[inv.CallID]; exists {
@@ -107,7 +107,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 				if err := r.checkTargets(inv.Node, inv.Next); err != nil {
 					return invalidCheckpoint("invocation %q: %v", inv.ID, err)
 				}
-				if err := r.checkJoinTargets(s.Groups, &inv, inv.Next); err != nil {
+				if err := r.checkJoinTargets(cp.Groups, &inv, inv.Next); err != nil {
 					return invalidCheckpoint("invocation %q: %v", inv.ID, err)
 				}
 			}
@@ -126,9 +126,9 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			return invalidCheckpoint("invocation %q has invalid status", inv.ID)
 		}
 	}
-	for i, group := range s.Groups {
+	for i, group := range cp.Groups {
 		n, valid := checkpointID(group.ID, "g")
-		if !valid || n >= s.NextID {
+		if !valid || n >= cp.NextID {
 			return invalidCheckpoint("invalid group ID %q", group.ID)
 		}
 		if n > maxID {
@@ -136,7 +136,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 		if group.JoinNode != "" {
 			callID, valid := checkpointID(group.CallID, "c")
-			if !valid || callID >= s.NextID {
+			if !valid || callID >= cp.NextID {
 				return invalidCheckpoint("invalid callback ID %q for group %q", group.CallID, group.ID)
 			}
 			if _, exists := callIDs[group.CallID]; exists {
@@ -157,7 +157,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		if !exists {
 			return invalidCheckpoint("group %q has invalid parent", group.ID)
 		}
-		parent := s.Invocations[parentIdx]
+		parent := cp.Invocations[parentIdx]
 		if parent.Status != InvocationGroup || parent.ChildGroupID != group.ID || parent.Node != group.Source {
 			return invalidCheckpoint("group %q has invalid parent", group.ID)
 		}
@@ -169,11 +169,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		if group.JoinNode != expectedJoin {
 			return invalidCheckpoint("group %q has incompatible join", group.ID)
 		}
-		numEdges := 0
-		if sourceNode != nil {
-			numEdges = sourceNode.EdgeEnd - sourceNode.EdgeStart
-		}
-		if group.JoinNode == "" && (len(group.Branches) < 2 || len(group.Branches) > numEdges) {
+		if group.JoinNode == "" && len(group.Branches) == 0 {
 			return invalidCheckpoint("group %q has invalid unjoined child count", group.ID)
 		}
 		for index, branch := range group.Branches {
@@ -182,12 +178,19 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			if !exists {
 				return invalidCheckpoint("group %q has invalid child %q", group.ID, childID)
 			}
-			child := s.Invocations[childIdx]
+			child := cp.Invocations[childIdx]
 			if child.GroupID != group.ID || child.BranchIndex != index || childID == group.ParentID {
 				return invalidCheckpoint("group %q has invalid child %q", group.ID, childID)
 			}
-			hasEdge := sourceNode != nil && findEdge(r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd], branch.Target) >= 0
-			if !hasEdge || branch.EntryTimeout < 0 {
+			edgeIdx := -1
+			if sourceNode != nil {
+				edgeIdx = findEdge(r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd], branch.Target)
+			}
+			if edgeIdx < 0 || branch.EntryTimeout < 0 {
+				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
+			}
+			edge := r.edges[sourceNode.EdgeStart+edgeIdx]
+			if edge.TargetJoinIndex >= 0 && (group.JoinNode == "" || branch.Target != group.JoinNode || child.Status != InvocationJoined || child.Node != group.JoinNode || branch.EntryTimeout != 0) {
 				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
 			}
 			if branch.EntryTimeout > 0 && child.Status != InvocationFailed && (child.Status != InvocationReady || child.Node != branch.Target) {
@@ -203,7 +206,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		resolved := true
 		for _, branch := range group.Branches {
 			childID := branch.InvocationID
-			status := s.Invocations[invIndices[childID]].Status
+			status := cp.Invocations[invIndices[childID]].Status
 			if status != InvocationJoined && status != InvocationEnded && status != InvocationFailed {
 				resolved = false
 				break
@@ -213,16 +216,16 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			active = true
 		}
 	}
-	if maxID >= s.NextID {
+	if maxID >= cp.NextID {
 		return invalidCheckpoint("next ID has already been used")
 	}
-	for _, inv := range s.Invocations {
+	for _, inv := range cp.Invocations {
 		if inv.GroupID != "" {
 			gIdx, exists := groupIndices[inv.GroupID]
 			if !exists {
 				return invalidCheckpoint("invocation %q has invalid group membership", inv.ID)
 			}
-			group := s.Groups[gIdx]
+			group := cp.Groups[gIdx]
 			if inv.BranchIndex >= len(group.Branches) || group.Branches[inv.BranchIndex].InvocationID != inv.ID {
 				return invalidCheckpoint("invocation %q has invalid group membership", inv.ID)
 			}
@@ -236,31 +239,31 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			return invalidCheckpoint("joined invocation %q has no group", inv.ID)
 		}
 	}
-	groupVisit := make([]uint8, len(s.Groups))
-	for gIdx := range s.Groups {
+	groupVisit := make([]uint8, len(cp.Groups))
+	for gIdx := range cp.Groups {
 		if groupVisit[gIdx] == 2 {
 			continue
 		}
 		curr := gIdx
 		for curr >= 0 {
 			if groupVisit[curr] == 1 {
-				return invalidCheckpoint("group %q has cyclic ancestry", s.Groups[curr].ID)
+				return invalidCheckpoint("group %q has cyclic ancestry", cp.Groups[curr].ID)
 			}
 			if groupVisit[curr] == 2 {
 				break
 			}
 			groupVisit[curr] = 1
-			pIdx, pExists := invIndices[s.Groups[curr].ParentID]
+			pIdx, pExists := invIndices[cp.Groups[curr].ParentID]
 			if !pExists {
-				return invalidCheckpoint("group %q has missing ancestor", s.Groups[curr].ID)
+				return invalidCheckpoint("group %q has missing ancestor", cp.Groups[curr].ID)
 			}
-			parentGroupID := s.Invocations[pIdx].GroupID
+			parentGroupID := cp.Invocations[pIdx].GroupID
 			if parentGroupID == "" {
 				break
 			}
 			nextGIdx, gExists := groupIndices[parentGroupID]
 			if !gExists {
-				return invalidCheckpoint("group %q has missing ancestor", s.Groups[curr].ID)
+				return invalidCheckpoint("group %q has missing ancestor", cp.Groups[curr].ID)
 			}
 			curr = nextGIdx
 		}
@@ -270,16 +273,16 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 				break
 			}
 			groupVisit[curr] = 2
-			pIdx := invIndices[s.Groups[curr].ParentID]
-			parentGroupID := s.Invocations[pIdx].GroupID
+			pIdx := invIndices[cp.Groups[curr].ParentID]
+			parentGroupID := cp.Invocations[pIdx].GroupID
 			if parentGroupID == "" {
 				break
 			}
 			curr = groupIndices[parentGroupID]
 		}
 	}
-	if s.Completed {
-		if s.Steps == 0 || len(s.Groups) != 0 || len(s.Invocations) != 0 {
+	if cp.Completed {
+		if cp.Steps == 0 || len(cp.Groups) != 0 || len(cp.Invocations) != 0 {
 			return invalidCheckpoint("invalid completed execution")
 		}
 		return nil

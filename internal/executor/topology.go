@@ -10,7 +10,7 @@ import (
 
 // Runner is an immutable compiled graph safe to share across executions.
 type Runner[S any] struct {
-	id            string
+	definitionID  string
 	entry         string
 	entryIndex    int
 	clone         Clone[S]
@@ -25,7 +25,7 @@ type Runner[S any] struct {
 
 func New[S any](compiled CompiledGraph[S]) *Runner[S] {
 	return &Runner[S]{
-		id:            compiled.ID,
+		definitionID:  compiled.ID,
 		entry:         compiled.Entry,
 		entryIndex:    compiled.EntryIndex,
 		clone:         compiled.Clone,

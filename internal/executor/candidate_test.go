@@ -179,7 +179,7 @@ func TestCandidateCommitPreservesIndependentActivation(t *testing.T) {
 		[]NodeSpec[int]{executorTestNode("worker", executorTestEnd, FailInvocation)},
 		[]JoinSpec[int]{{Name: "inner-join", FanOutSource: "worker"}}, nil, nil, nil)
 	l := newLive(cp, r)
-	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", join: true}, state: 42}, 0)
+	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", isJoin: true}, state: 42}, 0)
 	if err != nil || candidate.TerminalErr != nil {
 		t.Fatalf("build candidate = %v, %v", err, candidate.TerminalErr)
 	}
@@ -202,7 +202,7 @@ func TestCandidateCommitPreservesIndependentActivation(t *testing.T) {
 		}
 	}
 	ref, ok := l.next(true, nil)
-	if !ok || ref.join || ref.id != "i9" {
+	if !ok || ref.isJoin || ref.id != "i9" {
 		t.Fatalf("next independent task = %+v, %v", ref, ok)
 	}
 }

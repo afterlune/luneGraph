@@ -265,6 +265,20 @@ func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], ta
 		if err := g.AddEdge("joined", "done"); err != nil {
 			t.Fatal(err)
 		}
+	} else {
+		for _, target := range targets {
+			if target == "joined" {
+				node(t, g, "other", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+					return graph.EndExecution(state), nil
+				})
+				if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "other", OnError: graph.FailExecution, Merge: func(_ context.Context, _ graph.CallInfo, parent int, _ []graph.BranchResult[int]) (int, error) {
+					return parent, nil
+				}}); err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+		}
 	}
 	edges := make(map[string]bool)
 	for _, target := range targets {
@@ -290,9 +304,9 @@ func TestDynamicFanOutValidationAndAtomicCloneFailure(t *testing.T) {
 		targets []string
 		clone   graph.Clone[int]
 	}{
-		{name: "missing join", targets: []string{"worker"}},
 		{name: "undeclared target", join: true, targets: []string{"worker", "unlinked"}},
 		{name: "branch target is join", join: true, targets: []string{"joined"}},
+		{name: "branch target is join without source join", join: false, targets: []string{"worker", "joined"}},
 		{name: "clone error after earlier branch", join: true, targets: []string{"worker", "worker"}, clone: func(v int) (int, error) {
 			if v == 2 {
 				return 0, errors.New("branch clone failed")
@@ -330,7 +344,7 @@ func TestFanOutValidationBeforeCloningWithAndWithoutStore(t *testing.T) {
 		limit   int
 		message string
 	}{
-		{name: "missing join", targets: []string{"worker"}, message: "requires a JoinSpec"},
+		{name: "undeclared target without join", targets: []string{"unlinked"}, message: "undeclared branch target"},
 		{name: "undeclared target", join: true, targets: []string{"worker", "unlinked"}, message: "undeclared branch target"},
 		{name: "join target", join: true, targets: []string{"joined"}, message: "not an executable node"},
 		{name: "negative timeout before budget", join: true, targets: []string{"worker"}, timeout: -time.Second, limit: 1, message: "timeout must not be negative"},
@@ -814,4 +828,299 @@ func TestDynamicFanOutTolerantJoinWithPartialFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnjoinedFanOutZeroBranchNestedIDExhaustionAndJoinContrast(t *testing.T) {
+	for _, storage := range []string{"no-store", "memory", "sqlite"} {
+		t.Run("top-level-zero-branch/"+storage, func(t *testing.T) {
+			g := graph.New[int]("dispatch")
+			node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.FanOut(state + 1), nil
+			})
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "unjoined-zero-v1", Clone: graph.ValueClone[int]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var store graph.Store[int]
+			if storage != "no-store" {
+				store = dynamicRetryStore(t, storage)
+			}
+			exec, res, err := r.Start(context.Background(), "zero-"+storage, 10, store, graph.Options{})
+			if err != nil || res.Status != graph.StatusCompleted || !res.Header.Completed || res.Final != nil || res.Header.Steps != 1 || res.Header.NextID != 3 {
+				t.Fatalf("top-level zero-branch unjoined FanOut = %+v, %v", res, err)
+			}
+			cp := mustCheckpoint(exec)
+			if len(cp.Groups) != 0 || len(cp.Invocations) != 0 {
+				t.Fatalf("unexpected active records: %+v", cp)
+			}
+		})
+	}
+
+	for _, storage := range []string{"no-store", "memory"} {
+		t.Run("nextid-exhausted-zero-branch/"+storage, func(t *testing.T) {
+			g := graph.New[int]("dispatch")
+			node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.FanOut(state + 1), nil
+			})
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "unjoined-maxid-v1", Clone: graph.ValueClone[int]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp := graph.Checkpoint[int]{
+				FormatVersion: graph.CheckpointFormatVersion,
+				RunID:         "maxid-" + storage,
+				DefinitionID:  "unjoined-maxid-v1",
+				Revision:      1,
+				NextID:        math.MaxUint64,
+				Invocations: []graph.Invocation[int]{
+					{ID: "i1", CallID: "c2", Node: "dispatch", State: 7, Status: graph.InvocationReady},
+				},
+			}
+			var store graph.Store[int]
+			if storage == "memory" {
+				store = dynamicRetryStore(t, storage)
+				if err := store.Create(context.Background(), cp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec, res, err := r.Resume(context.Background(), cp, nil, store, graph.Options{})
+			if err != nil || res.Status != graph.StatusCompleted || !res.Header.Completed || res.Final != nil || res.Header.NextID != math.MaxUint64 {
+				t.Fatalf("MaxUint64 zero-branch unjoined FanOut = %+v, %v", res, err)
+			}
+			if got := mustCheckpoint(exec); len(got.Groups) != 0 || len(got.Invocations) != 0 {
+				t.Fatalf("remaining active records: %+v", got)
+			}
+		})
+
+		t.Run("nested-zero-branch-clears-entry-timeout/"+storage, func(t *testing.T) {
+			var outerBranches []graph.BranchResult[int]
+			g := graph.New[int]("outer")
+			node(t, g, "outer", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
+				return graph.FanOut(parent,
+					graph.Branch[int]{Target: "inner-dispatch", State: 10, EntryTimeout: time.Minute},
+					graph.Branch[int]{Target: "sibling-wait", State: 20},
+				), nil
+			})
+			node(t, g, "inner-dispatch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.FanOut(state + 1), nil
+			})
+			node(t, g, "sibling-wait", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.Wait(state, "go", "sibling-done"), nil
+			})
+			node(t, g, "sibling-done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.CompleteBranch(state + 1), nil
+			})
+			if err := graph.RegisterJSONContinuation(g, "go", func(_ context.Context, _ graph.CallInfo, s int, add int) (int, error) {
+				return s + add, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.AddJoin(graph.JoinSpec[int]{
+				Name:         "outer-join",
+				FanOutSource: "outer",
+				OnError:      graph.FailExecution,
+				Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+					outerBranches = append([]graph.BranchResult[int](nil), branches...)
+					total := parent
+					for _, b := range branches {
+						if b.OK() {
+							total += b.State
+						}
+					}
+					return total, nil
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+				return graph.EndExecution(state), nil
+			})
+			edge(t, g, "outer", "inner-dispatch")
+			edge(t, g, "outer", "sibling-wait")
+			edge(t, g, "sibling-wait", "sibling-done")
+			edge(t, g, "outer-join", "done")
+
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "nested-unjoined-zero-v1", Clone: graph.ValueClone[int]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var store graph.Store[int]
+			if storage == "memory" {
+				store = dynamicRetryStore(t, storage)
+			}
+			exec, waitRes, err := r.Start(context.Background(), "nested-zero-"+storage, 5, store, graph.Options{MaxConcurrency: 1})
+			if err != nil || waitRes.Status != graph.StatusWaiting {
+				t.Fatalf("nested start = %+v, %v", waitRes, err)
+			}
+			paused := mustCheckpoint(exec)
+			if len(paused.Groups) != 1 || paused.Groups[0].Branches[0].EntryTimeout != 0 {
+				t.Fatalf("inner zero-branch did not clear outer EntryTimeout: %+v", paused.Groups)
+			}
+			pending := exec.Pending()
+			if len(pending) != 1 {
+				t.Fatalf("expected 1 pending wait, got %+v", pending)
+			}
+			doneRes, err := exec.Advance(context.Background(), []graph.ResumeInput{{
+				InvocationID: pending[0].InvocationID,
+				CallID:       pending[0].CallID,
+				Payload:      []byte("3"),
+			}}, graph.Options{})
+			if err != nil || doneRes.Status != graph.StatusCompleted || doneRes.Final == nil || *doneRes.Final != 29 {
+				t.Fatalf("nested advance = %+v, %v", doneRes, err)
+			}
+			if len(outerBranches) != 2 || !outerBranches[0].Ended() || outerBranches[0].OK() || !outerBranches[1].OK() {
+				t.Fatalf("outer Merge branches mismatch: %+v", outerBranches)
+			}
+		})
+	}
+
+	t.Run("contrast-joined-zero-branch-invokes-merge", func(t *testing.T) {
+		var mergeCalls int
+		g := graph.New[int]("dispatch")
+		node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
+			return graph.FanOut(parent + 1), nil
+		})
+		if err := g.AddJoin(graph.JoinSpec[int]{
+			Name:         "joined",
+			FanOutSource: "dispatch",
+			OnError:      graph.FailExecution,
+			Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+				mergeCalls++
+				if call.CallID == "" || len(branches) != 0 {
+					return 0, fmt.Errorf("unexpected zero-branch merge input: call=%+v branches=%+v", call, branches)
+				}
+				return parent + 10, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		node(t, g, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.EndExecution(state), nil
+		})
+		edge(t, g, "joined", "done")
+		r, err := g.Compile(graph.Config[int]{DefinitionID: "joined-zero-contrast-v1", Clone: graph.ValueClone[int]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, res, err := r.Start(context.Background(), "joined-zero", 2, nil, graph.Options{})
+		if err != nil || res.Status != graph.StatusCompleted || res.Final == nil || *res.Final != 13 || mergeCalls != 1 {
+			t.Fatalf("joined zero-branch contrast = %+v, mergeCalls=%d, err=%v", res, mergeCalls, err)
+		}
+
+		exhausted := graph.Checkpoint[int]{
+			FormatVersion: graph.CheckpointFormatVersion,
+			RunID:         "joined-zero-exhausted",
+			DefinitionID:  "joined-zero-contrast-v1",
+			Revision:      1,
+			NextID:        math.MaxUint64,
+			Invocations:   []graph.Invocation[int]{{ID: "i1", CallID: "c2", Node: "dispatch", State: 1, Status: graph.InvocationReady}},
+		}
+		_, _, err = r.Resume(context.Background(), exhausted, nil, nil, graph.Options{})
+		if !errors.Is(err, graph.ErrExecutionLimit) {
+			t.Fatalf("joined zero-branch at MaxUint64 = %v, want ErrExecutionLimit", err)
+		}
+	})
+}
+
+func TestUnjoinedFanOutSingleAndRepeatedTargetsRecoverResumeForkAndRejectCompleteBranch(t *testing.T) {
+	for _, count := range []int{1, 3} {
+		t.Run(fmt.Sprintf("branches=%d", count), func(t *testing.T) {
+			for _, mode := range []string{"recover", "resume", "fork"} {
+				t.Run(mode, func(t *testing.T) {
+					var finished atomic.Int32
+					g := graph.New[int]("dispatch")
+					node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
+						branches := make([]graph.Branch[int], count)
+						for i := range branches {
+							branches[i] = graph.Branch[int]{Target: "worker", State: parent + i + 1}
+						}
+						return graph.FanOut(parent, branches...), nil
+					})
+					node(t, g, "worker", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+						return graph.Wait(state, "go", "finish"), nil
+					})
+					node(t, g, "finish", func(_ context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
+						finished.Add(1)
+						return graph.EndBranch[int](), nil
+					})
+					if err := graph.RegisterJSONContinuation(g, "go", func(_ context.Context, _ graph.CallInfo, s int, add int) (int, error) {
+						return s + add, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					edge(t, g, "dispatch", "worker")
+					edge(t, g, "worker", "finish")
+
+					r, err := g.Compile(graph.Config[int]{DefinitionID: "unjoined-pause-v1", Clone: graph.ValueClone[int]})
+					if err != nil {
+						t.Fatal(err)
+					}
+					store := dynamicRetryStore(t, "sqlite")
+					exec, waitRes, err := r.Start(context.Background(), "unjoined-pause", 10, store, graph.Options{MaxConcurrency: 2})
+					if err != nil || waitRes.Status != graph.StatusWaiting {
+						t.Fatalf("start = %+v, %v", waitRes, err)
+					}
+					paused, err := store.Load(context.Background(), "unjoined-pause")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(paused.Groups) != 1 || paused.Groups[0].JoinNode != "" || paused.Groups[0].CallID != "" || len(paused.Groups[0].Branches) != count {
+						t.Fatalf("unexpected paused unjoined group: %+v", paused.Groups)
+					}
+					pending := exec.Pending()
+					if len(pending) != count {
+						t.Fatalf("expected %d pending waits, got %d", count, len(pending))
+					}
+					inputs := make([]graph.ResumeInput, len(pending))
+					for i, p := range pending {
+						inputs[i] = graph.ResumeInput{InvocationID: p.InvocationID, CallID: p.CallID, Payload: []byte("1")}
+					}
+					var doneExec *graph.Execution[int]
+					var doneRes graph.Result[int]
+					switch mode {
+					case "recover":
+						doneExec, doneRes, err = r.Recover(context.Background(), "unjoined-pause", inputs, store, graph.Options{MaxConcurrency: 2})
+					case "resume":
+						doneExec, doneRes, err = r.Resume(context.Background(), paused, inputs, store, graph.Options{MaxConcurrency: 2})
+					case "fork":
+						forked, forkErr := r.Fork(context.Background(), "unjoined-fork", paused, store)
+						if forkErr != nil {
+							t.Fatal(forkErr)
+						}
+						doneExec, doneRes, err = r.Resume(context.Background(), forked, inputs, store, graph.Options{MaxConcurrency: 2})
+					}
+					if err != nil || doneRes.Status != graph.StatusCompleted || !doneRes.Header.Completed || doneRes.Final != nil {
+						t.Fatalf("%s completion = %+v, %v", mode, doneRes, err)
+					}
+					if int(finished.Load()) != count {
+						t.Fatalf("finished count = %d, want %d", finished.Load(), count)
+					}
+					cp := mustCheckpoint(doneExec)
+					if len(cp.Groups) != 0 || len(cp.Invocations) != 0 {
+						t.Fatalf("active records remain after unjoined settlement: %+v", cp)
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("complete-branch-rejected-without-join", func(t *testing.T) {
+		g := graph.New[int]("dispatch")
+		node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, parent int) (graph.Transition[int], error) {
+			return graph.FanOut(parent, graph.Branch[int]{Target: "worker", State: 1}), nil
+		})
+		node(t, g, "worker", func(_ context.Context, _ graph.CallInfo, s int) (graph.Transition[int], error) {
+			return graph.CompleteBranch(s), nil
+		})
+		edge(t, g, "dispatch", "worker")
+		r, err := g.Compile(graph.Config[int]{DefinitionID: "unjoined-complete-reject-v1", Clone: graph.ValueClone[int]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, res, err := r.Start(context.Background(), "complete-reject", 0, nil, graph.Options{})
+		var transitionErr *graph.TransitionError
+		if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), "CompleteBranch requires a group with a join") || res.Status != graph.StatusFailed || res.Header.Completed {
+			t.Fatalf("unexpected CompleteBranch result = %+v, %v", res, err)
+		}
+	})
 }

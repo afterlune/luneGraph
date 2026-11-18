@@ -128,7 +128,7 @@ func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *candidatePosition[S], s
 }
 
 func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joinGroupID string) candidatePosition[S] {
-	cp := candidatePosition[S]{Header: l.header.Header(), Final: l.header.Final}
+	cp := candidatePosition[S]{Header: l.header.Clone(), Final: l.final}
 	if w.beforeInv == nil {
 		w.beforeInv = w.beforeInvInline[:0]
 	}

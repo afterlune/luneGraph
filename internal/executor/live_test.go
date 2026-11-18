@@ -21,13 +21,13 @@ func TestLiveReadinessAndCandidateIsolation(t *testing.T) {
 		t.Fatal(lg)
 	}
 	ref, ok := l.next(false, nil)
-	if !ok || !ref.join || ref.id != "g3" {
+	if !ok || !ref.isJoin || ref.id != "g3" {
 		t.Fatal(ref, ok)
 	}
 	if cp.Invocations[1].State != 1 || cp.Invocations[1].Status != InvocationReady {
 		t.Fatal("candidate mutated source", cp)
 	}
-	l.install(Change[int]{Header: l.header.Header(), DeleteGroups: []string{"g3"}})
+	l.install(Change[int]{Header: l.header.Clone(), DeleteGroups: []string{"g3"}})
 	if l.valid(ref) {
 		t.Fatal("deleted group remains runnable")
 	}

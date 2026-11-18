@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -19,11 +18,5 @@ func TestCallbackInterruptionClassification(t *testing.T) {
 		if got := isCallbackInterruption(tc.err); got != tc.want {
 			t.Fatalf("%v classified %v", tc.err, got)
 		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	result, err := interruptedResult(ctx, Checkpoint[int]{Revision: 7}, marker)
-	if result.Status != StatusCancelled || result.Header.Revision != 7 || !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled=%+v %v", result, err)
 	}
 }

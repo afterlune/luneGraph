@@ -21,7 +21,7 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 	if r == nil {
 		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
 	}
-	obs := observation.New(opts.Observer, r.id, runID)
+	obs := observation.New(opts.Observer, r.definitionID, runID)
 	if obs != nil {
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationRecover})
 		defer func() {
@@ -61,20 +61,20 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 	l := initLive(&execution.liveVal, checkpoint, r)
 	execution.live = l
 	if err = ctx.Err(); err != nil {
-		result, retErr = r.resultFromLiveOrEmpty(l, StatusCancelled, err)
+		result, retErr = r.resultFromLiveWithErr(l, StatusCancelled, err)
 		return execution, result, retErr
 	}
 	if checkpoint.Completed {
 		if len(inputs) != 0 {
-			result, retErr = r.resultFromLiveOrEmpty(l, StatusFailed, ErrRunCompleted)
+			result, retErr = r.resultFromLiveWithErr(l, StatusFailed, ErrRunCompleted)
 			return execution, result, retErr
 		}
 		if failure := recoveredFailure(checkpoint); failure != nil {
-			result, retErr = r.resultFromLiveOrEmpty(l, StatusFailed, failure)
+			result, retErr = r.resultFromLiveWithErr(l, StatusFailed, failure)
 			return execution, result, retErr
 		}
 		status := statusOf(checkpoint.Header(), 0, false)
-		result, retErr = r.resultFromLiveOrEmpty(l, status, nil)
+		result, retErr = r.resultFromLiveWithErr(l, status, nil)
 		return execution, result, retErr
 	}
 	result, retErr = r.advanceLive(ctx, l, inputs, opts, activeStore, obs)

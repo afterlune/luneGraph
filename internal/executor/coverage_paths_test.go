@@ -119,7 +119,7 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 		events = nil
 		return observation.New(model.ObserverFunc(func(_ context.Context, event model.Event) {
 			events = append(events, event)
-		}), runner.id, "observed-run")
+		}), runner.definitionID, "observed-run")
 	}
 	checkEvents := func(operation model.EventOperation, wantErr error) {
 		t.Helper()
@@ -245,11 +245,14 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 			executorTestNode("fork", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 				return model.FanOut(value, Branch[int]{Target: "a", State: 10}), nil
 			}, FailInvocation),
-			executorTestNode("a", executorTestEnd, FailInvocation),
+			executorTestNode("a", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
+				return model.CompleteBranch(value), nil
+			}, FailInvocation),
 		}, nil, map[string][]string{"fork": {"a"}}, nil, nil)
 		_, noJoinRes, err := noJoinRunner.Start(context.Background(), "no-join", 0, nil, Options{})
-		if err == nil || noJoinRes.Status != StatusFailed {
-			t.Fatalf("expected failure without join: %+v, %v", noJoinRes, err)
+		var transitionErr *TransitionError
+		if !errors.As(err, &transitionErr) || noJoinRes.Status != StatusFailed {
+			t.Fatalf("expected TransitionError for CompleteBranch without join: %+v, %v", noJoinRes, err)
 		}
 
 		negativeTimeoutRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
@@ -323,12 +326,12 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 			t.Fatalf("Advance failed: %+v, %v", advRes, err)
 		}
 
-		// Test runner.scope
+		// Test runner.failureScope
 		override := FailExecution
-		if runner.scope(FailInvocation, Options{FailureOverride: &override}) != FailExecution {
+		if runner.failureScope(FailInvocation, Options{FailureOverride: &override}) != FailExecution {
 			t.Fatal("expected FailExecution override")
 		}
-		if runner.scope(FailInvocation, Options{}) != FailInvocation {
+		if runner.failureScope(FailInvocation, Options{}) != FailInvocation {
 			t.Fatal("expected declared FailInvocation")
 		}
 	})

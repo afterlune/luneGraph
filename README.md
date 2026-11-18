@@ -5,7 +5,7 @@ nodes and allowed edges; each execution owns its evolving state. The core
 handles scheduling, branches, joins, waiting and recovery. Models, tools,
 permissions and agent policy belong to applications.
 
-**Current changes are unreleased.** Checkpoint format 8 rejects earlier formats
+**Current changes are unreleased.** Checkpoint format 9 rejects earlier formats
 without automatic migration; SQLite schema 2 remains in use. See
 [CHANGELOG](CHANGELOG.md), [execution contract](docs/execution-semantics.md),
 and [Store guide](docs/store-implementation.md). Requires Go 1.26.5 or newer.
@@ -80,8 +80,12 @@ target and branch slices; returned state follows the ownership-transfer contract
 
 Set `JoinSpec.FanOutSource` to the name of the node that dispatches the
 branches. Each activation joins only its own children. FanOut branches can
-repeat targets and carry independent
-states; zero and one branch still pass through a normal activation and Merge.
+repeat targets and carry independent states. When a source node has a JoinSpec,
+zero and one branch still pass through a normal activation and Merge. When a
+source node has no JoinSpec, zero branches immediately end the parent path
+without creating a group or allocating a Merge CallID, while one or more
+branches run as an unjoined activation group (with `CompleteBranch` rejected)
+until all children end.
 Merge receives a clone of the state saved by FanOut, then ordered branch
 outcomes as `[]BranchResult[S]`. Each `BranchResult` reports `Index`, `Target`,
 `Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`, `b.Failed()`,
@@ -446,6 +450,21 @@ Windows/Linux and enforces at least 85% statement coverage per production
 package. [Performance and graph-level benchmark guide](docs/performance.md) records
 reproducible measurements and known trade-offs; it does not claim application-level
 production capacity.
+
+## Format-9 migration
+
+Checkpoint format 9 enables unjoined dynamic `FanOut` (zero-branch groups end
+their parent path immediately without allocating a group or Merge CallID;
+single-branch and repeated-target unjoined groups persist and recover without a
+Merge CallID) and enforces consistent recovery validation for branch targets
+pointing to Joins.
+
+Format 9 rejects format 8 and older checkpoints; there is no compatibility
+runner or automatic migration. SQLite remains at schema 2 with no table layout
+changes, so upgraded runtimes can create new format-9 runs in an existing
+schema-2 database while active format-8 runs must be finished by their matching
+runtime. The earlier migrations below are historical descriptions of their
+respective formats.
 
 ## Format-8 migration
 

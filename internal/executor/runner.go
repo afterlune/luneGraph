@@ -36,7 +36,7 @@ func normalizeOptions(opts Options) (Options, error) {
 }
 
 func (r *Runner[S]) resultWithHeader(header Header, final *S, status Status) (Result[S], error) {
-	result := Result[S]{Status: status, Header: header}
+	result := Result[S]{Status: status, Header: header.Clone()}
 	if final == nil {
 		return result, nil
 	}
@@ -49,7 +49,7 @@ func (r *Runner[S]) resultWithHeader(header Header, final *S, status Status) (Re
 }
 
 func (r *Runner[S]) resultFromLive(l *live[S], status Status) (Result[S], error) {
-	return r.resultWithHeader(l.header.Header(), l.header.Final, status)
+	return r.resultWithHeader(l.header, l.final, status)
 }
 
 func (r *Runner[S]) resultFromLiveWithBudget(l *live[S], reason BudgetReason) (Result[S], error) {
@@ -111,7 +111,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store St
 	}
 	rawStore := store
 	activeStore := store
-	obs := observation.New(opts.Observer, r.id, runID)
+	obs := observation.New(opts.Observer, r.definitionID, runID)
 	if obs != nil {
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationStart})
 		defer func() {
@@ -140,8 +140,8 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store St
 	if activeStore != nil {
 		var initInv [1]Invocation[S]
 		initInv[0] = Invocation[S]{ID: "i1", CallID: "c2", Node: r.entry, State: state, Status: InvocationReady}
-		s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, DefinitionID: r.id, Revision: 1, NextID: 3, Invocations: initInv[:]}
-		if err := activeStore.Create(ctx, s); err != nil {
+		cp := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, DefinitionID: r.definitionID, Revision: 1, NextID: 3, Invocations: initInv[:]}
+		if err := activeStore.Create(ctx, cp); err != nil {
 			return nil, Result[S]{Status: errorStatus(err)}, err
 		}
 	}
@@ -196,7 +196,7 @@ func (r *Runner[S]) Fork(ctx context.Context, newRunID string, source Checkpoint
 	return forked, nil
 }
 
-func (r *Runner[S]) scope(declared FailureScope, opts Options) FailureScope {
+func (r *Runner[S]) failureScope(declared FailureScope, opts Options) FailureScope {
 	if opts.FailureOverride != nil {
 		return *opts.FailureOverride
 	}

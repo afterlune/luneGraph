@@ -14,7 +14,7 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 	id := out.ref.id
 	scope := FailInvocation
 	node := ""
-	if out.ref.join {
+	if out.ref.isJoin {
 		lg, _, _ := l.group(id, out.ref.slot)
 		g := lg.group
 		id = g.ParentID
@@ -42,13 +42,13 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 		scope = *l.failureOverride
 	}
 	joinGroupID := ""
-	if out.ref.join {
+	if out.ref.isJoin {
 		joinGroupID = out.ref.id
 	}
 	before, after := l.workspace.prepare(l, id, out.err != nil && scope == FailGroup, joinGroupID)
 	index := newInvocationIndex(after)
 	var terminalErr error
-	if out.ref.join {
+	if out.ref.isJoin {
 		g, _ := l.getGroup(out.ref.id)
 		remove := make(map[string]bool, len(g.Branches))
 		for _, branch := range g.Branches {

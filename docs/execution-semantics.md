@@ -1,4 +1,4 @@
-# Execution semantics — checkpoint format 8
+# Execution semantics — checkpoint format 9
 
 The graph describes allowed control flow. Each execution owns its evolving `S`.
 Compiled Runners are immutable and may be shared. Callbacks, Clone, observers,
@@ -57,8 +57,13 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   slice is rejected when the transition is applied.
   `FanOut(parent, branches...)` creates one activation for zero or more declared
   node/subgraph-entry tasks; repeated targets are valid and each branch receives
-  an independent Clone. The source requires a JoinSpec. `CompleteBranch(state)`
-  returns a child result to its immediate activation's join.
+  an independent Clone. If the source node has a JoinSpec, zero-branch and
+  one-branch activations still pass through Merge and `CompleteBranch(state)`
+  returns a child result to its immediate activation's join. If the source node
+  has no JoinSpec, zero-branch `FanOut` ends the parent path immediately without
+  creating a group or allocating IDs, and one-or-more-branch activations run
+  without a Merge CallID until all branches end (calling `CompleteBranch` inside
+  an unjoined group fails with `TransitionError`).
 - Merge receives a Clone of the activation parent state followed by full branch
   results as `[]BranchResult[S]` in activation order. Each result reports
   `Index`, `Target`, `Node`, `Status`, `State`, and `Error` (with helpers `b.OK()`,
@@ -333,21 +338,26 @@ quiescence and retention; do not reuse IDs while old owners can address them.
 Repeated Delete calls do not form an atomic multi-run operation. Deletion makes
 SQLite pages reusable, without guaranteeing immediate file shrink.
 
-Format 8 rejects format-7 checkpoints and older versions. Existing runs require
-their matching runtime; use a new database for new executions. SQLite schema 2
-remains unchanged, but activation-group payloads rename Timeout to EntryTimeout
-and follow the entry-only timeout semantics. No automatic migration or
-compatibility runtime is supplied.
+Format 9 rejects format-8 checkpoints and older versions. SQLite schema 2
+remains unchanged with no table schema modifications: new format-9 runs can be
+created in an existing schema-2 database while in-flight format-8 runs require
+their matching runtime. No automatic migration or compatibility runner is
+supplied.
 DefinitionID remains an application controlled definition identity; change it for
 incompatible graphs.
 
 FanOut atomically commits its parent, activation and child invocation IDs before
-children can start. Each child gets an independent Clone, invocation ID and
-CallID; repeated targets remain distinguishable by branch identity. Zero-child
-groups become ready for Merge immediately and remain valid checkpoints if Merge
-is interrupted or its commit is rejected; Resume, Recover and Fork accept them.
-CompleteBranch records a successful child result without selecting a fixed join
-node in application state.
+children can start (except zero-branch unjoined FanOut, which ends its parent
+path in place without creating an activation or reserving new IDs). Each child
+gets an independent Clone, invocation ID and CallID; repeated targets remain
+distinguishable by branch identity. Unjoined groups allocate no Merge CallID
+and reject branch targets pointing to Join vertices during recovery validation;
+joined groups preserve direct Join targets only for `InvocationJoined` branches
+at `group.JoinNode` with zero `EntryTimeout`. Zero-child joined groups become
+ready for Merge immediately and remain valid checkpoints if Merge is interrupted
+or its commit is rejected; Resume, Recover and Fork accept them. CompleteBranch
+records a successful child result without selecting a fixed join node in
+application state.
 
 Merge receives cloned parent state plus full branch outcomes (`[]BranchResult[S]`).
 Successful branch states are cloned independently. Failed branches provide their

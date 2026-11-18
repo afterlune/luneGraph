@@ -34,9 +34,9 @@ func Capacity(l *Limiter, local int) int {
 	return local
 }
 
-// Slots is used by the scheduler to wait for capacity together with results
+// AcquireChan is used by the scheduler to wait for capacity together with results
 // and cancellation. Sending acquires a permit. Nil disables that select case.
-func Slots(l *Limiter) chan<- struct{} {
+func AcquireChan(l *Limiter) chan<- struct{} {
 	if l == nil {
 		return nil
 	}

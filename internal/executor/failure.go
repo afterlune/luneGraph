@@ -7,8 +7,8 @@ import (
 
 // recordFailure changes a candidate position. An execution-level error
 // leaves a terminal candidate for the caller to commit before returning.
-func (r *Runner[S]) recordFailure(s *candidatePosition[S], index *invocationIndex, id, node string, scope FailureScope, cause error) error {
-	_, inv := indexedInvocation(index, s, id)
+func (r *Runner[S]) recordFailure(pos *candidatePosition[S], index *invocationIndex, id, node string, scope FailureScope, cause error) error {
+	_, inv := indexedInvocation(index, pos, id)
 	if inv == nil {
 		return fmt.Errorf("missing failed invocation %q", id)
 	}
@@ -16,23 +16,23 @@ func (r *Runner[S]) recordFailure(s *candidatePosition[S], index *invocationInde
 		scope = FailExecution
 	}
 	if scope == FailExecution {
-		s.Failure = &Failure{InvocationID: id, Node: node, Message: cause.Error(), PanicStack: panicStack(cause)}
-		s.Completed = true
-		s.Final = nil
-		s.Invocations = nil
-		s.Groups = nil
+		pos.Failure = &Failure{InvocationID: id, Node: node, Message: cause.Error(), PanicStack: panicStack(cause)}
+		pos.Completed = true
+		pos.Final = nil
+		pos.Invocations = nil
+		pos.Groups = nil
 		clearInvocationIndex(index)
 		return fmt.Errorf("%s: %w", node, cause)
 	}
-	s.HadLocalFailures = true
+	pos.HadLocalFailures = true
 	if scope == FailGroup && inv.GroupID != "" {
-		return r.failGroup(s, index, inv.GroupID, cause.Error())
+		return r.failGroup(pos, index, inv.GroupID, cause.Error())
 	}
-	return markInvocationFailed(s, inv, cause.Error())
+	return markInvocationFailed(pos, inv, cause.Error())
 }
 
-func markInvocationFailed[S any](s *candidatePosition[S], inv *Invocation[S], message string) error {
-	branch, activation, err := activationBranch(s, inv)
+func markInvocationFailed[S any](pos *candidatePosition[S], inv *Invocation[S], message string) error {
+	branch, activation, err := activationBranch(pos, inv)
 	if err != nil {
 		return err
 	}
@@ -47,8 +47,8 @@ func markInvocationFailed[S any](s *candidatePosition[S], inv *Invocation[S], me
 	return nil
 }
 
-func (r *Runner[S]) failGroup(s *candidatePosition[S], index *invocationIndex, id, message string) error {
-	activation := findActivationGroup(s.Groups, id)
+func (r *Runner[S]) failGroup(pos *candidatePosition[S], index *invocationIndex, id, message string) error {
+	activation := findActivationGroup(pos.Groups, id)
 	if activation == nil {
 		return fmt.Errorf("missing failed group %q", id)
 	}
@@ -62,7 +62,7 @@ func (r *Runner[S]) failGroup(s *candidatePosition[S], index *invocationIndex, i
 		if removeGroups[groupID] {
 			continue
 		}
-		current := findActivationGroup(s.Groups, groupID)
+		current := findActivationGroup(pos.Groups, groupID)
 		if current == nil {
 			continue
 		}
@@ -70,31 +70,31 @@ func (r *Runner[S]) failGroup(s *candidatePosition[S], index *invocationIndex, i
 		for _, branch := range current.Branches {
 			childID := branch.InvocationID
 			removeInv[childID] = true
-			_, child := indexedInvocation(index, s, childID)
+			_, child := indexedInvocation(index, pos, childID)
 			if child != nil && child.ChildGroupID != "" {
 				queue = append(queue, child.ChildGroupID)
 			}
 		}
 	}
-	removeInvocations(index, s, removeInv)
-	groups := s.Groups[:0]
-	for _, group := range s.Groups {
+	removeInvocations(index, pos, removeInv)
+	groups := pos.Groups[:0]
+	for _, group := range pos.Groups {
 		if !removeGroups[group.ID] {
 			groups = append(groups, group)
 		}
 	}
-	clear(s.Groups[len(groups):])
-	s.Groups = groups
-	_, parent := indexedInvocation(index, s, parentID)
+	clear(pos.Groups[len(groups):])
+	pos.Groups = groups
+	_, parent := indexedInvocation(index, pos, parentID)
 	if parent == nil {
 		return fmt.Errorf("failed group %q lost parent", id)
 	}
 	parent.ChildGroupID = ""
-	return markInvocationFailed(s, parent, message)
+	return markInvocationFailed(pos, parent, message)
 }
 
-func recoveredFailure[S any](s Checkpoint[S]) error {
-	failure := s.Failure
+func recoveredFailure[S any](cp Checkpoint[S]) error {
+	failure := cp.Failure
 	if failure == nil {
 		return nil
 	}

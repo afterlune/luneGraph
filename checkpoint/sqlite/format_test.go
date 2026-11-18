@@ -11,7 +11,7 @@ import (
 	"github.com/afterlune/luneGraph/checkpoint"
 )
 
-func TestFormatEightRejectsFormatSevenWritesAndLoads(t *testing.T) {
+func TestFormatNineRejectsFormatEightWritesAndLoads(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "runs.db"), checkpoint.JSON[int]{})
 	if err != nil {
@@ -21,7 +21,7 @@ func TestFormatEightRejectsFormatSevenWritesAndLoads(t *testing.T) {
 	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "format", DefinitionID: "m", Revision: 1, NextID: 3,
 		Invocations: []graph.Invocation[int]{{ID: "i1", CallID: "c2", Node: "work", Status: graph.InvocationReady, State: 1}}}
 	old := cp
-	old.FormatVersion = 7
+	old.FormatVersion = 8
 	if err := store.Create(ctx, old); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("old Create: %v", err)
 	}
@@ -33,10 +33,10 @@ func TestFormatEightRejectsFormatSevenWritesAndLoads(t *testing.T) {
 		t.Fatalf("old Commit: %v", err)
 	}
 	h, err := store.LoadHeader(ctx, "format")
-	if err != nil || h.Revision != 1 || h.FormatVersion != 8 {
+	if err != nil || h.Revision != 1 || h.FormatVersion != 9 {
 		t.Fatalf("rejected write changed header: %+v %v", h, err)
 	}
-	h.FormatVersion = 7
+	h.FormatVersion = 8
 	payload, err := json.Marshal(h)
 	if err != nil {
 		t.Fatal(err)

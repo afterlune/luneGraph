@@ -48,8 +48,17 @@
 
 Use the new Go names with the same definition ID values when upgrading. The
 checkpoint JSON key remains `MachineID` and the SQLite column remains
-`machine_id`. Checkpoint format 8 and SQLite schema 2 are unchanged.
+`machine_id`. Checkpoint format 9 and SQLite schema 2 are now in use (format 9
+rejects format 8 and earlier checkpoints, while existing schema-2 databases can
+create new format-9 runs without schema changes).
 
+- Support unjoined dynamic `FanOut` (zero branches end the parent path immediately
+  without creating a group or reserving IDs; one or more branches and repeated
+  targets recover without a Merge `CallID`, and recovery validation enforces Join
+  branch-target invariants across joined and unjoined groups).
+- Bump `CheckpointFormatVersion` to 9 (rejects format 8 and earlier). SQLite
+  remains on schema 2 so existing databases can host new format-9 runs while old
+  format-8 runs continue to be handled by the prior runtime.
 - Separate scheduler decisions from callback preparation, worker lifecycle, and
   checkpoint submission inside the executor. Public APIs, checkpoint format 8,
   callback ordering and recovery contracts remain unchanged.
@@ -90,11 +99,12 @@ checkpoint JSON key remains `MachineID` and the SQLite column remains
 
 ### Compatibility
 
-- Checkpoint format 8 rejects format 7 and earlier. There is no automatic
-  checkpoint migration or compatibility runner. Finish active runs with their
-  matching runtime and use a new database for new executions.
+- Checkpoint format 9 rejects format 8 and earlier. There is no automatic
+  checkpoint migration or compatibility runner. Finish active format-8 runs with
+  their matching runtime; existing SQLite schema-2 databases can host new
+  format-9 runs without schema changes.
 - SQLite remains at schema 2. The minimum supported Go version is 1.26.5.
 - This source tree contains unreleased API and execution changes. See the
-  [README migration notes](README.md#format-8-migration) before upgrading from
+  [README migration notes](README.md#format-9-migration) before upgrading from
   an earlier checkout. See the [performance guide](docs/performance.md) for
   benchmark methodology and measured trade-offs.

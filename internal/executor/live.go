@@ -15,7 +15,8 @@ type liveGroup[S any] struct {
 
 // live owns the accepted execution position and its scheduling counts.
 type live[S any] struct {
-	header          Checkpoint[S]
+	header          Header
+	final           *S
 	finalVal        S
 	failureOverride *FailureScope
 	workspace       candidateWorkspace[S]
@@ -44,13 +45,14 @@ func newLive[S any](cp Checkpoint[S], runner *Runner[S]) *live[S] {
 }
 
 func initLiveStart[S any](l *live[S], runID string, runner *Runner[S], state S) *live[S] {
-	l.header = Checkpoint[S]{
+	l.header = Header{
 		FormatVersion: CheckpointFormatVersion,
 		RunID:         runID,
-		DefinitionID:  runner.id,
+		DefinitionID:  runner.definitionID,
 		Revision:      1,
 		NextID:        3,
 	}
+	l.final = nil
 	l.runner = runner
 	l.invocations = l.invInline[:1]
 	l.invocations[0] = Invocation[S]{
@@ -65,13 +67,19 @@ func initLiveStart[S any](l *live[S], runID string, runner *Runner[S], state S) 
 	if runner.entryIndex >= 0 {
 		nodeIdx = runner.entryIndex
 	}
-	l.nodeQueue.push(taskRef{id: "i1", slot: 0, nodeIdx: nodeIdx, join: false})
+	l.nodeQueue.push(taskRef{id: "i1", slot: 0, nodeIdx: nodeIdx, isJoin: false})
 	l.readyNodes = 1
 	return l
 }
 
 func initLive[S any](l *live[S], cp Checkpoint[S], runner *Runner[S]) *live[S] {
-	l.header = cp
+	l.header = cp.Header()
+	if cp.Final != nil {
+		l.finalVal = *cp.Final
+		l.final = &l.finalVal
+	} else {
+		l.final = nil
+	}
 	l.runner = runner
 	if len(cp.Invocations) <= len(l.invInline) {
 		l.invocations = l.invInline[:0]
@@ -98,16 +106,13 @@ func initLive[S any](l *live[S], cp Checkpoint[S], runner *Runner[S]) *live[S] {
 		l.putGroup(liveGroup[S]{group: g, remaining: rem})
 	}
 
-	l.header.Invocations = nil
-	l.header.Groups = nil
-
 	for i, inv := range l.invocations {
 		if inv.Status == InvocationReady {
 			nodeIdx := 0
 			if runner != nil && inv.Node == runner.entry && runner.entryIndex >= 0 {
 				nodeIdx = runner.entryIndex
 			}
-			l.nodeQueue.push(taskRef{id: inv.ID, slot: i, nodeIdx: nodeIdx, join: false})
+			l.nodeQueue.push(taskRef{id: inv.ID, slot: i, nodeIdx: nodeIdx, isJoin: false})
 			l.readyNodes++
 		} else if inv.Status == InvocationWaiting {
 			l.waitingInvocations++
@@ -133,7 +138,7 @@ func b2i(b bool) int {
 }
 
 func (l *live[S]) enqueue(ref taskRef) {
-	if ref.join {
+	if ref.isJoin {
 		l.joinQueue.push(ref)
 	} else {
 		l.nodeQueue.push(ref)
@@ -141,7 +146,24 @@ func (l *live[S]) enqueue(ref taskRef) {
 }
 
 func (l *live[S]) snapshot() Checkpoint[S] {
-	cp := l.header
+	h := l.header.Clone()
+	var final *S
+	if l.final != nil {
+		final = new(*l.final)
+	}
+	cp := Checkpoint[S]{
+		FormatVersion:    h.FormatVersion,
+		RunID:            h.RunID,
+		DefinitionID:     h.DefinitionID,
+		Revision:         h.Revision,
+		Steps:            h.Steps,
+		NextID:           h.NextID,
+		ScheduleCursor:   h.ScheduleCursor,
+		Completed:        h.Completed,
+		Final:            final,
+		HadLocalFailures: h.HadLocalFailures,
+		Failure:          h.Failure,
+	}
 	if len(l.invocations) > 0 {
 		cp.Invocations = make([]Invocation[S], len(l.invocations))
 		copy(cp.Invocations, l.invocations)
@@ -353,7 +375,7 @@ func (l *live[S]) joinEligible(g *liveGroup[S]) bool {
 }
 
 func (l *live[S]) valid(ref taskRef) bool {
-	if ref.join {
+	if ref.isJoin {
 		g, _, ok := l.group(ref.id, ref.slot)
 		return ok && l.joinEligible(g)
 	}
@@ -371,24 +393,7 @@ func (l *live[S]) enqueueJoinIfReady(id string) {
 	}
 	if l.joinEligible(g) {
 		g.joinEnqueued = true
-		l.joinQueue.push(taskRef{id: id, slot: idx, join: true})
-	}
-}
-
-func checkpointPosition[S any](c Change[S]) Checkpoint[S] {
-	h := c.Header
-	return Checkpoint[S]{
-		FormatVersion:    h.FormatVersion,
-		RunID:            h.RunID,
-		DefinitionID:     h.DefinitionID,
-		Revision:         h.Revision,
-		Steps:            h.Steps,
-		NextID:           h.NextID,
-		ScheduleCursor:   h.ScheduleCursor,
-		Completed:        h.Completed,
-		Final:            c.Final,
-		HadLocalFailures: h.HadLocalFailures,
-		Failure:          h.Failure,
+		l.joinQueue.push(taskRef{id: id, slot: idx, isJoin: true})
 	}
 }
 
@@ -397,7 +402,7 @@ func isRunning(running map[taskRef]context.CancelFunc, ref taskRef) bool {
 		return true
 	}
 	for r := range running {
-		if r.id == ref.id && r.join == ref.join {
+		if r.id == ref.id && r.isJoin == ref.isJoin {
 			return true
 		}
 	}
@@ -461,7 +466,13 @@ func (l *live[S]) clearActive() {
 }
 
 func (l *live[S]) install(c Change[S]) {
-	l.header = checkpointPosition(c)
+	l.header = c.Header.Clone()
+	if c.Final != nil {
+		l.finalVal = *c.Final
+		l.final = &l.finalVal
+	} else {
+		l.final = nil
+	}
 	if c.Header.Completed {
 		l.clearActive()
 		return
@@ -505,7 +516,7 @@ func (l *live[S]) install(c Change[S]) {
 			}
 		}
 		if v.Status == InvocationReady {
-			l.nodeQueue.push(taskRef{id: v.ID, slot: slot, join: false})
+			l.nodeQueue.push(taskRef{id: v.ID, slot: slot, isJoin: false})
 		}
 		l.enqueueJoinIfReady(oldGroup)
 		if v.GroupID != oldGroup {

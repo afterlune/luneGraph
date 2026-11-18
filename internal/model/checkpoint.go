@@ -13,7 +13,7 @@ import (
 )
 
 // CheckpointFormatVersion is the format emitted and accepted by this runner.
-const CheckpointFormatVersion uint32 = 8
+const CheckpointFormatVersion uint32 = 9
 
 // InvocationStatus describes one path's scheduling state.
 type InvocationStatus uint8
@@ -257,20 +257,20 @@ type Options struct {
 
 // Clone returns an independent checkpoint using copyState for every stored S.
 // Store implementations can use it to satisfy their ownership contract.
-func (s Checkpoint[S]) Clone(copyState Clone[S]) (Checkpoint[S], error) {
+func (cp Checkpoint[S]) Clone(copyState Clone[S]) (Checkpoint[S], error) {
 	if copyState == nil {
 		return Checkpoint[S]{}, errors.New("checkpoint clone function is nil")
 	}
-	out := Copy(s)
+	out := Copy(cp)
 	for i := range out.Invocations {
-		state, err := callClone(copyState, s.Invocations[i].State, s.Invocations[i].ID)
+		state, err := callClone(copyState, cp.Invocations[i].State, cp.Invocations[i].ID)
 		if err != nil {
-			return Checkpoint[S]{}, fmt.Errorf("clone invocation %q: %w", s.Invocations[i].ID, err)
+			return Checkpoint[S]{}, fmt.Errorf("clone invocation %q: %w", cp.Invocations[i].ID, err)
 		}
 		out.Invocations[i].State = state
 	}
-	if s.Final != nil {
-		state, err := callClone(copyState, *s.Final, "")
+	if cp.Final != nil {
+		state, err := callClone(copyState, *cp.Final, "")
 		if err != nil {
 			return Checkpoint[S]{}, fmt.Errorf("clone final state: %w", err)
 		}
@@ -288,19 +288,19 @@ func callClone[S any](clone Clone[S], state S, id string) (out S, err error) {
 	return clone(state)
 }
 
-func FindInvocation[S any](s *Checkpoint[S], id string) (int, *Invocation[S]) {
-	for i := range s.Invocations {
-		if s.Invocations[i].ID == id {
-			return i, &s.Invocations[i]
+func FindInvocation[S any](cp *Checkpoint[S], id string) (int, *Invocation[S]) {
+	for i := range cp.Invocations {
+		if cp.Invocations[i].ID == id {
+			return i, &cp.Invocations[i]
 		}
 	}
 	return -1, nil
 }
 
-func FindGroup[S any](s *Checkpoint[S], id string) (int, *ActivationGroup) {
-	for i := range s.Groups {
-		if s.Groups[i].ID == id {
-			return i, &s.Groups[i]
+func FindGroup[S any](cp *Checkpoint[S], id string) (int, *ActivationGroup) {
+	for i := range cp.Groups {
+		if cp.Groups[i].ID == id {
+			return i, &cp.Groups[i]
 		}
 	}
 	return -1, nil
@@ -349,6 +349,6 @@ func AllocID(nextID *uint64, prefix string) string {
 	return string(b)
 }
 
-func NewID[S any](s *Checkpoint[S], prefix string) string {
-	return AllocID(&s.NextID, prefix)
+func NewID[S any](cp *Checkpoint[S], prefix string) string {
+	return AllocID(&cp.NextID, prefix)
 }

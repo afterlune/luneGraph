@@ -19,10 +19,10 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 		},
 	}
 	runner := &Runner[int]{
-		id:        "machine",
-		clone:     clone,
-		joins:     []CompiledJoin[int]{{Spec: spec}},
-		joinIndex: map[string]int{"join": 0},
+		definitionID: "machine",
+		clone:        clone,
+		joins:        []CompiledJoin[int]{{Spec: spec}},
+		joinIndex:    map[string]int{"join": 0},
 	}
 	secondStatus := InvocationReady
 	secondNode := "worker"
@@ -56,7 +56,7 @@ func TestPrepareCanMergeTaskIsolatesPredicateInputs(t *testing.T) {
 		branches[1].State = 300
 		return true
 	}, nil, false)
-	task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", join: true}, nil)
+	task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", isJoin: true}, nil)
 	if err != nil || !task.ready || task.preflightErr != nil || !called {
 		t.Fatalf("prepared task = %+v, called=%v, err=%v", task, called, err)
 	}
@@ -68,7 +68,7 @@ func TestPrepareCanMergeTaskIsolatesPredicateInputs(t *testing.T) {
 func TestPrepareCanMergeTaskDefersAndHandlesFailures(t *testing.T) {
 	t.Run("false", func(t *testing.T) {
 		runner, live := canMergeFixture(func(int, []BranchResult[int]) bool { return false }, nil, false)
-		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", join: true}, nil)
+		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", isJoin: true}, nil)
 		if err != nil || task.ready || task.preflightErr != nil {
 			t.Fatalf("false predicate task = %+v, %v", task, err)
 		}
@@ -76,7 +76,7 @@ func TestPrepareCanMergeTaskDefersAndHandlesFailures(t *testing.T) {
 
 	t.Run("panic", func(t *testing.T) {
 		runner, live := canMergeFixture(func(int, []BranchResult[int]) bool { panic("predicate failed") }, nil, false)
-		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", join: true}, nil)
+		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", isJoin: true}, nil)
 		var panicErr *PanicError
 		if err != nil || !task.ready || !errors.As(task.preflightErr, &panicErr) || panicErr.Callback != "can-merge join" {
 			t.Fatalf("panic predicate task = %+v, %v", task, err)
@@ -92,7 +92,7 @@ func TestPrepareCanMergeTaskDefersAndHandlesFailures(t *testing.T) {
 			return value, nil
 		}
 		runner, live := canMergeFixture(func(int, []BranchResult[int]) bool { return true }, clone, false)
-		_, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", join: true}, nil)
+		_, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", isJoin: true}, nil)
 		if !errors.Is(err, boom) {
 			t.Fatalf("clone error = %v", err)
 		}
@@ -104,7 +104,7 @@ func TestPrepareCanMergeTaskDefersAndHandlesFailures(t *testing.T) {
 			called = true
 			return false
 		}, nil, true)
-		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", join: true}, nil)
+		task, err := runner.prepareTask(context.Background(), live, taskRef{id: "g7", isJoin: true}, nil)
 		if err != nil || !task.ready || task.preflightErr != nil || called || len(task.branches) != 2 {
 			t.Fatalf("settled join task = %+v, called=%v, err=%v", task, called, err)
 		}

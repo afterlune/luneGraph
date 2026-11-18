@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/afterlune/luneGraph/internal/model"
 )
@@ -67,6 +68,7 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 	}{
 		{"unsupported format", func(s *Checkpoint[int]) { s.FormatVersion++ }},
 		{"format 4 migration boundary", func(s *Checkpoint[int]) { s.FormatVersion = 4 }},
+		{"format 8 migration boundary", func(s *Checkpoint[int]) { s.FormatVersion = 8 }},
 		{"invalid run ID", func(s *Checkpoint[int]) { s.RunID = " padded" }},
 		{"machine mismatch", func(s *Checkpoint[int]) { s.DefinitionID = "other" }},
 		{"zero revision", func(s *Checkpoint[int]) { s.Revision = 0 }},
@@ -225,6 +227,99 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 	if err := noJoinRunner.validateCheckpoint(unexpected); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("no-join group callback error = %v", err)
 	}
+
+	emptyUnjoined := copyCheckpoint(mustCheckpoint(noJoinExecution))
+	emptyUnjoined.Groups[0].Branches = nil
+	if err := noJoinRunner.validateCheckpoint(emptyUnjoined); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("empty unjoined group error = %v", err)
+	}
+}
+
+func TestValidateCheckpointJoinBranchTargets(t *testing.T) {
+	directJoinRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+		executorTestNode("fork", func(_ context.Context, _ CallInfo, state int) (Transition[int], error) {
+			return model.To(state, "left", "joined"), nil
+		}, FailInvocation),
+		executorTestNode("left", func(_ context.Context, _ CallInfo, state int) (Transition[int], error) {
+			return model.To(state, "joined"), nil
+		}, FailInvocation),
+		executorTestNode("outer", executorTestEnd, FailInvocation),
+		executorTestNode("done", executorTestEnd, FailInvocation),
+	}, []JoinSpec[int]{
+		{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ CallInfo, parent int, _ []BranchResult[int]) (int, error) {
+			return parent, nil
+		}},
+		{Name: "outer-join", FanOutSource: "outer", Merge: func(_ context.Context, _ CallInfo, parent int, _ []BranchResult[int]) (int, error) {
+			return parent, nil
+		}},
+	}, map[string][]string{
+		"fork":       {"left", "joined", "outer-join"},
+		"left":       {"joined"},
+		"joined":     {"done"},
+		"outer-join": {"done"},
+	}, nil, nil)
+
+	exec, res, err := directJoinRunner.Start(context.Background(), "direct-join", 1, nil, Options{MaxSteps: 1, MaxConcurrency: 1})
+	if err != nil || res.Status != StatusBudget {
+		t.Fatalf("direct join setup = %+v, %v", res, err)
+	}
+	validDirect := mustCheckpoint(exec)
+	if err := directJoinRunner.validateCheckpoint(validDirect); err != nil {
+		t.Fatalf("valid direct join target checkpoint rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Checkpoint[int])
+	}{
+		{"joined branch target points to another join", func(s *Checkpoint[int]) {
+			s.Groups[0].Branches[1].Target = "outer-join"
+		}},
+		{"joined branch target not InvocationJoined", func(s *Checkpoint[int]) {
+			_, child := invocation(s, s.Groups[0].Branches[1].InvocationID)
+			child.Status = InvocationEnded
+		}},
+		{"joined branch target child at wrong node", func(s *Checkpoint[int]) {
+			_, child := invocation(s, s.Groups[0].Branches[1].InvocationID)
+			child.Node = "left"
+		}},
+		{"joined branch target retains entry timeout", func(s *Checkpoint[int]) {
+			s.Groups[0].Branches[1].EntryTimeout = time.Second
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := copyCheckpoint(validDirect)
+			tc.mutate(&invalid)
+			if err := directJoinRunner.validateCheckpoint(invalid); !errors.Is(err, ErrInvalidCheckpoint) {
+				t.Fatalf("validateCheckpoint error = %v", err)
+			}
+		})
+	}
+
+	unjoinedWithJoinEdgeRunner := executorTestRunner(t, "fork", []NodeSpec[int]{
+		executorTestNode("fork", func(_ context.Context, _ CallInfo, state int) (Transition[int], error) {
+			return model.FanOut(state, Branch[int]{Target: "left", State: state}), nil
+		}, FailInvocation),
+		executorTestNode("left", executorTestEnd, FailInvocation),
+		executorTestNode("outer", executorTestEnd, FailInvocation),
+	}, []JoinSpec[int]{
+		{Name: "outer-join", FanOutSource: "outer", Merge: func(_ context.Context, _ CallInfo, parent int, _ []BranchResult[int]) (int, error) {
+			return parent, nil
+		}},
+	}, map[string][]string{"fork": {"left", "outer-join"}}, nil, nil)
+
+	unjoinedExec, unjoinedRes, err := unjoinedWithJoinEdgeRunner.Start(context.Background(), "unjoined-join-target", 1, nil, Options{MaxSteps: 1, MaxConcurrency: 1})
+	if err != nil || unjoinedRes.Status != StatusBudget {
+		t.Fatalf("unjoined setup = %+v, %v", unjoinedRes, err)
+	}
+	unjoinedInvalid := copyCheckpoint(mustCheckpoint(unjoinedExec))
+	unjoinedInvalid.Groups[0].Branches[0].Target = "outer-join"
+	_, unjoinedChild := invocation(&unjoinedInvalid, unjoinedInvalid.Groups[0].Branches[0].InvocationID)
+	unjoinedChild.Status = InvocationEnded
+	unjoinedChild.CallID = ""
+	if err := unjoinedWithJoinEdgeRunner.validateCheckpoint(unjoinedInvalid); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("unjoined group pointing at join accepted: %v", err)
+	}
 }
 
 func TestValidateCheckpointCompletedExecutionShapes(t *testing.T) {
@@ -248,7 +343,7 @@ func TestValidateCheckpointCompletedExecutionShapes(t *testing.T) {
 			invalid := copyCheckpoint(test.base)
 			test.mutate(&invalid)
 			validator := runner
-			if invalid.DefinitionID != runner.id {
+			if invalid.DefinitionID != runner.definitionID {
 				t.Fatal("fixture machine ID changed unexpectedly")
 			}
 			if err := validator.validateCheckpoint(invalid); !errors.Is(err, ErrInvalidCheckpoint) {

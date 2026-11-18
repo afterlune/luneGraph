@@ -16,7 +16,7 @@ func TestLimiter(t *testing.T) {
 	if err != nil || Validate(l) != nil || Validate(nil) != nil || Validate(&Limiter{}) == nil {
 		t.Fatal("validation")
 	}
-	if Capacity(l, 8) != 2 || Capacity(l, 1) != 1 || Capacity(nil, 8) != 8 || Slots(nil) != nil {
+	if Capacity(l, 8) != 2 || Capacity(l, 1) != 1 || Capacity(nil, 8) != 8 || AcquireChan(nil) != nil {
 		t.Fatal("capacity")
 	}
 	if !TryAcquire(l) || !TryAcquire(l) || TryAcquire(l) {
@@ -37,7 +37,7 @@ func TestLimiter(t *testing.T) {
 		t.Fatal("nil budget")
 	}
 	Release(nil)
-	Slots(l) <- struct{}{}
+	AcquireChan(l) <- struct{}{}
 	Release(l)
 }
 

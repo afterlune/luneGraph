@@ -20,7 +20,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 	if r == nil {
 		return nil, Result[S]{Status: StatusFailed}, errors.New("runner is nil")
 	}
-	obs := observation.New(opts.Observer, r.id, checkpoint.RunID)
+	obs := observation.New(opts.Observer, r.definitionID, checkpoint.RunID)
 	if obs != nil {
 		span := obs.Begin(ctx, model.Event{Operation: model.OperationResume, Revision: checkpoint.Revision})
 		defer func() {
@@ -40,7 +40,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 	}
 	activeStore := observation.WrapStore(store, obs)
 	if activeStore != nil {
-		if !validName(checkpoint.RunID) || checkpoint.DefinitionID != r.id || checkpoint.Revision == 0 || checkpoint.FormatVersion != CheckpointFormatVersion {
+		if !validName(checkpoint.RunID) || checkpoint.DefinitionID != r.definitionID || checkpoint.Revision == 0 || checkpoint.FormatVersion != CheckpointFormatVersion {
 			result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 			return nil, result, errors.Join(invalidCheckpoint("invalid resume reference"), resultErr)
 		}
@@ -79,7 +79,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []ResumeInput, opts Options, store Store[S], obs *observation.Session) (Result[S], error) {
 	l.failureOverride = opts.FailureOverride
 	if len(inputs) > 0 && l.header.Revision == math.MaxUint64 {
-		return r.resultFromLiveOrEmpty(l, StatusFailed, ErrExecutionLimit)
+		return r.resultFromLiveWithErr(l, StatusFailed, ErrExecutionLimit)
 	}
 	type decoded struct {
 		id    string
@@ -89,38 +89,38 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 	seen := make(map[string]bool)
 	for _, input := range inputs {
 		if seen[input.InvocationID] {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: duplicate input for %q", ErrInvalidResumeInput, input.InvocationID))
+			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("%w: duplicate input for %q", ErrInvalidResumeInput, input.InvocationID))
 		}
 		seen[input.InvocationID] = true
 		inv, ok := l.getInvocation(input.InvocationID)
 		if !ok || inv.Status != InvocationWaiting {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is not waiting", ErrInvalidResumeInput, input.InvocationID))
+			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("%w: invocation %q is not waiting", ErrInvalidResumeInput, input.InvocationID))
 		}
 		if input.CallID == "" || input.CallID != inv.CallID {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: waiting call does not match invocation %q", ErrInvalidResumeInput, input.InvocationID))
+			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("%w: waiting call does not match invocation %q", ErrInvalidResumeInput, input.InvocationID))
 		}
 		value, err := r.observedDecode(ctx, obs, l.header.Revision, inv, input.Payload)
 		if err != nil {
-			return r.resultFromLiveOrEmpty(l, StatusWaiting, fmt.Errorf("decode input for %q: %w", inv.ID, err))
+			return r.resultFromLiveWithErr(l, StatusWaiting, fmt.Errorf("decode input for %q: %w", inv.ID, err))
 		}
 		decodedInputs = append(decodedInputs, decoded{inv.ID, value})
 	}
 	for _, input := range decodedInputs {
 		if l.header.Revision == math.MaxUint64 {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, ErrExecutionLimit)
+			return r.resultFromLiveWithErr(l, StatusFailed, ErrExecutionLimit)
 		}
 		inv, ok := l.getInvocation(input.id)
 		if !ok || inv.Status != InvocationWaiting {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("%w: invocation %q is no longer waiting", ErrInvalidResumeInput, input.id))
+			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("%w: invocation %q is no longer waiting", ErrInvalidResumeInput, input.id))
 		}
 		state, err := r.cloneState(inv.State, inv.ID)
 		if err != nil {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, fmt.Errorf("clone waiting state: %w", err))
+			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("clone waiting state: %w", err))
 		}
 		call := CallInfo{RunID: l.header.RunID, InvocationID: inv.ID, CallID: inv.CallID, Node: inv.Node, Step: l.header.Steps, BranchIndex: inv.BranchIndex}
 		updated, err := r.limitedApply(ctx, opts.Limiter, obs, l.header.Revision, call, inv, state, input.value)
 		if cancelled := ctx.Err(); cancelled != nil {
-			return r.resultFromLiveOrEmpty(l, StatusCancelled, cancelled)
+			return r.resultFromLiveWithErr(l, StatusCancelled, cancelled)
 		}
 		if isCallbackInterruption(err) {
 			status := StatusInterrupted
@@ -128,7 +128,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 				status = StatusCancelled
 				err = ctx.Err()
 			}
-			return r.resultFromLiveOrEmpty(l, status, err)
+			return r.resultFromLiveWithErr(l, status, err)
 		}
 		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.ToTargets(updated, inv.Next), err: err}
 		candidate, buildErr := r.resultChange(l, out, opts.MaxInvocations)
@@ -137,19 +137,19 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, buildErr)
 				return r.resultFromLiveWithBudget(l, BudgetMaxInvocations)
 			}
-			return r.resultFromLiveOrEmpty(l, errorStatus(buildErr), buildErr)
+			return r.resultFromLiveWithErr(l, errorStatus(buildErr), buildErr)
 		}
 		c := candidate.Change
 		c.Header.Steps = l.header.Steps
 		if err := r.submit(ctx, l, c, store, obs); err != nil {
-			return r.resultFromLiveOrEmpty(l, errorStatus(err), err)
+			return r.resultFromLiveWithErr(l, errorStatus(err), err)
 		}
 		if terminalErr := candidate.TerminalErr; terminalErr != nil {
-			return r.resultFromLiveOrEmpty(l, StatusFailed, terminalErr)
+			return r.resultFromLiveWithErr(l, StatusFailed, terminalErr)
 		}
 	}
 	if l.header.Completed {
-		return r.resultFromLiveOrEmpty(l, statusOf(l.header.Header(), l.readyNodes, false), nil)
+		return r.resultFromLiveWithErr(l, statusOf(l.header, l.readyNodes, false), nil)
 	}
 	return r.driveLive(ctx, l, opts, obs, store)
 }

@@ -66,7 +66,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 	if out.err != nil || ctx.Err() != nil || l.header.Revision == math.MaxUint64 {
 		return false, "", nil
 	}
-	if out.ref.join {
+	if out.ref.isJoin {
 		if store != nil {
 			return false, "", nil
 		}
@@ -104,7 +104,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 	case ActionEndExecution:
 		if store != nil {
 			final := tr.State
-			h := l.header.Header()
+			h := l.header.Clone()
 			h.Revision = l.header.Revision + 1
 			h.Steps = l.header.Steps + 1
 			h.ScheduleCursor = cursor
@@ -121,7 +121,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		l.header.Revision++
 		l.header.Steps++
 		l.header.ScheduleCursor = cursor
-		l.header.Final = &l.finalVal
+		l.final = &l.finalVal
 		l.header.Completed = true
 		l.clearActive()
 		obs.ResolveSelected(ctx, model.OutcomeCommitted, l.header.Revision, nil)
@@ -140,7 +140,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		updatedInv.Continuation = ""
 
 		if store != nil {
-			h := l.header.Header()
+			h := l.header.Clone()
 			h.Revision = l.header.Revision + 1
 			h.Steps = l.header.Steps + 1
 			h.ScheduleCursor = cursor
@@ -204,7 +204,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		setWaiting(&updatedInv, tr.State, callID, tr.Continuation, []string{tr.Target})
 
 		if store != nil {
-			h := l.header.Header()
+			h := l.header.Clone()
 			h.Revision = l.header.Revision + 1
 			h.Steps = l.header.Steps + 1
 			h.NextID = nextID
@@ -261,7 +261,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 		updatedInv.Node = edge.Target
 
 		if store != nil {
-			h := l.header.Header()
+			h := l.header.Clone()
 			h.Revision = l.header.Revision + 1
 			h.Steps = l.header.Steps + 1
 			h.ScheduleCursor = cursor
@@ -311,7 +311,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 	updatedInv.Node = edge.Target
 
 	if store != nil {
-		h := l.header.Header()
+		h := l.header.Clone()
 		h.Revision = l.header.Revision + 1
 		h.Steps = l.header.Steps + 1
 		h.NextID = nextID
@@ -336,7 +336,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 	l.header.NextID = nextID
 	l.readyNodes += b2i(oldStatus != InvocationReady)
 	l.waitingInvocations -= b2i(oldStatus == InvocationWaiting)
-	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.TargetNodeIndex, join: false})
+	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.TargetNodeIndex, isJoin: false})
 	l.header.Revision++
 	l.header.Steps++
 	l.header.ScheduleCursor = cursor
@@ -358,7 +358,7 @@ func (r *Runner[S]) commitFastEndBranch(ctx context.Context, l *live[S], inv *In
 	updatedInv.Continuation = ""
 
 	if store != nil {
-		h := l.header.Header()
+		h := l.header.Clone()
 		h.Revision = l.header.Revision + 1
 		h.Steps = l.header.Steps + 1
 		h.ScheduleCursor = cursor
@@ -410,6 +410,10 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 	if err != nil {
 		return false, ""
 	}
+	if compiledJoin == nil && len(branches) == 0 {
+		ok, groupID, _ := r.commitFastEndBranch(ctx, l, parent, parentGroup, parentState, true, cursor, nil, obs)
+		return ok, groupID
+	}
 	edges := r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd]
 	clonedStates := make([]S, len(branches))
 	for i, branch := range branches {
@@ -420,9 +424,12 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 		clonedStates[i] = state
 	}
 	clearEntryTimeoutInLive(parentGroup, parent.BranchIndex)
-	joinNode := compiledJoin.Spec.Name
 	groupID := model.AllocID(&l.header.NextID, "g")
-	groupCallID := model.AllocID(&l.header.NextID, "c")
+	var joinNode, groupCallID string
+	if compiledJoin != nil {
+		joinNode = compiledJoin.Spec.Name
+		groupCallID = model.AllocID(&l.header.NextID, "c")
+	}
 	actBranches := make([]ActivationBranch, len(branches))
 
 	oldStatus := parent.Status
@@ -456,7 +463,7 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 			BranchIndex: branchIndex,
 		})
 		l.readyNodes++
-		l.nodeQueue.push(taskRef{id: childID, slot: childSlot, nodeIdx: nodeIdx, join: false})
+		l.nodeQueue.push(taskRef{id: childID, slot: childSlot, nodeIdx: nodeIdx, isJoin: false})
 	}
 	gSlot := l.putGroup(liveGroup[S]{
 		group: ActivationGroup{
@@ -472,7 +479,7 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 	})
 	if l.joinEligible(&l.groups[gSlot]) {
 		l.groups[gSlot].joinEnqueued = true
-		l.joinQueue.push(taskRef{id: groupID, slot: gSlot, join: true})
+		l.joinQueue.push(taskRef{id: groupID, slot: gSlot, isJoin: true})
 	}
 	l.header.Revision++
 	l.header.Steps++
@@ -555,7 +562,7 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 			parent.CallID = model.AllocID(&l.header.NextID, "c")
 			parent.Node = nextTarget
 			l.readyNodes++
-			l.nodeQueue.push(taskRef{id: parent.ID, slot: parentSlot, nodeIdx: nextNodeIdx, join: false})
+			l.nodeQueue.push(taskRef{id: parent.ID, slot: parentSlot, nodeIdx: nextNodeIdx, isJoin: false})
 		}
 	}
 	if parent.Status.Resolved() && parent.GroupID != "" {

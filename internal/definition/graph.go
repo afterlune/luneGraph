@@ -31,7 +31,7 @@ type Vertex[S any] struct {
 	Name         string
 	Node         model.NodeSpec[S]
 	Join         model.JoinSpec[S]
-	Scope        string
+	MountPrefix  string
 	ReturnTarget string
 	Mounted      bool
 }
@@ -281,10 +281,10 @@ func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 		newV := v
 		newV.Name = qName
 		newV.Mounted = true
-		if newV.Scope == "" {
-			newV.Scope = name
+		if newV.MountPrefix == "" {
+			newV.MountPrefix = name
 		} else {
-			newV.Scope = qualify(name, newV.Scope)
+			newV.MountPrefix = qualify(name, newV.MountPrefix)
 		}
 		if newV.ReturnTarget != "" {
 			newV.ReturnTarget = qualify(name, newV.ReturnTarget)
@@ -513,10 +513,10 @@ func (g *Graph[S]) ExportMermaid() (string, error) {
 	mountMap := make(map[string][]Vertex[S])
 
 	for _, v := range g.vertices {
-		if v.Scope == "" {
+		if v.MountPrefix == "" {
 			rootVertices = append(rootVertices, v)
 		} else {
-			mountMap[v.Scope] = append(mountMap[v.Scope], v)
+			mountMap[v.MountPrefix] = append(mountMap[v.MountPrefix], v)
 		}
 	}
 
@@ -557,8 +557,8 @@ func (g *Graph[S]) ExportMermaid() (string, error) {
 		})
 		for _, v := range verts {
 			labelName := v.Name
-			if v.Scope != "" {
-				labelName = strings.TrimPrefix(v.Name, v.Scope+"/")
+			if v.MountPrefix != "" {
+				labelName = strings.TrimPrefix(v.Name, v.MountPrefix+"/")
 			}
 			if entryNames[v.Name] {
 				fmt.Fprintf(&sb, "        %s([\"%s (entry)\"])\n", id(v.Name), diagram.Label(labelName))

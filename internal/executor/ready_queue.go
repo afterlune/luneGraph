@@ -9,7 +9,7 @@ type taskRef struct {
 	id      string
 	slot    int
 	nodeIdx int
-	join    bool
+	isJoin  bool
 }
 
 // readyQueue owns FIFO storage only. The live position decides task eligibility.
