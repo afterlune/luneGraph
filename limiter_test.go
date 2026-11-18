@@ -20,7 +20,7 @@ func limiterFixture(t *testing.T, role string, callback func(context.Context, gr
 func limiterGraph(t *testing.T, role string, callback func(context.Context, graph.CallInfo, int) (int, error)) *graph.Graph[int] {
 	t.Helper()
 	g := graph.New[int]("entry")
-	add := func(name string, run graph.Node[int]) {
+	add := func(name string, run graph.NodeFunc[int]) {
 		t.Helper()
 		if err := g.AddNode(graph.NodeSpec[int]{Name: name, Run: run, OnError: graph.FailExecution}); err != nil {
 			t.Fatal(err)
@@ -48,7 +48,7 @@ func limiterGraph(t *testing.T, role string, callback func(context.Context, grap
 			})
 			link("entry", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "entry", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "entry", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			return callback(ctx, call, values[0]+values[1])
 		}}); err != nil {

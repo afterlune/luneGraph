@@ -14,7 +14,7 @@ import (
 	"github.com/afterlune/luneGraph/checkpoint/memory"
 )
 
-func node[S any](t *testing.T, g *graph.Graph[S], name string, run graph.Node[S]) {
+func node[S any](t *testing.T, g *graph.Graph[S], name string, run graph.NodeFunc[S]) {
 	t.Helper()
 	if err := g.AddNode(graph.NodeSpec[S]{Name: name, Run: run}); err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func edge[S any](t *testing.T, g *graph.Graph[S], from, to string) {
 
 func intRunner(t *testing.T, g *graph.Graph[int]) *graph.Runner[int] {
 	t.Helper()
-	r, err := g.Compile(graph.Config[int]{MachineID: "numbers-v1", Clone: func(v int) (int, error) { return v, nil }})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "numbers-v1", Clone: func(v int) (int, error) { return v, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestParallelJoinAndStableMergeOrder(t *testing.T) {
 		})
 		edge(t, g, "fork", item.name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		values := graph.BranchValues(branches)
 		if len(values) != 2 || values[0] != 1 || values[1] != 2 {
 			return 0, fmt.Errorf("wrong merge order: %v", values)
@@ -151,11 +151,11 @@ func TestNestedGroups(t *testing.T) {
 		return graph.EndExecution(v), nil
 	})
 	for _, spec := range []graph.JoinSpec[int]{
-		{Name: "inner", From: "a", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		{Name: "inner", FanOutSource: "a", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			return values[0] + values[1], nil
 		}},
-		{Name: "outer", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		{Name: "outer", FanOutSource: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			return values[0] + values[1], nil
 		}},
@@ -216,7 +216,7 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			return values[0], nil
 		}}); err != nil {
@@ -249,7 +249,7 @@ func TestFailureScopesAndCloneRollback(t *testing.T) {
 		s.Values["n"] = 99
 		return graph.Transition[state]{}, boom
 	})
-	r, err := mutable.Compile(graph.Config[state]{MachineID: "mutable-v1", Clone: func(s state) (state, error) {
+	r, err := mutable.Compile(graph.Config[state]{DefinitionID: "mutable-v1", Clone: func(s state) (state, error) {
 		copy := state{Values: make(map[string]int)}
 		for k, v := range s.Values {
 			copy.Values[k] = v
@@ -388,7 +388,7 @@ func TestRegisterJSONContinuation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RegisterJSONContinuation error: %v", err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "json-resume-v1", Clone: graph.ValueClone[int]})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "json-resume-v1", Clone: graph.ValueClone[int]})
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 	ctx := context.Background()
 	cp := graph.Checkpoint[int]{
 		FormatVersion: graph.CheckpointFormatVersion,
-		MachineID:     "numbers-v1",
+		DefinitionID:  "numbers-v1",
 		RunID:         "run-cp",
 		Revision:      1,
 		NextID:        3,
@@ -552,7 +552,7 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 
 	// 4. invalid checkpoint (mismatched machine ID)
 	invalidCp := cp
-	invalidCp.MachineID = "wrong-machine"
+	invalidCp.DefinitionID = "wrong-machine"
 	if _, err := r.Fork(ctx, "run-1", invalidCp, nil); !errors.Is(err, graph.ErrInvalidCheckpoint) {
 		t.Fatalf("expected ErrInvalidCheckpoint, got: %v", err)
 	}

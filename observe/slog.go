@@ -38,7 +38,7 @@ func (o *slogObserver) Observe(ctx context.Context, event graph.Event) {
 		slog.String("phase", string(event.Phase)),
 		slog.Uint64("operation_id", event.OperationID),
 		slog.String("run_id", event.RunID),
-		slog.String("machine_id", event.MachineID),
+		slog.String("machine_id", event.DefinitionID),
 		slog.Uint64("revision", event.Revision),
 		slog.Time("event_time", event.Time),
 	}

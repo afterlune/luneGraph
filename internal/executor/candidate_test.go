@@ -13,7 +13,7 @@ import (
 )
 
 func nestedCandidatePosition() Checkpoint[int] {
-	return Checkpoint[int]{RunID: "candidate", MachineID: "machine-v1", FormatVersion: CheckpointFormatVersion, Revision: 1, NextID: 1000,
+	return Checkpoint[int]{RunID: "candidate", DefinitionID: "machine-v1", FormatVersion: CheckpointFormatVersion, Revision: 1, NextID: 1000,
 		Invocations: []Invocation[int]{
 			{ID: "i0", Status: InvocationGroup, ChildGroupID: "g0"},
 			{ID: "i1", Status: InvocationGroup, GroupID: "g0", ChildGroupID: "g2"},
@@ -77,7 +77,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 	r := executorTestRunner(t, "source", []NodeSpec[int]{executorTestNode("source", executorTestEnd, FailExecution), executorTestNode("next", executorTestEnd, FailExecution)}, nil, map[string][]string{"source": {"next"}}, nil, nil)
 	cp := executorTestReadyCheckpoint("source", 1)
 	l := newLive(cp, nil)
-	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(9, "missing")}, 0); err == nil {
+	if _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(9, "missing")}, 0); err == nil {
 		t.Fatal("invalid transition accepted")
 	}
 	if !reflect.DeepEqual(l.snapshot(), cp) {
@@ -86,9 +86,10 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 	store := newExecutorTestStore()
 	store.values[cp.RunID] = cp
 	store.compareErr = ErrConflict
-	change, terminalErr, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(7, "next")}, 0)
-	if err != nil || terminalErr != nil {
-		t.Fatalf("candidate: %v %v", err, terminalErr)
+	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(7, "next")}, 0)
+	change := candidate.Change
+	if err != nil || candidate.TerminalErr != nil {
+		t.Fatalf("candidate: %v %v", err, candidate.TerminalErr)
 	}
 	if err := r.submit(context.Background(), l, change, store, nil); !errors.Is(err, ErrConflict) {
 		t.Fatalf("commit = %v", err)
@@ -97,9 +98,10 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 		t.Fatal("rejected commit changed position")
 	}
 	store.compareErr = nil
-	change, terminalErr, err = r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(5, "next")}, 0)
-	if err != nil || terminalErr != nil {
-		t.Fatalf("reused candidate: %v %v", err, terminalErr)
+	candidate, err = r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(5, "next")}, 0)
+	change = candidate.Change
+	if err != nil || candidate.TerminalErr != nil {
+		t.Fatalf("reused candidate: %v %v", err, candidate.TerminalErr)
 	}
 	if err := r.submit(context.Background(), l, change, store, nil); err != nil {
 		t.Fatal(err)
@@ -109,7 +111,7 @@ func TestCandidateReuseAfterInvalidTransitionAndRejectedCommit(t *testing.T) {
 		t.Fatalf("accepted position = %+v", want)
 	}
 	// Building another outcome must not clear records already installed or saved.
-	if _, _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(8, "missing")}, 0); err == nil {
+	if _, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "i1"}, transition: model.To(8, "missing")}, 0); err == nil {
 		t.Fatal("invalid successor accepted")
 	}
 	if !reflect.DeepEqual(l.snapshot(), want) || !reflect.DeepEqual(store.values[cp.RunID], want) {

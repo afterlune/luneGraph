@@ -41,8 +41,8 @@ type (
 	InvocationStatus  = model.InvocationStatus
 	// JoinSpec defines one fan-out join. Quorum and CanMerge are exclusive.
 	JoinSpec[S any]   = model.JoinSpec[S]
-	Merge[S any]      = model.Merge[S]
-	Node[S any]       = model.Node[S]
+	MergeFunc[S any]  = model.MergeFunc[S]
+	NodeFunc[S any]   = model.NodeFunc[S]
 	NodeSpec[S any]   = model.NodeSpec[S]
 	Options           = model.Options
 	PanicError        = model.PanicError

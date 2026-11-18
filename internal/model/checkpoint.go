@@ -175,7 +175,7 @@ type Failure struct {
 type Checkpoint[S any] struct {
 	FormatVersion  uint32
 	RunID          string
-	MachineID      string
+	DefinitionID   string `json:"MachineID"`
 	Revision       uint64
 	Steps          uint64
 	NextID         uint64

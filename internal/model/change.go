@@ -8,7 +8,8 @@ import (
 // Header is the complete metadata of a committed execution position.
 type Header struct {
 	FormatVersion                           uint32
-	RunID, MachineID                        string
+	RunID                                   string
+	DefinitionID                            string `json:"MachineID"`
 	Revision, Steps, NextID, ScheduleCursor uint64
 	Completed, HadLocalFailures             bool
 	Failure                                 *Failure
@@ -26,7 +27,7 @@ type Change[S any] struct {
 }
 
 func (s Checkpoint[S]) Header() Header {
-	return Header{s.FormatVersion, s.RunID, s.MachineID, s.Revision, s.Steps, s.NextID, s.ScheduleCursor, s.Completed, s.HadLocalFailures, copyFailure(s.Failure)}
+	return Header{s.FormatVersion, s.RunID, s.DefinitionID, s.Revision, s.Steps, s.NextID, s.ScheduleCursor, s.Completed, s.HadLocalFailures, copyFailure(s.Failure)}
 }
 
 func copyFailure(f *Failure) *Failure {
@@ -61,7 +62,7 @@ func (c Change[S]) Checkpoint() Checkpoint[S] {
 	if c.Final != nil {
 		final = new(*c.Final)
 	}
-	return Copy(Checkpoint[S]{FormatVersion: h.FormatVersion, RunID: h.RunID, MachineID: h.MachineID, Revision: h.Revision, Steps: h.Steps, NextID: h.NextID, ScheduleCursor: h.ScheduleCursor, Completed: h.Completed, HadLocalFailures: h.HadLocalFailures, Failure: copyFailure(h.Failure), Final: final, Invocations: c.UpsertInvocations, Groups: c.UpsertGroups})
+	return Copy(Checkpoint[S]{FormatVersion: h.FormatVersion, RunID: h.RunID, DefinitionID: h.DefinitionID, Revision: h.Revision, Steps: h.Steps, NextID: h.NextID, ScheduleCursor: h.ScheduleCursor, Completed: h.Completed, HadLocalFailures: h.HadLocalFailures, Failure: copyFailure(h.Failure), Final: final, Invocations: c.UpsertInvocations, Groups: c.UpsertGroups})
 }
 
 func (c Change[S]) Clone(clone Clone[S]) (Change[S], error) {
@@ -122,7 +123,7 @@ func ValidateChange[S any](expected uint64, c Change[S]) error {
 }
 
 func ValidateAdvance(before Header, after Header) error {
-	if before.RunID != after.RunID || before.MachineID != after.MachineID || before.Revision+1 != after.Revision {
+	if before.RunID != after.RunID || before.DefinitionID != after.DefinitionID || before.Revision+1 != after.Revision {
 		return ErrConflict
 	}
 	if before.Completed {

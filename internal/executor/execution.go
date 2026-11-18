@@ -8,10 +8,10 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, transition Transition[S], budget invocationBudget) (bool, error) {
+func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, transition Transition[S], budget invocationBudget) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
-		return false, &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
+		return &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
 	}
 	tr := model.ReadTransition(transition)
 	source := inv.Node
@@ -21,88 +21,62 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			target := tr.Target
 			edge, err := r.resolveEdge(nil, source, target)
 			if err != nil {
-				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+				return &TransitionError{InvocationID: id, Node: source, Cause: err}
 			}
-			if err := r.checkJoinEdge(s, inv, edge); err != nil {
-				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-			}
-			inv.State = tr.State
-			inv.Continuation = ""
-			inv.Next = nil
-			if err := r.setTargetEdge(s, inv, edge); err != nil {
-				if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
-					return false, err
-				}
-				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-			}
-			return false, nil
+			return r.applyEdgeTransition(s, inv, tr.State, edge)
 		}
 		if err := r.checkTargets(source, tr.Targets); err != nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
 		if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
 		if err := r.route(s, index, id, source, tr.State, tr.Targets, budget); err != nil {
 			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
-				return false, err
+				return err
 			}
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		return false, nil
+		return nil
 	case ActionWait:
-		if tr.Continuation == "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("Wait requires non-empty continuation key")}
+		if err := r.validateWait(tr.Continuation, s.NextID); err != nil {
+			if errors.Is(err, ErrExecutionLimit) {
+				return err
+			}
+			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		if r.continuation(tr.Continuation) == nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: fmt.Errorf("unknown continuation %q", tr.Continuation)}
-		}
-		if s.NextID == math.MaxUint64 {
-			return false, fmt.Errorf("allocate continuation call ID: %w", ErrExecutionLimit)
-		}
+		var next []string
 		if len(tr.Targets) == 0 {
-			target := tr.Target
-			edge, err := r.resolveEdge(nil, source, target)
-			if err != nil {
-				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			if err := r.checkWaitTarget(nil, inv, tr.Target, invocationJoin(s, inv)); err != nil {
+				return &TransitionError{InvocationID: id, Node: source, Cause: err}
 			}
-			if err := r.checkJoinEdge(s, inv, edge); err != nil {
-				return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			next = []string{tr.Target}
+		} else {
+			if err := r.checkTargets(source, tr.Targets); err != nil {
+				return &TransitionError{InvocationID: id, Node: source, Cause: err}
 			}
-			inv.State = tr.State
-			inv.Status = InvocationWaiting
-			inv.CallID = newID(s, "c")
-			inv.Continuation = tr.Continuation
-			inv.Next = []string{target}
-			return false, nil
+			if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
+				return &TransitionError{InvocationID: id, Node: source, Cause: err}
+			}
+			next = append([]string(nil), tr.Targets...)
 		}
-		if err := r.checkTargets(source, tr.Targets); err != nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-		}
-		if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-		}
-		inv.State = tr.State
-		inv.Status = InvocationWaiting
-		inv.CallID = newID(s, "c")
-		inv.Continuation = tr.Continuation
-		inv.Next = append([]string(nil), tr.Targets...)
-		return false, nil
+		setWaiting(inv, tr.State, newID(s, "c"), tr.Continuation, next)
+		return nil
 	case ActionFanOut:
 		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, budget); err != nil {
 			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
-				return false, err
+				return err
 			}
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
+			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		return false, nil
+		return nil
 	case ActionCompleteBranch:
 		if inv.GroupID == "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch used outside an activation group")}
+			return &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch used outside an activation group")}
 		}
 		_, activation := group(s, inv.GroupID)
 		if activation == nil || activation.JoinNode == "" {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch requires a group with a join")}
+			return &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch requires a group with a join")}
 		}
 		inv.State = tr.State
 		inv.Status = InvocationJoined
@@ -110,13 +84,13 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		inv.Node = activation.JoinNode
 		inv.Next = nil
 		inv.Continuation = ""
-		return false, nil
+		return nil
 	case ActionEndBranch:
 		inv.Status = InvocationEnded
 		inv.CallID = ""
 		inv.Next = nil
 		inv.Continuation = ""
-		return false, nil
+		return nil
 	case ActionEndExecution:
 		state := tr.State
 		s.Final = &state
@@ -124,53 +98,87 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		s.Invocations = nil
 		s.Groups = nil
 		clearInvocationIndex(index)
-		return true, nil
+		return nil
 	case ActionReturn:
 		n := r.node(source)
 		if n == nil || !n.Mounted {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: errors.New("Return used outside a subgraph")}
+			return &TransitionError{InvocationID: id, Node: source, Cause: errors.New("Return used outside a subgraph")}
 		}
-		target := n.ReturnTarget
+		target := n.ReturnEdge.Target
 		if target == "" {
 			inv.State = tr.State
 			inv.Status = InvocationEnded
 			inv.CallID = ""
 			inv.Next = nil
 			inv.Continuation = ""
-			return false, nil
+			return nil
 		}
-		edge := CompiledEdge{Target: target, NodeIndex: n.ReturnNodeIndex, JoinIndex: n.ReturnJoinIndex}
-		if err := r.checkJoinEdge(s, inv, edge); err != nil {
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-		}
-		inv.State = tr.State
-		inv.Continuation = ""
-		inv.Next = nil
-		if err := r.setTargetEdge(s, inv, edge); err != nil {
-			if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
-				return false, err
-			}
-			return false, &TransitionError{InvocationID: id, Node: source, Cause: err}
-		}
-		return false, nil
+		return r.applyEdgeTransition(s, inv, tr.State, n.ReturnEdge)
 	default:
-		return false, &TransitionError{InvocationID: id, Node: source, Cause: fmt.Errorf("invalid action %d", tr.Action)}
+		return &TransitionError{InvocationID: id, Node: source, Cause: fmt.Errorf("invalid action %d", tr.Action)}
 	}
 }
 
-func (r *Runner[S]) checkJoinEdge(s *Checkpoint[S], inv *Invocation[S], edge CompiledEdge) error {
-	if edge.JoinIndex < 0 {
-		return nil
-	}
-	var expected string
-	if inv.GroupID != "" {
-		_, group := group(s, inv.GroupID)
-		if group != nil {
-			expected = group.JoinNode
+func (r *Runner[S]) applyEdgeTransition(s *Checkpoint[S], inv *Invocation[S], state S, edge CompiledEdge) error {
+	source := inv.Node
+	if edge.TargetJoinIndex >= 0 {
+		if err := checkJoinDestination(inv.ID, edge, invocationJoin(s, inv)); err != nil {
+			return &TransitionError{InvocationID: inv.ID, Node: source, Cause: err}
 		}
 	}
-	if edge.Target != expected {
-		return fmt.Errorf("invocation %q reached join %q outside its activation group", inv.ID, edge.Target)
+	inv.State = state
+	inv.Continuation = ""
+	inv.Next = nil
+	if err := r.setTargetEdge(s, inv, edge); err != nil {
+		if _, ok := errors.AsType[*stateCopyError](err); ok || errors.Is(err, ErrExecutionLimit) || errors.Is(err, errInvocationBudget) {
+			return err
+		}
+		return &TransitionError{InvocationID: inv.ID, Node: source, Cause: err}
+	}
+	return nil
+}
+
+func (r *Runner[S]) validateWait(continuation string, nextID uint64) error {
+	if continuation == "" {
+		return errors.New("Wait requires non-empty continuation key")
+	}
+	if r.continuation(continuation) == nil {
+		return fmt.Errorf("unknown continuation %q", continuation)
+	}
+	if nextID == math.MaxUint64 {
+		return fmt.Errorf("allocate continuation call ID: %w", ErrExecutionLimit)
+	}
+	return nil
+}
+
+func (r *Runner[S]) checkWaitTarget(node *CompiledNode[S], inv *Invocation[S], target, expectedJoin string) error {
+	edge, err := r.resolveEdge(node, inv.Node, target)
+	if err != nil {
+		return err
+	}
+	return checkJoinDestination(inv.ID, edge, expectedJoin)
+}
+
+func setWaiting[S any](inv *Invocation[S], state S, callID, continuation string, next []string) {
+	inv.State = state
+	inv.Status = InvocationWaiting
+	inv.CallID = callID
+	inv.Continuation = continuation
+	inv.Next = next
+}
+
+func invocationJoin[S any](s *Checkpoint[S], inv *Invocation[S]) string {
+	if inv.GroupID != "" {
+		if _, activation := group(s, inv.GroupID); activation != nil {
+			return activation.JoinNode
+		}
+	}
+	return ""
+}
+
+func checkJoinDestination(invocationID string, edge CompiledEdge, expected string) error {
+	if edge.TargetJoinIndex >= 0 && edge.Target != expected {
+		return fmt.Errorf("invocation %q reached join %q outside its activation group", invocationID, edge.Target)
 	}
 	return nil
 }
@@ -185,8 +193,8 @@ func (r *Runner[S]) checkJoinTargets(s *Checkpoint[S], inv *Invocation[S], targe
 		}
 		var expected string
 		if len(targets) > 1 {
-			if n := r.node(inv.Node); n != nil && n.JoinIndex >= 0 {
-				expected = r.joins[n.JoinIndex].Spec.Name
+			if n := r.node(inv.Node); n != nil && n.FanOutJoinIndex >= 0 {
+				expected = r.joins[n.FanOutJoinIndex].Spec.Name
 			}
 		} else if inv.GroupID != "" {
 			_, group := group(s, inv.GroupID)
@@ -233,8 +241,8 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
 	}
 	joinNode := ""
-	if n := r.node(source); n != nil && n.JoinIndex >= 0 {
-		joinNode = r.joins[n.JoinIndex].Spec.Name
+	if n := r.node(source); n != nil && n.FanOutJoinIndex >= 0 {
+		joinNode = r.joins[n.FanOutJoinIndex].Spec.Name
 	}
 	if joinNode != "" {
 		if !addIDs(1) { // join callback call ID
@@ -285,45 +293,41 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 	return nil
 }
 
-// fanOut creates a dynamic activation from declared, independently cloned tasks.
-func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], budget invocationBudget) error {
-	joinNode := ""
-	sourceNode := r.node(source)
-	if sourceNode != nil && sourceNode.JoinIndex >= 0 {
-		joinNode = r.joins[sourceNode.JoinIndex].Spec.Name
+// validateFanOut checks the whole activation before either commit path clones state.
+func (r *Runner[S]) validateFanOut(sourceNode *CompiledNode[S], source string, branches []Branch[S], budget invocationBudget, nextID uint64) (*CompiledJoin[S], error) {
+	if sourceNode == nil || sourceNode.FanOutJoinIndex < 0 {
+		return nil, errors.New("FanOut requires a JoinSpec for its source node")
 	}
-	if joinNode == "" {
-		return errors.New("FanOut requires a JoinSpec for its source node")
-	}
+	join := &r.joins[sourceNode.FanOutJoinIndex]
+	edges := r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd]
 	for branchIndex, branch := range branches {
 		if branch.EntryTimeout < 0 {
-			return fmt.Errorf("branch %d timeout must not be negative", branchIndex)
+			return nil, fmt.Errorf("branch %d timeout must not be negative", branchIndex)
 		}
-		foundEdge := false
-		if sourceNode != nil {
-			for _, edgeTarget := range r.edgeTargets[sourceNode.EdgeStart:sourceNode.EdgeEnd] {
-				if edgeTarget == branch.Target {
-					foundEdge = true
-					break
-				}
-			}
+		i := findEdge(edges, branch.Target)
+		if i < 0 {
+			return nil, fmt.Errorf("node %q selected undeclared branch target %q", source, branch.Target)
 		}
-		if !foundEdge {
-			return fmt.Errorf("node %q selected undeclared branch target %q", source, branch.Target)
-		}
-		if r.node(branch.Target) == nil {
-			return fmt.Errorf("branch target %q is not an executable node", branch.Target)
+		if edges[i].TargetNodeIndex < 0 {
+			return nil, fmt.Errorf("branch target %q is not an executable node", branch.Target)
 		}
 	}
 	if err := budget.check(len(branches)); err != nil {
+		return nil, err
+	}
+	children := uint64(len(branches))
+	// Reserve IDs for the group and join callback, plus the invocation and callback of each child.
+	if children > (math.MaxUint64-2)/2 || nextID > math.MaxUint64-(2+2*children) {
+		return nil, fmt.Errorf("reserve FanOut IDs: %w", ErrExecutionLimit)
+	}
+	return join, nil
+}
+
+// fanOut creates a dynamic activation from declared, independently cloned tasks.
+func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], budget invocationBudget) error {
+	join, err := r.validateFanOut(r.node(source), source, branches, budget, s.NextID)
+	if err != nil {
 		return err
-	}
-	if uint64(len(branches)) > (math.MaxUint64-2)/2 {
-		return fmt.Errorf("reserve FanOut IDs: %w", ErrExecutionLimit)
-	}
-	needed := uint64(2) + 2*uint64(len(branches)) // group/join, invocation/callback per child
-	if s.NextID > math.MaxUint64-needed {
-		return fmt.Errorf("reserve FanOut IDs: %w", ErrExecutionLimit)
 	}
 	reserveInvocationIndex(index, s, len(branches))
 	groupID := newID(s, "g")
@@ -332,7 +336,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 		CallID:   newID(s, "c"),
 		Source:   source,
 		ParentID: parent.ID,
-		JoinNode: joinNode,
+		JoinNode: join.Spec.Name,
 		Branches: make([]ActivationBranch, len(branches)),
 	}
 	parent.State = parentState
@@ -364,7 +368,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 }
 
 func (r *Runner[S]) setTargetEdge(s *Checkpoint[S], inv *Invocation[S], edge CompiledEdge) error {
-	if edge.JoinIndex >= 0 {
+	if edge.TargetJoinIndex >= 0 {
 		if inv.GroupID == "" {
 			return fmt.Errorf("invocation %q reached join %q outside a group", inv.ID, edge.Target)
 		}
@@ -378,7 +382,7 @@ func (r *Runner[S]) setTargetEdge(s *Checkpoint[S], inv *Invocation[S], edge Com
 		inv.Status = InvocationJoined
 		inv.CallID = ""
 	} else {
-		if edge.NodeIndex < 0 {
+		if edge.TargetNodeIndex < 0 {
 			return fmt.Errorf("unknown node %q", edge.Target)
 		}
 		if s.NextID == math.MaxUint64 {
@@ -400,5 +404,5 @@ func (r *Runner[S]) setTarget(s *Checkpoint[S], inv *Invocation[S], target strin
 	if idx, ok := r.joinIndex[target]; ok {
 		jIdx = idx
 	}
-	return r.setTargetEdge(s, inv, CompiledEdge{Target: target, NodeIndex: nIdx, JoinIndex: jIdx})
+	return r.setTargetEdge(s, inv, CompiledEdge{Target: target, TargetNodeIndex: nIdx, TargetJoinIndex: jIdx})
 }

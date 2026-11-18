@@ -11,9 +11,9 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 		clone = func(value int) (int, error) { return value, nil }
 	}
 	spec := JoinSpec[int]{
-		Name:     "join",
-		From:     "fork",
-		CanMerge: predicate,
+		Name:         "join",
+		FanOutSource: "fork",
+		CanMerge:     predicate,
 		Merge: func(_ context.Context, _ CallInfo, parent int, _ []BranchResult[int]) (int, error) {
 			return parent, nil
 		},
@@ -31,7 +31,7 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 		secondNode = "join"
 	}
 	checkpoint := Checkpoint[int]{
-		RunID: "run", MachineID: "machine", Revision: 7, Steps: 2, NextID: 8,
+		RunID: "run", DefinitionID: "machine", Revision: 7, Steps: 2, NextID: 8,
 		Invocations: []Invocation[int]{
 			{ID: "i1", Node: "fork", Status: InvocationGroup, ChildGroupID: "g7", State: 10},
 			{ID: "i3", Node: "join", Status: InvocationJoined, GroupID: "g7", BranchIndex: 0, State: 20},

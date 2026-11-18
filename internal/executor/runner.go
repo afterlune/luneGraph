@@ -140,7 +140,7 @@ func (r *Runner[S]) Start(ctx context.Context, runID string, initial S, store St
 	if activeStore != nil {
 		var initInv [1]Invocation[S]
 		initInv[0] = Invocation[S]{ID: "i1", CallID: "c2", Node: r.entry, State: state, Status: InvocationReady}
-		s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, MachineID: r.id, Revision: 1, NextID: 3, Invocations: initInv[:]}
+		s := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: runID, DefinitionID: r.id, Revision: 1, NextID: 3, Invocations: initInv[:]}
 		if err := activeStore.Create(ctx, s); err != nil {
 			return nil, Result[S]{Status: errorStatus(err)}, err
 		}

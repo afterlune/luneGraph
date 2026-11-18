@@ -211,7 +211,7 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	if g == nil {
 		return errors.New("graph is nil")
 	}
-	if !model.ValidName(spec.Name) || !model.ValidName(spec.From) {
+	if !model.ValidName(spec.Name) || !model.ValidName(spec.FanOutSource) {
 		return errors.New("join name and source must be non-empty and have no surrounding whitespace")
 	}
 	if spec.Merge == nil {
@@ -290,8 +290,8 @@ func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 			newV.ReturnTarget = qualify(name, newV.ReturnTarget)
 		}
 		if newV.Kind == VertexJoin {
-			if newV.Join.From != "" {
-				newV.Join.From = qualify(name, newV.Join.From)
+			if newV.Join.FanOutSource != "" {
+				newV.Join.FanOutSource = qualify(name, newV.Join.FanOutSource)
 			}
 			newV.Join.Name = qName
 		}
@@ -457,8 +457,8 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	if g == nil {
 		return nil, errors.New("graph is nil")
 	}
-	if !model.ValidName(config.MachineID) {
-		return nil, errors.New("machine ID must be non-empty and have no surrounding whitespace")
+	if !model.ValidName(config.DefinitionID) {
+		return nil, errors.New("definition ID must be non-empty and have no surrounding whitespace")
 	}
 	if config.Clone == nil {
 		return nil, errors.New("Clone is required")
@@ -473,9 +473,9 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 			return nil, fmt.Errorf("join %q cannot configure both quorum and can-merge", join.Name)
 		}
 	}
-	definition.ID = config.MachineID
+	definition.ID = config.DefinitionID
 	definition.Clone = config.Clone
-	return executor.New(definition)
+	return executor.New(definition), nil
 }
 
 // ExportMermaid renders the builder topology directly from flat vectors.

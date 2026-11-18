@@ -49,7 +49,7 @@ func dynamicFanOutBenchRunner(b *testing.B, width int) *graph.Runner[dynamicBenc
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[dynamicBenchState]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent dynamicBenchState, branches []graph.BranchResult[dynamicBenchState]) (dynamicBenchState, error) {
+	if err := g.AddJoin(graph.JoinSpec[dynamicBenchState]{Name: "joined", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent dynamicBenchState, branches []graph.BranchResult[dynamicBenchState]) (dynamicBenchState, error) {
 		for _, branch := range branches {
 			parent.Value += branch.State.Value
 		}
@@ -70,7 +70,7 @@ func dynamicFanOutBenchRunner(b *testing.B, width int) *graph.Runner[dynamicBenc
 	if err := g.AddEdge("joined", "done"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[dynamicBenchState]{MachineID: "dynamic-fanout-benchmark-v1", Clone: graph.ValueClone[dynamicBenchState]})
+	runner, err := g.Compile(graph.Config[dynamicBenchState]{DefinitionID: "dynamic-fanout-benchmark-v1", Clone: graph.ValueClone[dynamicBenchState]})
 	if err != nil {
 		b.Fatal(err)
 	}

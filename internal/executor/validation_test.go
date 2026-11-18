@@ -20,7 +20,7 @@ func executorTestValidationFixtures(t *testing.T) (waitingRunner *Runner[int], w
 		}, FailInvocation),
 		executorTestNode("left", executorTestEnd, FailInvocation),
 		executorTestNode("right", executorTestEnd, FailInvocation),
-	}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+	}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
 		var total int
 		for _, b := range branches {
 			if b.OK() {
@@ -68,7 +68,7 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 		{"unsupported format", func(s *Checkpoint[int]) { s.FormatVersion++ }},
 		{"format 4 migration boundary", func(s *Checkpoint[int]) { s.FormatVersion = 4 }},
 		{"invalid run ID", func(s *Checkpoint[int]) { s.RunID = " padded" }},
-		{"machine mismatch", func(s *Checkpoint[int]) { s.MachineID = "other" }},
+		{"machine mismatch", func(s *Checkpoint[int]) { s.DefinitionID = "other" }},
 		{"zero revision", func(s *Checkpoint[int]) { s.Revision = 0 }},
 		{"final state while active", func(s *Checkpoint[int]) { value := 9; s.Final = &value }},
 		{"next ID too small", func(s *Checkpoint[int]) { s.NextID = 2 }},
@@ -152,7 +152,7 @@ func TestValidateCheckpointHeaderAndInvocationInvariants(t *testing.T) {
 		})
 	}
 
-	joinRunner := executorTestRunner(t, "pause", []NodeSpec[int]{executorTestNode("pause", executorTestEnd, FailInvocation)}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"pause": {"joined"}}, map[string]Continuation[int]{"resume": {Decode: func([]byte) (any, error) { return nil, nil }, Apply: func(context.Context, CallInfo, int, any) (int, error) { return 0, nil }}}, nil)
+	joinRunner := executorTestRunner(t, "pause", []NodeSpec[int]{executorTestNode("pause", executorTestEnd, FailInvocation)}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"pause": {"joined"}}, map[string]Continuation[int]{"resume": {Decode: func([]byte) (any, error) { return nil, nil }, Apply: func(context.Context, CallInfo, int, any) (int, error) { return 0, nil }}}, nil)
 	wrongJoin := copyCheckpoint(base)
 	wrongJoin.Invocations[0].Next = []string{"joined"}
 	if err := joinRunner.validateCheckpoint(wrongJoin); !errors.Is(err, ErrInvalidCheckpoint) {
@@ -248,7 +248,7 @@ func TestValidateCheckpointCompletedExecutionShapes(t *testing.T) {
 			invalid := copyCheckpoint(test.base)
 			test.mutate(&invalid)
 			validator := runner
-			if invalid.MachineID != runner.id {
+			if invalid.DefinitionID != runner.id {
 				t.Fatal("fixture machine ID changed unexpectedly")
 			}
 			if err := validator.validateCheckpoint(invalid); !errors.Is(err, ErrInvalidCheckpoint) {

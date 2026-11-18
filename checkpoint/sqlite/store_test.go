@@ -51,7 +51,7 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
 	store := openStore(t, path)
-	first := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1,
+	first := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1,
 		Invocations: []graph.Invocation[state]{{ID: "i1", CallID: "c2", State: state{Values: map[string]int{"n": 1}}}}}
 	if err := store.Create(ctx, first); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestReopenAndCompareAndSwap(t *testing.T) {
 	}
 	otherMachine := again
 	otherMachine.Revision = 3
-	otherMachine.MachineID = "other"
+	otherMachine.DefinitionID = "other"
 	if err := store.Commit(ctx, 2, (otherMachine).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("different machine = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCodecFailuresAndCorruptData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{}}}}
+	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{}}}}
 	if err := broken.Create(ctx, initial); !errors.Is(err, boom) {
 		t.Fatalf("encode error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestStoreReportsSQLiteStatementFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	value := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-errors", MachineID: "machine-v1", Revision: 1}
+	value := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-errors", DefinitionID: "machine-v1", Revision: 1}
 
 	setup(`CREATE TRIGGER reject_create BEFORE INSERT ON checkpoints BEGIN SELECT RAISE(ABORT,'create failure'); END`)
 	if err := store.Create(ctx, value); err == nil {
@@ -275,7 +275,7 @@ func TestConcurrentCreateAndCompareAndSwap(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			initial := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: runID, MachineID: "machine-v1", Revision: 1}
+			initial := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: runID, DefinitionID: "machine-v1", Revision: 1}
 			if err := store.Create(ctx, initial); err != nil {
 				errorsByRun <- err
 				return
@@ -309,7 +309,7 @@ func TestRevisionUsesFullUint64Range(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
 	store := openStore(t, path)
-	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "wide", MachineID: "machine-v1", Revision: 1}
+	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "wide", DefinitionID: "machine-v1", Revision: 1}
 	if err := store.Create(ctx, initial); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func corruptRow(t *testing.T, path, statement string, args ...any) {
 func TestStoreDeleteEdgeCases(t *testing.T) {
 	var nilStore *sqlite.Store[state]
 	ctx := context.Background()
-	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "nil-run", MachineID: "m-1", Revision: 1}
+	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "nil-run", DefinitionID: "m-1", Revision: 1}
 
 	if err := nilStore.Create(ctx, cp); err == nil {
 		t.Fatal("expected error on Create with nil store")

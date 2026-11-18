@@ -69,7 +69,7 @@ func resumeExampleRunner(applied func(graph.CallInfo)) (*graph.Runner[int], erro
 			return nil, err
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "sum", From: "fork", OnError: graph.FailExecution,
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "sum", FanOutSource: "fork", OnError: graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			if len(values) != 2 {
@@ -92,7 +92,7 @@ func resumeExampleRunner(applied func(graph.CallInfo)) (*graph.Runner[int], erro
 	}); err != nil {
 		return nil, err
 	}
-	return g.Compile(graph.Config[int]{MachineID: "pending-input-example-v1", Clone: graph.ValueClone[int]})
+	return g.Compile(graph.Config[int]{DefinitionID: "pending-input-example-v1", Clone: graph.ValueClone[int]})
 }
 
 var errResumeExampleAck = errors.New("commit acknowledgement lost")

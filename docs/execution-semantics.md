@@ -26,7 +26,7 @@ It is a conflict check, not a lease. Another Runner or handle can commit after
 the check, so callbacks may still replay and effects remain at-least-once.
 
 Recover is the cold-open path: it loads the full checkpoint once and validates
-its requested RunID, MachineID, format and topology before returning a handle.
+its requested RunID, DefinitionID, format and topology before returning a handle.
 Invalid loaded positions return ErrInvalidCheckpoint and no handle, even when
 cancellation is detected after Load. Valid post-load cancelled positions may
 return a validated handle and StatusCancelled without running callbacks. Resume
@@ -71,7 +71,7 @@ Advance detects a committed remote revision through `LoadHeader` and returns
   target, local error message and timeout. The child's `Invocation.BranchIndex`
   addresses that record and remains the index reported in `CallInfo` and
   `BranchResult`; branch metadata is not duplicated on `Invocation`.
-- Compile expands subgraphs into the same machine, state type, scheduler and
+- Compile expands subgraphs into the same compiled graph, state type, scheduler and
   checkpoint. Names are qualified by mount path. A mount has at most one exit;
   Return follows it or ends its invocation without an exit. Return outside a
   mount is invalid. EndExecution ends the entire run.
@@ -337,8 +337,8 @@ Format 8 rejects format-7 checkpoints and older versions. Existing runs require
 their matching runtime; use a new database for new executions. SQLite schema 2
 remains unchanged, but activation-group payloads rename Timeout to EntryTimeout
 and follow the entry-only timeout semantics. No automatic migration or
-compatibility execution machine is supplied.
-MachineID remains an application controlled definition identity; change it for
+compatibility runtime is supplied.
+DefinitionID remains an application controlled definition identity; change it for
 incompatible graphs.
 
 FanOut atomically commits its parent, activation and child invocation IDs before

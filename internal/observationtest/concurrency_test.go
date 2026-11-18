@@ -22,7 +22,7 @@ func TestSharedObserverRunnerAndStore(t *testing.T) {
 		})
 		edge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		sum := branches[0].State + branches[1].State
 		merges.Store(call.RunID, sum)
 		return sum, nil

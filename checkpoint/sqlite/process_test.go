@@ -45,7 +45,7 @@ func TestCASProcessHelper(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	value, _ := strconv.Atoi(os.Getenv("LUNE_CHECKPOINT_VALUE"))
-	next := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "race", MachineID: "machine-v1", Revision: 2, Steps: uint64(value)}
+	next := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "race", DefinitionID: "machine-v1", Revision: 2, Steps: uint64(value)}
 	err = store.Commit(ctx, 1, (next).Change())
 	if err == nil {
 		os.Exit(0)
@@ -65,7 +65,7 @@ func TestCrossProcessCompareAndSwap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "race", MachineID: "machine-v1", Revision: 1}
+	initial := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "race", DefinitionID: "machine-v1", Revision: 1}
 	if err := store.Create(ctx, initial); err != nil {
 		t.Fatal(err)
 	}

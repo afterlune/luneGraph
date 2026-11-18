@@ -11,7 +11,7 @@ func TestModelRejectsIncorrectBoundaries(t *testing.T) {
 	for _, width := range []int{0, 2, 4} {
 		m := model{width: width}
 		s := state{Owner: "model-run", Round: 2, Sum: 2 * m.weight(), Inputs: 1, Branch: -1, Values: map[string]int{"sum": 2 * m.weight()}}
-		cp := graph.Checkpoint[state]{RunID: "model-run", MachineID: "model-v1", FormatVersion: graph.CheckpointFormatVersion, Steps: uint64(2 * m.roundSteps()), Invocations: []graph.Invocation[state]{{Node: "work", Status: graph.InvocationWaiting, State: s}}}
+		cp := graph.Checkpoint[state]{RunID: "model-run", DefinitionID: "model-v1", FormatVersion: graph.CheckpointFormatVersion, Steps: uint64(2 * m.roundSteps()), Invocations: []graph.Invocation[state]{{Node: "work", Status: graph.InvocationWaiting, State: s}}}
 		if width > 0 {
 			cp.Invocations[0].Node = "boundary"
 		}

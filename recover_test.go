@@ -99,7 +99,7 @@ func TestRecoverBudgetAndCompletedBranches(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		node   graph.Node[int]
+		node   graph.NodeFunc[int]
 		status graph.Status
 	}{
 		{"branch", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
@@ -143,7 +143,7 @@ func TestRecoverRejectsInvalidStoredRun(t *testing.T) {
 	if _, _, err := runner.Recover(ctx, "missing", nil, store, graph.Options{}); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("missing run = %v", err)
 	}
-	other, err := g.Compile(graph.Config[int]{MachineID: "other-machine", Clone: func(v int) (int, error) { return v, nil }})
+	other, err := g.Compile(graph.Config[int]{DefinitionID: "other-machine", Clone: func(v int) (int, error) { return v, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

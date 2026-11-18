@@ -47,7 +47,7 @@ func initLiveStart[S any](l *live[S], runID string, runner *Runner[S], state S) 
 	l.header = Checkpoint[S]{
 		FormatVersion: CheckpointFormatVersion,
 		RunID:         runID,
-		MachineID:     runner.id,
+		DefinitionID:  runner.id,
 		Revision:      1,
 		NextID:        3,
 	}
@@ -380,7 +380,7 @@ func checkpointPosition[S any](c Change[S]) Checkpoint[S] {
 	return Checkpoint[S]{
 		FormatVersion:    h.FormatVersion,
 		RunID:            h.RunID,
-		MachineID:        h.MachineID,
+		DefinitionID:     h.DefinitionID,
 		Revision:         h.Revision,
 		Steps:            h.Steps,
 		NextID:           h.NextID,

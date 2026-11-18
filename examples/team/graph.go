@@ -97,13 +97,13 @@ func newTeamRunner(models ModelRegistry) (*graph.Runner[teamState], error) {
 	return newTeamRunnerWithID(models, "team-model-adapters-v2")
 }
 
-func newTeamRunnerWithID(models ModelRegistry, machineID string) (*graph.Runner[teamState], error) {
-	return newTeamRunnerWithModelOptions(models, machineID, modelOptionsFromRegistry(models))
+func newTeamRunnerWithID(models ModelRegistry, definitionID string) (*graph.Runner[teamState], error) {
+	return newTeamRunnerWithModelOptions(models, definitionID, modelOptionsFromRegistry(models))
 }
 
-func newTeamRunnerWithModelOptions(models ModelRegistry, machineID string, workerModels []ModelOption) (*graph.Runner[teamState], error) {
-	if strings.TrimSpace(machineID) == "" {
-		return nil, errors.New("team MachineID must not be empty")
+func newTeamRunnerWithModelOptions(models ModelRegistry, definitionID string, workerModels []ModelOption) (*graph.Runner[teamState], error) {
+	if strings.TrimSpace(definitionID) == "" {
+		return nil, errors.New("team DefinitionID must not be empty")
 	}
 	registry, err := copyModelRegistry(models)
 	if err != nil {
@@ -118,7 +118,7 @@ func newTeamRunnerWithModelOptions(models ModelRegistry, machineID string, worke
 	if err := addTeamDefinitionWithModels(g, registry, workerModels); err != nil {
 		return nil, err
 	}
-	return g.Compile(graph.Config[teamState]{MachineID: machineID, Clone: cloneTeamState})
+	return g.Compile(graph.Config[teamState]{DefinitionID: definitionID, Clone: cloneTeamState})
 }
 
 func modelOptionsFromRegistry(models ModelRegistry) []ModelOption {
@@ -227,7 +227,7 @@ func addTeamDefinitionWithModels(g *graph.Graph[teamState], models ModelRegistry
 	}}); err != nil {
 		return err
 	}
-	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "worker-join", From: rolePlanner, OnError: graph.FailExecution, Merge: mergeTeamResults}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "worker-join", FanOutSource: rolePlanner, OnError: graph.FailExecution, Merge: mergeTeamResults}); err != nil {
 		return err
 	}
 	if err := g.AddNode(graph.NodeSpec[teamState]{Name: "worker-return", Run: func(_ context.Context, _ graph.CallInfo, s teamState) (graph.Transition[teamState], error) {
@@ -235,7 +235,7 @@ func addTeamDefinitionWithModels(g *graph.Graph[teamState], models ModelRegistry
 	}}); err != nil {
 		return err
 	}
-	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "lead-join", From: roleLead, OnError: graph.FailExecution, Merge: mergeTeamResults}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "lead-join", FanOutSource: roleLead, OnError: graph.FailExecution, Merge: mergeTeamResults}); err != nil {
 		return err
 	}
 	if err := g.AddNode(graph.NodeSpec[teamState]{Name: "approval", Run: func(_ context.Context, _ graph.CallInfo, s teamState) (graph.Transition[teamState], error) {

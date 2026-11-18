@@ -10,25 +10,31 @@ import (
 	"github.com/afterlune/luneGraph/internal/observation"
 )
 
+type commitResultOutcome struct {
+	CommitErr   error
+	TerminalErr error
+}
+
 // commitResult builds and submits one scheduler outcome. Candidate errors never
 // reach Store; terminal callback errors are returned only after a successful commit.
-func (r *Runner[S]) commitResult(ctx context.Context, l *live[S], out workResult[S], maxInvocations int, cursor uint64, store Store[S], obs *observation.Session, prepared map[string]workerTask[S]) (error, error) {
+func (r *Runner[S]) commitResult(ctx context.Context, l *live[S], out workResult[S], maxInvocations int, cursor uint64, store Store[S], obs *observation.Session, prepared map[string]workerTask[S]) commitResultOutcome {
 	if ok, touchedGroupID, commitErr := r.tryCommitFast(ctx, l, out, maxInvocations, cursor, store, obs); ok {
 		if commitErr != nil {
-			return nil, commitErr
+			return commitResultOutcome{CommitErr: commitErr}
 		}
 		if touchedGroupID != "" && len(prepared) > 0 {
 			delete(prepared, touchedGroupID)
 		}
-		return nil, nil
+		return commitResultOutcome{}
 	}
-	c, terminalErr, err := r.resultChange(l, out, maxInvocations)
+	candidate, err := r.resultChange(l, out, maxInvocations)
 	if err != nil {
-		return nil, err
+		return commitResultOutcome{CommitErr: err}
 	}
+	c := candidate.Change
 	c.Header.ScheduleCursor = cursor
 	if err := r.submit(ctx, l, c, store, obs); err != nil {
-		return nil, err
+		return commitResultOutcome{CommitErr: err}
 	}
 	if len(prepared) > 0 {
 		for _, v := range c.UpsertInvocations {
@@ -37,7 +43,7 @@ func (r *Runner[S]) commitResult(ctx context.Context, l *live[S], out workResult
 			}
 		}
 	}
-	return terminalErr, nil
+	return commitResultOutcome{TerminalErr: candidate.TerminalErr}
 }
 
 func cloneGroupWithTimeoutCleared[S any](lg *liveGroup[S], branchIndex int) (ActivationGroup, bool) {
@@ -97,6 +103,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		return r.commitFastEdge(ctx, l, inv, slot, lg, tr.State, edge, cursor, store, obs)
 	case ActionEndExecution:
 		if store != nil {
+			final := tr.State
 			h := l.header.Header()
 			h.Revision = l.header.Revision + 1
 			h.Steps = l.header.Steps + 1
@@ -104,14 +111,9 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 			h.Completed = true
 			c := Change[S]{
 				Header: h,
-				Final:  &tr.State,
+				Final:  &final,
 			}
-			if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-				outcome := model.OutcomeUnknown
-				if errors.Is(err, ErrConflict) {
-					outcome = model.OutcomeDiscarded
-				}
-				obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+			if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 				return true, "", err
 			}
 		}
@@ -149,12 +151,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 			if hasTimeoutUpdate {
 				c.UpsertGroups = []ActivationGroup{updatedGroup}
 			}
-			if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-				outcome := model.OutcomeUnknown
-				if errors.Is(err, ErrConflict) {
-					outcome = model.OutcomeDiscarded
-				}
-				obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+			if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 				return true, "", err
 			}
 		}
@@ -182,20 +179,20 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		if n == nil || !n.Mounted {
 			return false, "", nil
 		}
-		if n.ReturnTarget == "" {
+		if n.ReturnEdge.Target == "" {
 			return r.commitFastEndBranch(ctx, l, inv, lg, tr.State, true, cursor, store, obs)
 		}
-		edge := CompiledEdge{Target: n.ReturnTarget, NodeIndex: n.ReturnNodeIndex, JoinIndex: n.ReturnJoinIndex}
+		edge := n.ReturnEdge
 		return r.commitFastEdge(ctx, l, inv, slot, lg, tr.State, edge, cursor, store, obs)
 	case ActionWait:
-		if len(tr.Targets) > 0 || tr.Continuation == "" || r.continuation(tr.Continuation) == nil || l.header.NextID == math.MaxUint64 {
+		if len(tr.Targets) > 0 || r.validateWait(tr.Continuation, l.header.NextID) != nil {
 			return false, "", nil
 		}
-		edge, err := r.resolveEdge(n, source, tr.Target)
-		if err != nil {
-			return false, "", nil
+		expectedJoin := ""
+		if lg != nil {
+			expectedJoin = lg.group.JoinNode
 		}
-		if edge.JoinIndex >= 0 && (lg == nil || lg.group.JoinNode != edge.Target) {
+		if r.checkWaitTarget(n, inv, tr.Target, expectedJoin) != nil {
 			return false, "", nil
 		}
 
@@ -204,11 +201,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		callID := model.AllocID(&nextID, "c")
 
 		updatedInv := *inv
-		updatedInv.State = tr.State
-		updatedInv.Status = InvocationWaiting
-		updatedInv.CallID = callID
-		updatedInv.Continuation = tr.Continuation
-		updatedInv.Next = []string{tr.Target}
+		setWaiting(&updatedInv, tr.State, callID, tr.Continuation, []string{tr.Target})
 
 		if store != nil {
 			h := l.header.Header()
@@ -223,12 +216,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 			if hasTimeoutUpdate {
 				c.UpsertGroups = []ActivationGroup{updatedGroup}
 			}
-			if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-				outcome := model.OutcomeUnknown
-				if errors.Is(err, ErrConflict) {
-					outcome = model.OutcomeDiscarded
-				}
-				obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+			if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 				return true, "", err
 			}
 		}
@@ -250,7 +238,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 		if store != nil {
 			return false, "", nil
 		}
-		ok, gID := r.tryCommitFastFanOut(ctx, l, inv, slot, lg, n, source, tr.State, tr.Branches, maxInvocations, cursor, obs)
+		ok, gID := r.tryCommitFastFanOut(ctx, l, inv, lg, n, source, tr.State, tr.Branches, maxInvocations, cursor, obs)
 		return ok, gID, nil
 	default:
 		return false, "", nil
@@ -259,7 +247,7 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 
 func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocation[S], slot int, lg *liveGroup[S], state S, edge CompiledEdge, cursor uint64, store Store[S], obs *observation.Session) (bool, string, error) {
 	updatedGroup, hasTimeoutUpdate := cloneGroupWithTimeoutCleared(lg, inv.BranchIndex)
-	if edge.JoinIndex >= 0 {
+	if edge.TargetJoinIndex >= 0 {
 		if lg == nil || lg.group.JoinNode != edge.Target {
 			return false, "", nil
 		}
@@ -284,12 +272,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 			if hasTimeoutUpdate {
 				c.UpsertGroups = []ActivationGroup{updatedGroup}
 			}
-			if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-				outcome := model.OutcomeUnknown
-				if errors.Is(err, ErrConflict) {
-					outcome = model.OutcomeDiscarded
-				}
-				obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+			if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 				return true, "", err
 			}
 		}
@@ -312,7 +295,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 		obs.ResolveSelected(ctx, model.OutcomeCommitted, l.header.Revision, nil)
 		return true, groupID, nil
 	}
-	if edge.NodeIndex < 0 || l.header.NextID == math.MaxUint64 {
+	if edge.TargetNodeIndex < 0 || l.header.NextID == math.MaxUint64 {
 		return false, "", nil
 	}
 
@@ -340,12 +323,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 		if hasTimeoutUpdate {
 			c.UpsertGroups = []ActivationGroup{updatedGroup}
 		}
-		if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-			outcome := model.OutcomeUnknown
-			if errors.Is(err, ErrConflict) {
-				outcome = model.OutcomeDiscarded
-			}
-			obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+		if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 			return true, "", err
 		}
 	}
@@ -358,7 +336,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 	l.header.NextID = nextID
 	l.readyNodes += b2i(oldStatus != InvocationReady)
 	l.waitingInvocations -= b2i(oldStatus == InvocationWaiting)
-	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.NodeIndex, join: false})
+	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.TargetNodeIndex, join: false})
 	l.header.Revision++
 	l.header.Steps++
 	l.header.ScheduleCursor = cursor
@@ -396,12 +374,7 @@ func (r *Runner[S]) commitFastEndBranch(ctx context.Context, l *live[S], inv *In
 				c.UpsertGroups = []ActivationGroup{updatedGroup}
 			}
 		}
-		if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-			outcome := model.OutcomeUnknown
-			if errors.Is(err, ErrConflict) {
-				outcome = model.OutcomeDiscarded
-			}
-			obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+		if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 			return true, "", err
 		}
 	}
@@ -431,36 +404,13 @@ func (r *Runner[S]) commitFastEndBranch(ctx context.Context, l *live[S], inv *In
 	return true, groupID, nil
 }
 
-func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent *Invocation[S], parentSlot int, parentGroup *liveGroup[S], sourceNode *CompiledNode[S], source string, parentState S, branches []Branch[S], maxInvocations int, cursor uint64, obs *observation.Session) (bool, string) {
-	if sourceNode == nil || sourceNode.JoinIndex < 0 {
-		return false, ""
-	}
-	if maxInvocations > 0 && l.invocationCount()+len(branches) > maxInvocations {
-		return false, ""
-	}
-	if uint64(len(branches)) > (math.MaxUint64-2)/2 {
-		return false, ""
-	}
-	needed := uint64(2) + 2*uint64(len(branches))
-	if l.header.NextID > math.MaxUint64-needed {
+func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent *Invocation[S], parentGroup *liveGroup[S], sourceNode *CompiledNode[S], source string, parentState S, branches []Branch[S], maxInvocations int, cursor uint64, obs *observation.Session) (bool, string) {
+	budget := invocationBudget{retained: l.invocationCount(), maximum: maxInvocations}
+	compiledJoin, err := r.validateFanOut(sourceNode, source, branches, budget, l.header.NextID)
+	if err != nil {
 		return false, ""
 	}
 	edges := r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd]
-	for _, branch := range branches {
-		if branch.EntryTimeout < 0 {
-			return false, ""
-		}
-		foundNodeIdx := -1
-		for i := range edges {
-			if edges[i].Target == branch.Target {
-				foundNodeIdx = edges[i].NodeIndex
-				break
-			}
-		}
-		if foundNodeIdx < 0 {
-			return false, ""
-		}
-	}
 	clonedStates := make([]S, len(branches))
 	for i, branch := range branches {
 		state, err := r.cloneState(branch.State, parent.ID)
@@ -470,7 +420,6 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 		clonedStates[i] = state
 	}
 	clearEntryTimeoutInLive(parentGroup, parent.BranchIndex)
-	compiledJoin := &r.joins[sourceNode.JoinIndex]
 	joinNode := compiledJoin.Spec.Name
 	groupID := model.AllocID(&l.header.NextID, "g")
 	groupCallID := model.AllocID(&l.header.NextID, "c")
@@ -496,13 +445,7 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 			Target:       branch.Target,
 			EntryTimeout: branch.EntryTimeout,
 		}
-		nodeIdx := 0
-		for i := range edges {
-			if edges[i].Target == branch.Target {
-				nodeIdx = edges[i].NodeIndex
-				break
-			}
-		}
+		nodeIdx := edges[findEdge(edges, branch.Target)].TargetNodeIndex
 		childSlot := l.putNewInvocation(Invocation[S]{
 			ID:          childID,
 			CallID:      callID,
@@ -515,7 +458,6 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 		l.readyNodes++
 		l.nodeQueue.push(taskRef{id: childID, slot: childSlot, nodeIdx: nodeIdx, join: false})
 	}
-	_ = parentSlot
 	gSlot := l.putGroup(liveGroup[S]{
 		group: ActivationGroup{
 			ID:       groupID,
@@ -565,9 +507,9 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 		if j == nil {
 			return false, ""
 		}
-		nextTarget = j.NextTarget
-		nextNodeIdx = j.NextNodeIndex
-		nextJoinIdx = j.NextJoinIndex
+		nextTarget = j.NextEdge.Target
+		nextNodeIdx = j.NextEdge.TargetNodeIndex
+		nextJoinIdx = j.NextEdge.TargetJoinIndex
 		if nextTarget != "" {
 			if nextJoinIdx >= 0 {
 				if parent.GroupID == "" {
@@ -632,6 +574,18 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 	return true, touchedGroupID
 }
 
+func commitToStore[S any](ctx context.Context, store Store[S], expectedRevision uint64, c Change[S], obs *observation.Session) error {
+	err := store.Commit(ctx, expectedRevision, c)
+	if err != nil {
+		outcome := model.OutcomeUnknown
+		if errors.Is(err, ErrConflict) {
+			outcome = model.OutcomeDiscarded
+		}
+		obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+	}
+	return err
+}
+
 func (r *Runner[S]) submit(ctx context.Context, l *live[S], c Change[S], store Store[S], obs *observation.Session) error {
 	if err := ctx.Err(); err != nil {
 		obs.ResolveSelected(ctx, model.OutcomeDiscarded, 0, err)
@@ -644,12 +598,7 @@ func (r *Runner[S]) submit(ctx context.Context, l *live[S], c Change[S], store S
 	c.Header.Revision = l.header.Revision + 1
 	l.complete(&c)
 	if store != nil {
-		if err := store.Commit(ctx, l.header.Revision, c); err != nil {
-			outcome := model.OutcomeUnknown
-			if errors.Is(err, ErrConflict) {
-				outcome = model.OutcomeDiscarded
-			}
-			obs.ResolveSelected(ctx, outcome, c.Header.Revision, err)
+		if err := commitToStore(ctx, store, l.header.Revision, c, obs); err != nil {
 			return err
 		}
 	}

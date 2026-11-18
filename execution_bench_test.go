@@ -97,7 +97,7 @@ func benchmarkCanMergeRunner(b *testing.B) *graph.Runner[int] {
 		b.Fatal(err)
 	}
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name: "joined", From: "dispatch",
+		Name: "joined", FanOutSource: "dispatch",
 		CanMerge: func(_ int, branches []graph.BranchResult[int]) bool {
 			for _, branch := range branches {
 				if branch.OK() {
@@ -131,7 +131,7 @@ func benchmarkCanMergeRunner(b *testing.B) *graph.Runner[int] {
 	if err := g.AddEdge("joined", "done"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "can-merge-benchmark-v1", Clone: graph.ValueClone[int]})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "can-merge-benchmark-v1", Clone: graph.ValueClone[int]})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func benchmarkSequentialRunner(b *testing.B, steps int) *graph.Runner[int] {
 	if err := g.AddEdge("step", "step"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "benchmark-sequential-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "benchmark-sequential-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func benchmarkFanoutRunner(b *testing.B, width int) *graph.Runner[int] {
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		states := graph.BranchValues(branches)
 		merged := 0
 		for _, state := range states {
@@ -271,7 +271,7 @@ func benchmarkFanoutRunner(b *testing.B, width int) *graph.Runner[int] {
 	if err := g.AddEdge("join", "done"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "benchmark-fanout-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "benchmark-fanout-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func benchmarkSingleNodeRunner(b *testing.B) *graph.Runner[int] {
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "benchmark-concurrent-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "benchmark-concurrent-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func BenchmarkNestedSubgraphCompileAndRun(b *testing.B) {
 		if err := root.AddEdge("m", "final"); err != nil {
 			b.Fatal(err)
 		}
-		runner, err := root.Compile(graph.Config[int]{MachineID: "bench-sub", Clone: func(v int) (int, error) { return v, nil }})
+		runner, err := root.Compile(graph.Config[int]{DefinitionID: "bench-sub", Clone: func(v int) (int, error) { return v, nil }})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -365,12 +365,12 @@ func BenchmarkNestedFailGroup(b *testing.B) {
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner-join", From: "branch1", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner-join", FanOutSource: "branch1", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
 		return p, nil
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer-join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer-join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, p int, _ []graph.BranchResult[int]) (int, error) {
 		return p, nil
 	}}); err != nil {
 		b.Fatal(err)
@@ -407,7 +407,7 @@ func BenchmarkNestedFailGroup(b *testing.B) {
 	if err := g.AddEdge("branch2", "outer-join"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "bench-failgroup", Clone: func(v int) (int, error) { return v, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "bench-failgroup", Clone: func(v int) (int, error) { return v, nil }})
 	if err != nil {
 		b.Fatal(err)
 	}

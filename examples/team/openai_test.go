@@ -284,11 +284,11 @@ func TestMixedProviderTeamRecoversFromSQLiteWithStableModelIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	machineID, err := teamRegistryMachineID(registryConfig)
+	definitionID, err := teamRegistryDefinitionID(registryConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := newTeamRunnerWithModelOptions(models, machineID, workerModels)
+	runner, err := newTeamRunnerWithModelOptions(models, definitionID, workerModels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,14 +323,14 @@ func TestMixedProviderTeamRecoversFromSQLiteWithStableModelIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recoveredStore.Close()
-	differentConfigRunner, err := newTeamRunnerWithModelOptions(models, machineID+"-changed", workerModels)
+	differentConfigRunner, err := newTeamRunnerWithModelOptions(models, definitionID+"-changed", workerModels)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := differentConfigRunner.Recover(context.Background(), "mixed-provider-run", nil, recoveredStore, graph.Options{}); err == nil {
-		t.Fatal("recovered a registry checkpoint with a different MachineID")
+		t.Fatal("recovered a registry checkpoint with a different DefinitionID")
 	}
-	recoveredRunner, err := newTeamRunnerWithModelOptions(models, machineID, workerModels)
+	recoveredRunner, err := newTeamRunnerWithModelOptions(models, definitionID, workerModels)
 	if err != nil {
 		t.Fatal(err)
 	}

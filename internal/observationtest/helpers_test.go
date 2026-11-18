@@ -29,14 +29,14 @@ func (r *recorder) snapshot() []graph.Event {
 
 func compile(t testing.TB, g *graph.Graph[int]) *graph.Runner[int] {
 	t.Helper()
-	r, err := g.Compile(graph.Config[int]{MachineID: "observation-v1", Clone: func(s int) (int, error) { return s, nil }})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "observation-v1", Clone: func(s int) (int, error) { return s, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
-func node(t testing.TB, g *graph.Graph[int], name string, run graph.Node[int]) {
+func node(t testing.TB, g *graph.Graph[int], name string, run graph.NodeFunc[int]) {
 	t.Helper()
 	if err := g.AddNode(graph.NodeSpec[int]{Name: name, Run: run}); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func checkPairs(t *testing.T, events []graph.Event) {
 	open := make(map[string]graph.Event)
 	unresolved := make(map[string]graph.Event)
 	for _, e := range events {
-		if e.OperationID == 0 || e.Time.IsZero() || e.RunID == "" || e.MachineID != "observation-v1" {
+		if e.OperationID == 0 || e.Time.IsZero() || e.RunID == "" || e.DefinitionID != "observation-v1" {
 			t.Fatalf("missing identity/time: %+v", e)
 		}
 		key := fmt.Sprintf("%d/%s/%s/%s", e.OperationID, e.Operation, e.InvocationID, e.CallID)

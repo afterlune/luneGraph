@@ -175,7 +175,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 			})
 			edge(t, g, "nested", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", From: "nested", OnError: graph.FailGroup, Merge: func(_ context.Context, _ graph.CallInfo, _ int, _ []graph.BranchResult[int]) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "innerjoin", FanOutSource: "nested", OnError: graph.FailGroup, Merge: func(_ context.Context, _ graph.CallInfo, _ int, _ []graph.BranchResult[int]) (int, error) {
 			// Merge runs on the scheduler: prerequisites must already be met.
 			for _, prerequisite := range []<-chan struct{}{aCommitted, blockedStarted} {
 				select {
@@ -193,7 +193,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 			edge(t, g, name, "innerjoin")
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outerjoin", From: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outerjoin", FanOutSource: "root", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		values := graph.BranchValues(branches)
 		f.joins.Add(1)
 		if len(values) != 1 || values[0] != 17 {
@@ -210,7 +210,7 @@ func newFailureFixture(t *testing.T, origin, order string, store graph.Store[int
 		edge(t, g, e[0], e[1])
 	}
 	var armed, gated atomic.Bool
-	f.runner, err = g.Compile(graph.Config[int]{MachineID: "observation-v1", Clone: func(s int) (int, error) {
+	f.runner, err = g.Compile(graph.Config[int]{DefinitionID: "observation-v1", Clone: func(s int) (int, error) {
 		if s == 17 && armed.Load() && gated.CompareAndSwap(false, true) {
 			// The holder owns one slot and two descendants retain their slots
 			// after cancellation. Take the last slot before outer join admission.

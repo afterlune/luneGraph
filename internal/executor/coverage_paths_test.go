@@ -94,7 +94,7 @@ func TestObservedCallbacksReportSuccessAndFailure(t *testing.T) {
 			return model.EndExecution(state), nil
 		}, FailInvocation),
 	}, []JoinSpec[int]{
-		{Name: "join", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+		{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
 			return branches[0].State, nil
 		}},
 	}, nil, map[string]Continuation[int]{
@@ -183,7 +183,7 @@ func TestMachineExportMermaidAndWideTargetValidation(t *testing.T) {
 		nodes = append(nodes, executorTestNode(name, executorTestEnd, FailInvocation))
 	}
 	runner := executorTestRunner(t, "root", nodes, []JoinSpec[int]{
-		{Name: "join", From: "root", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+		{Name: "join", FanOutSource: "root", Merge: func(_ context.Context, _ CallInfo, _ int, branches []BranchResult[int]) (int, error) {
 			return branches[0].State, nil
 		}},
 	}, edges, nil, map[string]string{"child/return": "target-a"})
@@ -227,7 +227,7 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 			executorTestNode("done", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 				return model.EndExecution(value), nil
 			}, FailInvocation),
-		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, parent int, branches []BranchResult[int]) (int, error) {
+		}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ CallInfo, parent int, branches []BranchResult[int]) (int, error) {
 			if len(branches) != 2 || branches[0].State != 11 || branches[1].State != 22 {
 				return 0, errors.New("unexpected branches")
 			}
@@ -257,7 +257,7 @@ func TestDynamicFanOutAndExecutionHandleCoverage(t *testing.T) {
 				return model.FanOut(value, Branch[int]{Target: "a", State: 10, EntryTimeout: -1}), nil
 			}, FailInvocation),
 			executorTestNode("a", executorTestEnd, FailInvocation),
-		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)
+		}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ CallInfo, _ int, _ []BranchResult[int]) (int, error) { return 0, nil }}}, map[string][]string{"fork": {"a"}}, nil, nil)
 		_, negativeRes, err := negativeTimeoutRunner.Start(context.Background(), "negative-timeout", 0, nil, Options{})
 		if err == nil || negativeRes.Status != StatusFailed {
 			t.Fatalf("expected failure with negative branch timeout: %+v, %v", negativeRes, err)

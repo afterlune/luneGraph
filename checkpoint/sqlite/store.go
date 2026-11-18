@@ -49,7 +49,7 @@ func (s *Store[S]) Create(ctx context.Context, value graph.Checkpoint[S]) error 
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, "INSERT INTO checkpoints(run_id,machine_id,revision,payload,final) VALUES(?,?,?,?,?) ON CONFLICT(run_id) DO NOTHING", value.RunID, value.MachineID, "1", encoded.header, encoded.final)
+	result, err := tx.ExecContext(ctx, "INSERT INTO checkpoints(run_id,machine_id,revision,payload,final) VALUES(?,?,?,?,?) ON CONFLICT(run_id) DO NOTHING", value.RunID, value.DefinitionID, "1", encoded.header, encoded.final)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (s *Store[S]) Commit(ctx context.Context, expected uint64, c graph.Change[S
 	}
 	defer tx.Rollback()
 	var oldPayload []byte
-	err = tx.QueryRowContext(ctx, "SELECT payload FROM checkpoints WHERE run_id=? AND machine_id=? AND revision=?", c.Header.RunID, c.Header.MachineID, strconv.FormatUint(expected, 10)).Scan(&oldPayload)
+	err = tx.QueryRowContext(ctx, "SELECT payload FROM checkpoints WHERE run_id=? AND machine_id=? AND revision=?", c.Header.RunID, c.Header.DefinitionID, strconv.FormatUint(expected, 10)).Scan(&oldPayload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return graph.ErrConflict
 	}
@@ -98,7 +98,7 @@ func (s *Store[S]) Commit(ctx context.Context, expected uint64, c graph.Change[S
 	if err := model.ValidateAdvance(old, c.Header); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE checkpoints SET revision=?,payload=?,final=? WHERE run_id=? AND machine_id=? AND revision=?", strconv.FormatUint(c.Header.Revision, 10), encoded.header, encoded.final, c.Header.RunID, c.Header.MachineID, strconv.FormatUint(expected, 10))
+	result, err := tx.ExecContext(ctx, "UPDATE checkpoints SET revision=?,payload=?,final=? WHERE run_id=? AND machine_id=? AND revision=?", strconv.FormatUint(c.Header.Revision, 10), encoded.header, encoded.final, c.Header.RunID, c.Header.DefinitionID, strconv.FormatUint(expected, 10))
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func decodeHeader(id, machine, revision string, payload []byte) (graph.Header, e
 	if err := json.Unmarshal(payload, &header); err != nil {
 		return graph.Header{}, fmt.Errorf("header: %w", checkpoint.ErrCorrupt)
 	}
-	if header.RunID != id || header.MachineID != machine || header.Revision == 0 || strconv.FormatUint(header.Revision, 10) != revision || header.FormatVersion != graph.CheckpointFormatVersion {
+	if header.RunID != id || header.DefinitionID != machine || header.Revision == 0 || strconv.FormatUint(header.Revision, 10) != revision || header.FormatVersion != graph.CheckpointFormatVersion {
 		return graph.Header{}, checkpoint.ErrCorrupt
 	}
 	return header, nil

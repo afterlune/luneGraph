@@ -544,8 +544,8 @@ Compared clean baseline with the data-oriented design (DOD) and CPU profiling-dr
 
 #### Key architectural optimizations:
 1. **CSR (Compressed Sparse Row) & Arena vector topology**:
-   - Replaced map-heavy graph topology with contiguous slices (`Nodes []CompiledNode[S]`, `EdgeTargets []string`, `Edges []CompiledEdge`, `Joins []CompiledJoin[S]`, `Continuations []CompiledContinuation[S]`).
-   - Every outgoing edge pre-resolves destination `NodeIndex` and `JoinIndex` at compile time, eliminating all runtime string hash map accesses on the execution hot path.
+   - Replaced map-heavy graph topology with contiguous slices (`Nodes []CompiledNode[S]`, `Edges []CompiledEdge`, `Joins []CompiledJoin[S]`, `Continuations []CompiledContinuation[S]`).
+   - Every outgoing edge pre-resolves destination `TargetNodeIndex` and `TargetJoinIndex` at compile time, eliminating all runtime string hash map accesses on the execution hot path.
    - Subgraph expansion and mermaid export use flat arena slices and iterative traversal, eliminating recursive stack calls.
 2. **Static Small ID Lookup Tables (0-alloc / 1-cycle ID generation)**:
    - Pre-allocated immutable lookup arrays `smallCallIDs [1024]string`, `smallInvIDs [1024]string`, and `smallGroupIDs [256]string`.

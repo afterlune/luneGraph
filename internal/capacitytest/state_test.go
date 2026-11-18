@@ -40,7 +40,7 @@ func checkIdentity(call graph.CallInfo, s state) error {
 	return nil
 }
 
-func addNode(t testing.TB, g *graph.Graph[state], name string, run graph.Node[state]) {
+func addNode(t testing.TB, g *graph.Graph[state], name string, run graph.NodeFunc[state]) {
 	t.Helper()
 	if err := g.AddNode(graph.NodeSpec[state]{Name: name, Run: run}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func addEdge(t testing.TB, g *graph.Graph[state], from, to string) {
 
 func compile(t testing.TB, g *graph.Graph[state]) *graph.Runner[state] {
 	t.Helper()
-	r, err := g.Compile(graph.Config[state]{MachineID: "capacity-v1", Clone: clone})
+	r, err := g.Compile(graph.Config[state]{DefinitionID: "capacity-v1", Clone: clone})
 	if err != nil {
 		t.Fatal(err)
 	}

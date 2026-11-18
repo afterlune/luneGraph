@@ -106,7 +106,7 @@ func TestRecoverNeverExposesUnvalidatedHandleAfterLoadCancellation(t *testing.T)
 	}{
 		{"valid", nil},
 		{"wrong run", func(cp *graph.Checkpoint[int]) { cp.RunID = "other" }},
-		{"wrong machine", func(cp *graph.Checkpoint[int]) { cp.MachineID = "other" }},
+		{"wrong machine", func(cp *graph.Checkpoint[int]) { cp.DefinitionID = "other" }},
 		{"broken topology", func(cp *graph.Checkpoint[int]) { cp.Invocations[0].Node = "missing" }},
 		{"format 7", func(cp *graph.Checkpoint[int]) { cp.FormatVersion = 7 }},
 	} {

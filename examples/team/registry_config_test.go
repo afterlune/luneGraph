@@ -32,7 +32,7 @@ func TestDecodeAndBuildMixedTeamRegistry(t *testing.T) {
 		t.Fatalf("normalized worker IDs = %v", config.WorkerModelIDs)
 	}
 	var usage bytes.Buffer
-	registry, options, machineID, err := buildTeamModelRegistry(config, 3*time.Second, 700, &usage)
+	registry, options, definitionID, err := buildTeamModelRegistry(config, 3*time.Second, 700, &usage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +48,8 @@ func TestDecodeAndBuildMixedTeamRegistry(t *testing.T) {
 	if _, ok := registry["openai/worker"].(*openAIResponsesAdapter); !ok {
 		t.Fatalf("openai worker adapter type = %T", registry["openai/worker"])
 	}
-	if !strings.HasPrefix(machineID, "team-provider-registry-v1-") || strings.Contains(machineID, "test-key") {
-		t.Fatalf("MachineID = %q", machineID)
+	if !strings.HasPrefix(definitionID, "team-provider-registry-v1-") || strings.Contains(definitionID, "test-key") {
+		t.Fatalf("DefinitionID = %q", definitionID)
 	}
 	if options[0].ModelID != "deepseek/search" || options[0].Description != "research" || options[1].ModelID != "openai/worker" {
 		t.Fatalf("worker options = %+v", options)
@@ -59,7 +59,7 @@ func TestDecodeAndBuildMixedTeamRegistry(t *testing.T) {
 	}
 }
 
-func TestTeamRegistryMachineIDIsStableAndTracksMeaning(t *testing.T) {
+func TestTeamRegistryDefinitionIDIsStableAndTracksMeaning(t *testing.T) {
 	first, err := decodeTeamRegistryConfig(strings.NewReader(mixedRegistryJSON))
 	if err != nil {
 		t.Fatal(err)
@@ -69,11 +69,11 @@ func TestTeamRegistryMachineIDIsStableAndTracksMeaning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstID, err := teamRegistryMachineID(first)
+	firstID, err := teamRegistryDefinitionID(first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondID, err := teamRegistryMachineID(second)
+	secondID, err := teamRegistryDefinitionID(second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,21 +81,21 @@ func TestTeamRegistryMachineIDIsStableAndTracksMeaning(t *testing.T) {
 		t.Fatalf("equivalent config IDs differ: %q vs %q", firstID, secondID)
 	}
 	second.Models["openai/worker"] = teamModelDefinition{Provider: "openai", Model: "changed-model", Description: "planning"}
-	changedID, err := teamRegistryMachineID(second)
+	changedID, err := teamRegistryDefinitionID(second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if changedID == firstID {
-		t.Fatal("MachineID did not change with provider model mapping")
+		t.Fatal("DefinitionID did not change with provider model mapping")
 	}
 	second.Models["openai/worker"] = teamModelDefinition{Provider: "openai", Model: "test-openai", Description: "planning"}
 	second.WorkerModelIDs = []string{"deepseek/search"}
-	changedID, err = teamRegistryMachineID(second)
+	changedID, err = teamRegistryDefinitionID(second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if changedID == firstID {
-		t.Fatal("MachineID did not change with worker allow-list")
+		t.Fatal("DefinitionID did not change with worker allow-list")
 	}
 }
 

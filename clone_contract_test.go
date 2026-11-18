@@ -28,7 +28,7 @@ func referenceContractRunner(t *testing.T, clone graph.Clone[referenceExampleSta
 		})
 		edge(t, g, "fork", name)
 	}
-	if err := g.AddJoin(graph.JoinSpec[referenceExampleState]{Name: "join", From: "fork", OnError: graph.FailExecution,
+	if err := g.AddJoin(graph.JoinSpec[referenceExampleState]{Name: "join", FanOutSource: "fork", OnError: graph.FailExecution,
 		Merge: func(_ context.Context, call graph.CallInfo, _ referenceExampleState, branches []graph.BranchResult[referenceExampleState]) (referenceExampleState, error) {
 			values := graph.BranchValues(branches)
 			*merges = append(*merges, call)
@@ -55,7 +55,7 @@ func referenceContractRunner(t *testing.T, clone graph.Clone[referenceExampleSta
 		return graph.EndExecution(s), nil
 	})
 	edge(t, g, "join", "done")
-	r, err := g.Compile(graph.Config[referenceExampleState]{MachineID: "nested-reference-example-v1", Clone: clone})
+	r, err := g.Compile(graph.Config[referenceExampleState]{DefinitionID: "nested-reference-example-v1", Clone: clone})
 	if err != nil {
 		t.Fatal(err)
 	}

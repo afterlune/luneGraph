@@ -41,7 +41,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 	if s.FormatVersion != CheckpointFormatVersion {
 		return invalidCheckpoint("unsupported format version %d", s.FormatVersion)
 	}
-	if !validName(s.RunID) || s.MachineID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 3 || s.ScheduleCursor >= s.NextID {
+	if !validName(s.RunID) || s.DefinitionID != r.id || s.Revision == 0 || (!s.Completed && s.Final != nil) || s.NextID < 3 || s.ScheduleCursor >= s.NextID {
 		return invalidCheckpoint("invalid execution header")
 	}
 	if s.Failure != nil {
@@ -163,8 +163,8 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 		}
 		sourceNode := r.node(group.Source)
 		var expectedJoin string
-		if sourceNode != nil && sourceNode.JoinIndex >= 0 {
-			expectedJoin = r.joins[sourceNode.JoinIndex].Spec.Name
+		if sourceNode != nil && sourceNode.FanOutJoinIndex >= 0 {
+			expectedJoin = r.joins[sourceNode.FanOutJoinIndex].Spec.Name
 		}
 		if group.JoinNode != expectedJoin {
 			return invalidCheckpoint("group %q has incompatible join", group.ID)
@@ -186,15 +186,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 			if child.GroupID != group.ID || child.BranchIndex != index || childID == group.ParentID {
 				return invalidCheckpoint("group %q has invalid child %q", group.ID, childID)
 			}
-			hasEdge := false
-			if sourceNode != nil {
-				for _, edgeTarget := range r.edgeTargets[sourceNode.EdgeStart:sourceNode.EdgeEnd] {
-					if edgeTarget == branch.Target {
-						hasEdge = true
-						break
-					}
-				}
-			}
+			hasEdge := sourceNode != nil && findEdge(r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd], branch.Target) >= 0
 			if !hasEdge || branch.EntryTimeout < 0 {
 				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
 			}

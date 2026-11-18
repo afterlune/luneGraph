@@ -47,13 +47,13 @@ func TestExportMermaidRendersSortedNestedGraph(t *testing.T) {
 		t.Fatal("nil graph exported a diagram")
 	}
 
-	validNode := model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+	validNode := model.NodeFunc[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndExecution(0), nil
 	})
 	root := New[int]("root-node")
 	addDefinitionNode(t, root, "root-node", validNode)
 	addDefinitionNode(t, root, "finish", validNode)
-	addDefinitionJoin(t, root, model.JoinSpec[int]{Name: "join-node", From: "root-node", Merge: func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil }})
+	addDefinitionJoin(t, root, model.JoinSpec[int]{Name: "join-node", FanOutSource: "root-node", Merge: func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil }})
 	child := New[int]("child-entry")
 	addDefinitionNode(t, child, "child-entry", validNode)
 	addDefinitionNode(t, child, "child-finish", validNode)

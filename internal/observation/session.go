@@ -16,21 +16,21 @@ var nextOperationID atomic.Uint64
 // Session belongs to one public Runner call. It retains only unresolved
 // callback metadata; application state and payloads never enter this ledger.
 type Session struct {
-	observer         model.Observer
-	id               uint64
-	machineID, runID string
-	mu               sync.Mutex
-	pending          []pendingCallback
+	observer            model.Observer
+	id                  uint64
+	definitionID, runID string
+	mu                  sync.Mutex
+	pending             []pendingCallback
 	// Resolution is driven by the public-call goroutine, never a worker.
 	// Reuse its delivery buffer without retaining delivered metadata.
 	resolved []model.Event
 }
 
-func New(observer model.Observer, machineID, runID string) *Session {
+func New(observer model.Observer, definitionID, runID string) *Session {
 	if observer == nil {
 		return nil
 	}
-	return &Session{observer: observer, id: nextOperationID.Add(1), machineID: machineID, runID: runID}
+	return &Session{observer: observer, id: nextOperationID.Add(1), definitionID: definitionID, runID: runID}
 }
 
 // Span is owned by the goroutine executing the observed operation.
@@ -41,7 +41,7 @@ type Span struct {
 }
 
 func (s *Session) Begin(ctx context.Context, event model.Event) Span {
-	event.OperationID, event.MachineID, event.RunID = s.id, s.machineID, s.runID
+	event.OperationID, event.DefinitionID, event.RunID = s.id, s.definitionID, s.runID
 	event.Phase, event.Time = model.PhaseStarted, time.Now()
 	if executionCallback(event.Operation) {
 		s.mu.Lock()

@@ -20,7 +20,7 @@ func BenchmarkCapacityCompile(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				r, err := g.Compile(graph.Config[state]{MachineID: "capacity-v1", Clone: clone})
+				r, err := g.Compile(graph.Config[state]{DefinitionID: "capacity-v1", Clone: clone})
 				if err != nil || r == nil {
 					b.Fatalf("Compile: %v", err)
 				}

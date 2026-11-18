@@ -32,5 +32,5 @@ func newRunner(add addEffect) (*graph.Runner[state], error) {
 	}); err != nil {
 		return nil, err
 	}
-	return g.Compile(graph.Config[state]{MachineID: "effects-example-v1", Clone: func(s state) (state, error) { return s, nil }})
+	return g.Compile(graph.Config[state]{DefinitionID: "effects-example-v1", Clone: func(s state) (state, error) { return s, nil }})
 }

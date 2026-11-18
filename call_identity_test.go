@@ -130,7 +130,7 @@ func TestJoinCallIDSurvivesRecoveryAfterRejectedCommit(t *testing.T) {
 		rightCalls = append(rightCalls, call)
 		return graph.To(state+2, "join"), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		states := graph.BranchValues(branches)
 		mergeCalls = append(mergeCalls, call)
 		if len(mergeCalls) == 1 {
@@ -182,8 +182,8 @@ func TestCallInfoMetadata(t *testing.T) {
 		return graph.To(state+2, "join"), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name: "join",
-		From: "start",
+		Name:         "join",
+		FanOutSource: "start",
 		Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			joinCalls = append(joinCalls, call)

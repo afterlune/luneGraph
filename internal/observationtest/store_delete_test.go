@@ -29,7 +29,7 @@ func TestStoreDeleteObservation(t *testing.T) {
 	err := obsStore.Create(context.Background(), model.Checkpoint[int]{
 		FormatVersion: model.CheckpointFormatVersion,
 		RunID:         "run-1",
-		MachineID:     "m-1",
+		DefinitionID:  "m-1",
 		Revision:      1,
 	})
 	if err != nil {

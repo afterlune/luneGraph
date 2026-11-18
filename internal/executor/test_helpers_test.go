@@ -13,123 +13,68 @@ import (
 
 func executorTestRunner(t *testing.T, entry string, nodes []NodeSpec[int], joins []JoinSpec[int], edges map[string][]string, continuations map[string]Continuation[int], returnTargets map[string]string) *Runner[int] {
 	t.Helper()
-	nodeIdx := make(map[string]int, len(nodes))
+	compiled := CompiledGraph[int]{
+		ID:                "machine-v1",
+		Entry:             entry,
+		Clone:             func(value int) (int, error) { return value, nil },
+		NodeIndex:         make(map[string]int, len(nodes)),
+		JoinIndex:         make(map[string]int, len(joins)),
+		ContinuationIndex: make(map[string]int, len(continuations)),
+	}
 	for i, node := range nodes {
-		nodeIdx[node.Name] = i
+		compiled.NodeIndex[node.Name] = i
 	}
-	joinIdx := make(map[string]int, len(joins))
+	for from := range returnTargets {
+		if _, ok := compiled.NodeIndex[from]; !ok {
+			compiled.NodeIndex[from] = len(nodes)
+			nodes = append(nodes, NodeSpec[int]{Name: from})
+		}
+	}
 	for i, join := range joins {
-		joinIdx[join.Name] = i
+		compiled.JoinIndex[join.Name] = i
 	}
-
-	compiledJoins := make([]CompiledJoin[int], len(joins))
-	for i, join := range joins {
-		nextTarget := ""
-		if targets := edges[join.Name]; len(targets) > 0 {
-			nextTarget = targets[0]
-		}
-		nIdx := -1
-		if idx, ok := nodeIdx[nextTarget]; ok {
-			nIdx = idx
-		}
-		jIdx := -1
-		if idx, ok := joinIdx[nextTarget]; ok {
-			jIdx = idx
-		}
-		compiledJoins[i] = CompiledJoin[int]{
-			Spec:          join,
-			NextTarget:    nextTarget,
-			NextNodeIndex: nIdx,
-			NextJoinIndex: jIdx,
-		}
-	}
+	compiled.EntryIndex = compiled.NodeIndex[entry]
 
 	joinBySource := make(map[string]int, len(joins))
 	for i, join := range joins {
-		joinBySource[join.From] = i
+		joinBySource[join.FanOutSource] = i
+		next := ""
+		if targets := edges[join.Name]; len(targets) > 0 {
+			next = targets[0]
+		}
+		compiled.Joins = append(compiled.Joins, CompiledJoin[int]{Spec: join, NextEdge: compiled.ResolveTarget(next)})
 	}
 
-	var edgeTargets []string
-	compiledNodes := make([]CompiledNode[int], len(nodes))
 	for i, node := range nodes {
-		jIdx := -1
-		if idx, ok := joinBySource[node.Name]; ok {
-			jIdx = idx
+		joinIndex, ok := joinBySource[node.Name]
+		if !ok {
+			joinIndex = -1
 		}
-		returnTarget := ""
-		mounted := false
-		if target, ok := returnTargets[node.Name]; ok {
-			returnTarget = target
-			mounted = true
+		target, mounted := returnTargets[node.Name]
+		start := len(compiled.Edges)
+		for _, to := range edges[node.Name] {
+			compiled.Edges = append(compiled.Edges, compiled.ResolveTarget(to))
 		}
-		returnNodeIdx := -1
-		if idx, ok := nodeIdx[returnTarget]; ok {
-			returnNodeIdx = idx
-		}
-
-		targets := edges[node.Name]
-		edgeStart := len(edgeTargets)
-		edgeTargets = append(edgeTargets, targets...)
-		edgeEnd := len(edgeTargets)
-
-		compiledNodes[i] = CompiledNode[int]{
-			Spec:            node,
-			JoinIndex:       jIdx,
-			ReturnTarget:    returnTarget,
-			ReturnNodeIndex: returnNodeIdx,
-			Mounted:         mounted,
-			EdgeStart:       edgeStart,
-			EdgeEnd:         edgeEnd,
-		}
-	}
-
-	for from, target := range returnTargets {
-		if _, ok := nodeIdx[from]; !ok {
-			nodeIdx[from] = len(compiledNodes)
-			rIdx := -1
-			if idx, ok := nodeIdx[target]; ok {
-				rIdx = idx
-			}
-			compiledNodes = append(compiledNodes, CompiledNode[int]{
-				Spec:            NodeSpec[int]{Name: from},
-				JoinIndex:       -1,
-				ReturnTarget:    target,
-				ReturnNodeIndex: rIdx,
-				Mounted:         true,
-			})
-		}
+		compiled.Nodes = append(compiled.Nodes, CompiledNode[int]{
+			Spec: node, Index: i, FanOutJoinIndex: joinIndex,
+			ReturnEdge: compiled.ResolveTarget(target), Mounted: mounted,
+			EdgeStart: start, EdgeEnd: len(compiled.Edges),
+		})
 	}
 
 	keys := make([]string, 0, len(continuations))
-	for k := range continuations {
-		keys = append(keys, k)
+	for key := range continuations {
+		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	compiledContinuations := make([]CompiledContinuation[int], len(keys))
-	for i, k := range keys {
-		compiledContinuations[i] = CompiledContinuation[int]{
-			Key:  k,
-			Cont: continuations[k],
-		}
+	for i, key := range keys {
+		compiled.ContinuationIndex[key] = i
+		compiled.Continuations = append(compiled.Continuations, CompiledContinuation[int]{Key: key, Cont: continuations[key]})
 	}
-
-	machine := Machine[int]{
-		ID:            "machine-v1",
-		Entry:         entry,
-		Clone:         func(value int) (int, error) { return value, nil },
-		Nodes:         compiledNodes,
-		EdgeTargets:   edgeTargets,
-		Joins:         compiledJoins,
-		Continuations: compiledContinuations,
-	}
-	runner, err := New(machine)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return runner
+	return New(compiled)
 }
 
-func executorTestNode(name string, run model.Node[int], scope FailureScope) NodeSpec[int] {
+func executorTestNode(name string, run model.NodeFunc[int], scope FailureScope) NodeSpec[int] {
 	return NodeSpec[int]{Name: name, Run: run, OnError: scope}
 }
 
@@ -141,7 +86,7 @@ func executorTestReadyCheckpoint(node string, state int) Checkpoint[int] {
 	return Checkpoint[int]{
 		FormatVersion: CheckpointFormatVersion,
 		RunID:         "run-v1",
-		MachineID:     "machine-v1",
+		DefinitionID:  "machine-v1",
 		Revision:      1,
 		NextID:        3,
 		Invocations:   []Invocation[int]{{ID: "i1", CallID: "c2", Node: node, State: state, Status: InvocationReady}},
@@ -210,7 +155,7 @@ func (s *executorTestStore) Commit(ctx context.Context, expected uint64, change 
 		return s.compareErr
 	}
 	current, exists := s.values[next.RunID]
-	if !exists || current.Revision != expected || next.Revision != expected+1 || current.MachineID != next.MachineID {
+	if !exists || current.Revision != expected || next.Revision != expected+1 || current.DefinitionID != next.DefinitionID {
 		return ErrConflict
 	}
 	s.values[next.RunID] = copyCheckpoint(testchange.Apply(current, change))

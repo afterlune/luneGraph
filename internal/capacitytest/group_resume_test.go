@@ -34,7 +34,7 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
+				if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", FanOutSource: "fork", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
 					values := graph.BranchValues(branches)
 					joins = append(joins, call.CallID)
 					if fault == "join" && armed {
@@ -56,7 +56,7 @@ func TestGroupResumeBatchCommitBoundaries(t *testing.T) {
 					return graph.EndExecution(s), nil
 				})
 				addEdge(t, g, "join", "done")
-				r, err := g.Compile(graph.Config[state]{MachineID: "batch-group", Clone: func(s state) (state, error) {
+				r, err := g.Compile(graph.Config[state]{DefinitionID: "batch-group", Clone: func(s state) (state, error) {
 					if fault == "clone" && armed && len(applies) == 2 && s.Total == 1 {
 						return s, boom
 					}

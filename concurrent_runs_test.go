@@ -79,7 +79,7 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 			}}); err != nil {
 				t.Fatal(err)
 			}
-			runner, err := g.Compile(graph.Config[concurrentRunState]{MachineID: "concurrent-runs-v1", Clone: cloneConcurrentRunState})
+			runner, err := g.Compile(graph.Config[concurrentRunState]{DefinitionID: "concurrent-runs-v1", Clone: cloneConcurrentRunState})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestConcurrentRunsShareRunnerAndStore(t *testing.T) {
 				if err != nil {
 					t.Fatalf("load run %q: %v", runID, err)
 				}
-				if stored.RunID != runID || stored.MachineID != "concurrent-runs-v1" || stored.Revision != 2 || stored.Revision != result.Header.Revision || !stored.Completed || stored.Final == nil || stored.Final.Values["run"] != i || stored.Final.Values["value"] != i+1 {
+				if stored.RunID != runID || stored.DefinitionID != "concurrent-runs-v1" || stored.Revision != 2 || stored.Revision != result.Header.Revision || !stored.Completed || stored.Final == nil || stored.Final.Values["run"] != i || stored.Final.Values["value"] != i+1 {
 					t.Fatalf("stored run %q checkpoint = %+v", runID, stored)
 				}
 			}

@@ -38,7 +38,7 @@ func TestStoreCopiesAndComparesCheckpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
+	initial := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
 	if err := store.Create(ctx, initial); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestStoreCopiesAndComparesCheckpoints(t *testing.T) {
 	}
 	otherMachine := again
 	otherMachine.Revision = 3
-	otherMachine.MachineID = "other"
+	otherMachine.DefinitionID = "other"
 	if err := store.Commit(ctx, 2, (otherMachine).Change()); !errors.Is(err, graph.ErrConflict) {
 		t.Fatalf("different machine = %v", err)
 	}
@@ -84,7 +84,7 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := store.Create(ctx, graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1}); err != nil {
+	if err := store.Create(ctx, graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	results := make(chan error, 2)
@@ -93,7 +93,7 @@ func TestConcurrentCompareAndSwap(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			results <- store.Commit(ctx, 1, (graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 2, Steps: uint64(value + 1)}).Change())
+			results <- store.Commit(ctx, 1, (graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 2, Steps: uint64(value + 1)}).Change())
 		}()
 	}
 	workers.Wait()
@@ -120,7 +120,7 @@ func TestStoreEdgeCases(t *testing.T) {
 
 	var nilStore *memory.Store[int]
 	ctx := context.Background()
-	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-nil", MachineID: "m-1", Revision: 1}
+	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run-nil", DefinitionID: "m-1", Revision: 1}
 
 	if err := nilStore.Create(ctx, cp); err == nil {
 		t.Fatal("expected error on Create with nil store")

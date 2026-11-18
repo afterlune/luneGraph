@@ -89,7 +89,7 @@ func callbackRunner(t *testing.T, kind string, add addEffect) *graph.Runner[stat
 				return graph.To(s, "join"), nil
 			}}))
 		}
-		check(t, g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
+		check(t, g.AddJoin(graph.JoinSpec[state]{Name: "join", FanOutSource: "fork", OnError: graph.FailExecution, Merge: func(ctx context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
 			states := graph.BranchValues(branches)
 			s := states[0]
 			value, err := add(ctx, call, s.Delta)
@@ -102,7 +102,7 @@ func callbackRunner(t *testing.T, kind string, add addEffect) *graph.Runner[stat
 		}
 		check(t, g.AddEdge("join", "done"))
 	}
-	r, err := g.Compile(graph.Config[state]{MachineID: "effects-test-" + kind, Clone: func(s state) (state, error) { return s, nil }})
+	r, err := g.Compile(graph.Config[state]{DefinitionID: "effects-test-" + kind, Clone: func(s state) (state, error) { return s, nil }})
 	check(t, err)
 	return r
 }

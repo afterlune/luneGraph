@@ -139,7 +139,7 @@ func benchmarkCheckpointRunner(b *testing.B) *graph.Runner[benchmarkState] {
 	if err := g.AddEdge("step", "step"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[benchmarkState]{MachineID: "benchmark-cas-v1", Clone: cloneBenchmarkState})
+	runner, err := g.Compile(graph.Config[benchmarkState]{DefinitionID: "benchmark-cas-v1", Clone: cloneBenchmarkState})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func benchmarkRecoveryRunner(b *testing.B) *graph.Runner[benchmarkState] {
 	}); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[benchmarkState]{MachineID: "benchmark-recovery-v1", Clone: cloneBenchmarkState})
+	runner, err := g.Compile(graph.Config[benchmarkState]{DefinitionID: "benchmark-recovery-v1", Clone: cloneBenchmarkState})
 	if err != nil {
 		b.Fatal(err)
 	}

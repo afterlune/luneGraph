@@ -95,7 +95,7 @@ func (m nestedOracle) checkState(s nestedState, phase int) error {
 }
 
 func (m nestedOracle) check(cp graph.Checkpoint[nestedState]) error {
-	if cp.RunID != "model-run" || cp.MachineID != "nested-model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || (cp.HadLocalFailures && m.failure == 0) {
+	if cp.RunID != "model-run" || cp.DefinitionID != "nested-model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || (cp.HadLocalFailures && m.failure == 0) {
 		return fmt.Errorf("invalid nested checkpoint header/failure: %+v", cp)
 	}
 	if len(cp.Invocations) > m.width+3 || len(cp.Groups) > 2 {

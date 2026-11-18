@@ -48,7 +48,7 @@ func TestRuntimeFanOutTargetsMountedSubgraphEntry(t *testing.T) {
 	if err := parent.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+	if err := parent.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 		values := graph.BranchValues(branches)
 		if len(values) != 1 {
 			return 0, errors.New("mounted branch did not reach join")
@@ -205,7 +205,7 @@ func TestSubgraphReturnCanReachFanoutJoin(t *testing.T) {
 	if err := root.AddSubgraph("worker", worker); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := root.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		states := graph.BranchValues(branches)
 		if len(states) != 2 {
 			return 0, errors.New("expected both branches at join")
@@ -237,7 +237,7 @@ func TestSubgraphCanContainFanoutAndJoin(t *testing.T) {
 	node(t, child, "finish", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.Return(state), nil
 	})
-	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := child.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		states := graph.BranchValues(branches)
 		return states[0] + states[1], nil
 	}}); err != nil {
@@ -340,7 +340,7 @@ func TestSubgraphCompileRejectsInvalidComposition(t *testing.T) {
 			})
 			edge(t, root, "worker", name)
 		}
-		if _, err := root.Compile(graph.Config[int]{MachineID: "bad-output", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
+		if _, err := root.Compile(graph.Config[int]{DefinitionID: "bad-output", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
 			t.Fatal("compile accepted multiple subgraph outputs")
 		}
 	})
@@ -350,7 +350,7 @@ func TestSubgraphCompileRejectsInvalidComposition(t *testing.T) {
 		if err := root.AddSubgraph("self", root); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := root.Compile(graph.Config[int]{MachineID: "recursive", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
+		if _, err := root.Compile(graph.Config[int]{DefinitionID: "recursive", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
 			t.Fatal("compile accepted recursive subgraph")
 		}
 	})
@@ -363,7 +363,7 @@ func TestSubgraphCompileRejectsInvalidComposition(t *testing.T) {
 		node(t, root, "worker/work", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			return graph.EndExecution(state), nil
 		})
-		if _, err := root.Compile(graph.Config[int]{MachineID: "collision", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
+		if _, err := root.Compile(graph.Config[int]{DefinitionID: "collision", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
 			t.Fatal("compile accepted a qualified vertex collision")
 		}
 	})
@@ -382,7 +382,7 @@ func TestSubgraphCompileRejectsInvalidComposition(t *testing.T) {
 		if err := root.AddSubgraph("worker", child); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := root.Compile(graph.Config[int]{MachineID: "continuation-collision", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
+		if _, err := root.Compile(graph.Config[int]{DefinitionID: "continuation-collision", Clone: func(v int) (int, error) { return v, nil }}); err == nil {
 			t.Fatal("compile accepted a qualified continuation collision")
 		}
 	})

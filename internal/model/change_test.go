@@ -8,7 +8,7 @@ import (
 )
 
 func TestChangeValidationAndOwnership(t *testing.T) {
-	cp := Checkpoint[map[string]int]{FormatVersion: CheckpointFormatVersion, RunID: "r", MachineID: "m", Revision: 2, NextID: 3, Invocations: []Invocation[map[string]int]{{ID: "i1", State: map[string]int{"n": 1}, Next: []string{"next"}}}, Groups: []ActivationGroup{{ID: "g2", Branches: []ActivationBranch{{InvocationID: "i1"}}}}}
+	cp := Checkpoint[map[string]int]{FormatVersion: CheckpointFormatVersion, RunID: "r", DefinitionID: "m", Revision: 2, NextID: 3, Invocations: []Invocation[map[string]int]{{ID: "i1", State: map[string]int{"n": 1}, Next: []string{"next"}}}, Groups: []ActivationGroup{{ID: "g2", Branches: []ActivationBranch{{InvocationID: "i1"}}}}}
 	c := cp.Change()
 	c.UpsertInvocations[0].Next[0] = "detached"
 	c.UpsertGroups[0].Branches[0].InvocationID = "detached"
@@ -62,13 +62,13 @@ func TestChangeValidationAndOwnership(t *testing.T) {
 	if !errors.Is(ValidateChange(math.MaxUint64, owned), ErrExecutionLimit) {
 		t.Fatal("counter exhaustion")
 	}
-	before := Header{RunID: "r", MachineID: "m", Revision: 1, Steps: 2, NextID: 5, HadLocalFailures: true}
+	before := Header{RunID: "r", DefinitionID: "m", Revision: 1, Steps: 2, NextID: 5, HadLocalFailures: true}
 	after := before
 	after.Revision++
 	if err := ValidateAdvance(before, after); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*Header){func(h *Header) { h.RunID = "other" }, func(h *Header) { h.Revision++ }, func(h *Header) { h.MachineID = "other" }, func(h *Header) { h.Steps = 1 }, func(h *Header) { h.NextID = 1 }, func(h *Header) { h.HadLocalFailures = false }} {
+	for _, mutate := range []func(*Header){func(h *Header) { h.RunID = "other" }, func(h *Header) { h.Revision++ }, func(h *Header) { h.DefinitionID = "other" }, func(h *Header) { h.Steps = 1 }, func(h *Header) { h.NextID = 1 }, func(h *Header) { h.HadLocalFailures = false }} {
 		bad := after
 		mutate(&bad)
 		if ValidateAdvance(before, bad) == nil {

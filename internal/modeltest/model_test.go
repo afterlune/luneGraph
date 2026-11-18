@@ -58,7 +58,7 @@ func (m model) checkState(s state) error {
 }
 
 func (m model) check(cp graph.Checkpoint[state]) error {
-	if cp.RunID != "model-run" || cp.MachineID != "model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || cp.HadLocalFailures || len(cp.Groups) > 1 || len(cp.Invocations) > m.width+1 {
+	if cp.RunID != "model-run" || cp.DefinitionID != "model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || cp.HadLocalFailures || len(cp.Groups) > 1 || len(cp.Invocations) > m.width+1 {
 		return fmt.Errorf("invalid checkpoint boundary: %+v", cp)
 	}
 	for _, inv := range cp.Invocations {

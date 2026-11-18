@@ -156,15 +156,15 @@ func TestCheckpointLookupAndIDAllocation(t *testing.T) {
 }
 
 func TestCheckpointHeaderAndSharedValidators(t *testing.T) {
-	valid := Checkpoint[int]{FormatVersion: CheckpointFormatVersion, RunID: "run", MachineID: "machine", Revision: 1}
+	valid := Checkpoint[int]{FormatVersion: CheckpointFormatVersion, RunID: "run", DefinitionID: "machine", Revision: 1}
 	if err := ValidateCheckpointHeader(valid); err != nil {
 		t.Fatalf("valid header rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*Checkpoint[int]){
 		"empty run":      func(value *Checkpoint[int]) { value.RunID = "" },
 		"padded run":     func(value *Checkpoint[int]) { value.RunID = " run" },
-		"empty machine":  func(value *Checkpoint[int]) { value.MachineID = "" },
-		"padded machine": func(value *Checkpoint[int]) { value.MachineID = "machine " },
+		"empty machine":  func(value *Checkpoint[int]) { value.DefinitionID = "" },
+		"padded machine": func(value *Checkpoint[int]) { value.DefinitionID = "machine " },
 		"format version": func(value *Checkpoint[int]) { value.FormatVersion++ },
 		"zero revision":  func(value *Checkpoint[int]) { value.Revision = 0 },
 	} {

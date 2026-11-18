@@ -44,7 +44,7 @@ func checkCopySequence[S any](t *testing.T, state func(int) S) {
 	var dst Checkpoint[S]
 	for step, size := range []int{0, 1, 8, 9, 128, 512, 130, 9, 8, 0, 512, 1, 128, 0} {
 		final := state(step)
-		src := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: "copy", MachineID: "typed", Revision: uint64(step + 1), Steps: uint64(step), NextID: 1000, ScheduleCursor: 77, Completed: step%2 == 0, Final: &final}
+		src := Checkpoint[S]{FormatVersion: CheckpointFormatVersion, RunID: "copy", DefinitionID: "typed", Revision: uint64(step + 1), Steps: uint64(step), NextID: 1000, ScheduleCursor: 77, Completed: step%2 == 0, Final: &final}
 		for i := range size {
 			inv := Invocation[S]{ID: fmt.Sprintf("i%d", i+1), CallID: fmt.Sprintf("c%d", i+1), Node: "node", State: state(i), Status: InvocationReady, GroupID: "g1", ChildGroupID: "g2", BranchIndex: i, Continuation: "advance"}
 			switch rng.IntN(4) {

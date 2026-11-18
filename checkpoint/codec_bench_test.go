@@ -20,7 +20,7 @@ func BenchmarkJSONCheckpointEncoding(b *testing.B) {
 	checkpointValue := graph.Checkpoint[codecBenchmarkState]{
 		FormatVersion: graph.CheckpointFormatVersion,
 		RunID:         "benchmark-run",
-		MachineID:     "benchmark-machine-v1",
+		DefinitionID:  "benchmark-machine-v1",
 		Revision:      64,
 		Steps:         32,
 		Groups: []graph.ActivationGroup{{

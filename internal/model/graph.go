@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// Node performs one invocation and chooses its next control action. CallInfo
+// NodeFunc performs one invocation and chooses its next control action. CallInfo
 // carries a stable callback ID across recovery replays.
-type Node[S any] func(context.Context, CallInfo, S) (Transition[S], error)
+type NodeFunc[S any] func(context.Context, CallInfo, S) (Transition[S], error)
 
 // CallInfo identifies one logical user callback within a run. CallID is
 // persisted before the callback can start and remains stable if recovery
@@ -57,9 +57,9 @@ func (b BranchResult[S]) Resolved() bool { return b.Status.Resolved() }
 // Pending reports whether the branch was still pending/running when the join was evaluated.
 func (b BranchResult[S]) Pending() bool { return !b.Resolved() }
 
-// Merge combines branch outcomes that reached one activation group's join. CallInfo
+// MergeFunc combines branch outcomes that reached one activation group's join. CallInfo
 // carries the activation group's stable join callback ID.
-type Merge[S any] func(context.Context, CallInfo, S, []BranchResult[S]) (S, error)
+type MergeFunc[S any] func(context.Context, CallInfo, S, []BranchResult[S]) (S, error)
 
 // FailureScope controls how a node or join error affects an execution.
 type FailureScope uint8
@@ -73,19 +73,19 @@ const (
 // NodeSpec registers a node and its default failure policy.
 type NodeSpec[S any] struct {
 	Name    string
-	Run     Node[S]
+	Run     NodeFunc[S]
 	OnError FailureScope
 	// Timeout bounds each callback attempt after admission. Zero disables it.
 	Timeout time.Duration
 }
 
-// JoinSpec consumes obligations created by fan-out at From. Its only possible
-// successor is its sole outgoing edge; without one it ends the parent branch.
+// JoinSpec merges branches from FanOutSource. It follows its sole outgoing
+// edge after merging, or ends the parent branch when there is no edge.
 type JoinSpec[S any] struct {
-	Name    string
-	From    string
-	Merge   Merge[S]
-	OnError FailureScope
+	Name         string
+	FanOutSource string
+	Merge        MergeFunc[S]
+	OnError      FailureScope
 	// Timeout bounds each Merge attempt after admission. Zero disables it.
 	Timeout time.Duration
 	Quorum  int
@@ -104,36 +104,33 @@ type Continuation[S any] struct {
 
 // Config identifies a compiled graph and defines how state is copied.
 type Config[S any] struct {
-	MachineID string
-	Clone     Clone[S]
+	DefinitionID string
+	Clone        Clone[S]
 }
 
 // CompiledEdge holds a pre-resolved outgoing edge target and its node/join index.
 type CompiledEdge struct {
-	Target    string
-	NodeIndex int // index in Machine.Nodes, or -1
-	JoinIndex int // index in Machine.Joins, or -1
+	Target          string
+	TargetNodeIndex int // index in CompiledGraph.Nodes, or -1
+	TargetJoinIndex int // index in CompiledGraph.Joins, or -1
 }
 
-// CompiledNode combines node specification, joined spec index, return targets, and CSR edge offsets in contiguous memory.
+// CompiledNode stores the node specification, its fan-out join, return target,
+// and the range of its outgoing edges.
 type CompiledNode[S any] struct {
 	Spec            NodeSpec[S]
-	Index           int    // index in Machine.Nodes
-	JoinIndex       int    // index in Machine.Joins, or -1 if no join for this fanout source
-	ReturnTarget    string // return target vertex name if mounted, or ""
-	ReturnNodeIndex int    // index in Machine.Nodes of ReturnTarget, or -1
-	ReturnJoinIndex int    // index in Machine.Joins of ReturnTarget, or -1
+	Index           int // index in CompiledGraph.Nodes
+	FanOutJoinIndex int // index in CompiledGraph.Joins, or -1 if no join for this fanout source
+	ReturnEdge      CompiledEdge
 	Mounted         bool
-	EdgeStart       int // start index in Machine.EdgeTargets / Machine.Edges
-	EdgeEnd         int // end index in Machine.EdgeTargets / Machine.Edges
+	EdgeStart       int // start index in CompiledGraph.Edges
+	EdgeEnd         int // end index in CompiledGraph.Edges
 }
 
 // CompiledJoin combines join specification and its unique outgoing edge target.
 type CompiledJoin[S any] struct {
-	Spec          JoinSpec[S]
-	NextTarget    string // destination of outgoing edge from join, or ""
-	NextNodeIndex int    // index in Machine.Nodes of NextTarget, or -1
-	NextJoinIndex int    // index in Machine.Joins of NextTarget, or -1
+	Spec     JoinSpec[S]
+	NextEdge CompiledEdge
 }
 
 // CompiledContinuation holds registered typed continuation with sorted key.
@@ -142,17 +139,31 @@ type CompiledContinuation[S any] struct {
 	Cont Continuation[S]
 }
 
-// Machine is the immutable definition consumed by the executor.
-type Machine[S any] struct {
-	ID            string
-	Entry         string
-	EntryIndex    int
-	Clone         Clone[S]
-	Nodes         []CompiledNode[S]
-	EdgeTargets   []string
-	Edges         []CompiledEdge
-	Joins         []CompiledJoin[S]
-	Continuations []CompiledContinuation[S]
+// CompiledGraph is the immutable definition consumed by the executor.
+type CompiledGraph[S any] struct {
+	ID                string
+	Entry             string
+	EntryIndex        int
+	Clone             Clone[S]
+	Nodes             []CompiledNode[S]
+	Edges             []CompiledEdge
+	Joins             []CompiledJoin[S]
+	Continuations     []CompiledContinuation[S]
+	NodeIndex         map[string]int
+	JoinIndex         map[string]int
+	ContinuationIndex map[string]int
+}
+
+// ResolveTarget precomputes the indices for a named destination.
+func (g CompiledGraph[S]) ResolveTarget(target string) CompiledEdge {
+	edge := CompiledEdge{Target: target, TargetNodeIndex: -1, TargetJoinIndex: -1}
+	if idx, ok := g.NodeIndex[target]; ok && target != "" {
+		edge.TargetNodeIndex = idx
+	}
+	if idx, ok := g.JoinIndex[target]; ok && target != "" {
+		edge.TargetJoinIndex = idx
+	}
+	return edge
 }
 
 func ValidName(name string) bool {

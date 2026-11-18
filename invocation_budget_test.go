@@ -36,8 +36,8 @@ func TestMaxInvocationsPausesStaticAndDynamicFanOut(t *testing.T) {
 				return graph.CompleteBranch(state + 1), nil
 			})
 			if err := g.AddJoin(graph.JoinSpec[int]{
-				Name: "joined",
-				From: "fork",
+				Name:         "joined",
+				FanOutSource: "fork",
 				Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 					for _, branch := range branches {
 						if !branch.OK() {
@@ -57,7 +57,7 @@ func TestMaxInvocationsPausesStaticAndDynamicFanOut(t *testing.T) {
 			edge(t, g, "fork", "right")
 			edge(t, g, "joined", "finish")
 			runner, err := g.Compile(graph.Config[int]{
-				MachineID: "invocation-budget-" + name,
+				DefinitionID: "invocation-budget-" + name,
 				Clone: func(state int) (int, error) {
 					cloneCalls.Add(1)
 					return state, nil
@@ -113,7 +113,7 @@ func TestMaxInvocationsAllowsExistingWorkToDrainAboveLoweredLimit(t *testing.T) 
 	node(t, g, "worker", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.CompleteBranch(state + 1), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 		for _, branch := range branches {
 			parent += branch.State
 		}
@@ -164,7 +164,7 @@ func TestContinuationFanOutBudgetRetainsOriginalWait(t *testing.T) {
 	node(t, g, "right", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.CompleteBranch(state), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "wait", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "wait", Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 		for _, branch := range branches {
 			parent += branch.State
 		}

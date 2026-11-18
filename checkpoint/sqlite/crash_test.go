@@ -53,8 +53,8 @@ func crashRunner(t *testing.T, marker string, block bool, calls chan<- graph.Cal
 		t.Fatal(err)
 	}
 	runner, err := g.Compile(graph.Config[int]{
-		MachineID: "crash-recovery-v1",
-		Clone:     func(state int) (int, error) { return state, nil },
+		DefinitionID: "crash-recovery-v1",
+		Clone:        func(state int) (int, error) { return state, nil },
 	})
 	if err != nil {
 		t.Fatal(err)

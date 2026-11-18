@@ -20,7 +20,7 @@ func TestEmptyActivationSupportsResumeRecoverAndCloneOnlyFork(t *testing.T) {
 				return graph.FanOut(s), nil
 			})
 			calls := map[string][]string{}
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", Merge: func(_ context.Context, call graph.CallInfo, s int, branches []graph.BranchResult[int]) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "dispatch", Merge: func(_ context.Context, call graph.CallInfo, s int, branches []graph.BranchResult[int]) (int, error) {
 				if len(branches) != 0 {
 					return s, errors.New("empty activation acquired branches")
 				}

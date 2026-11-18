@@ -55,7 +55,7 @@ func singleRunCheckpoint(t testing.TB, waiters int, clones ...graph.Clone[state]
 	if len(clones) > 0 && clones[0] != nil {
 		copyState = clones[0]
 	}
-	runner, err := g.Compile(graph.Config[state]{MachineID: "capacity-v1", Clone: copyState})
+	runner, err := g.Compile(graph.Config[state]{DefinitionID: "capacity-v1", Clone: copyState})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func singleRunCheckpoint(t testing.TB, waiters int, clones ...graph.Clone[state]
 
 func assertSingleRunCheckpoint(t testing.TB, cp graph.Checkpoint[state], waiters int, steps, ticks int) {
 	t.Helper()
-	if cp.FormatVersion != graph.CheckpointFormatVersion || cp.RunID != "single-run" || cp.MachineID != "capacity-v1" || cp.Completed || cp.Failure != nil || cp.Revision == 0 || cp.Steps != uint64(steps) || len(cp.Groups) != 1 || len(cp.Invocations) != waiters+2 {
+	if cp.FormatVersion != graph.CheckpointFormatVersion || cp.RunID != "single-run" || cp.DefinitionID != "capacity-v1" || cp.Completed || cp.Failure != nil || cp.Revision == 0 || cp.Steps != uint64(steps) || len(cp.Groups) != 1 || len(cp.Invocations) != waiters+2 {
 		t.Fatalf("invalid single-Run header or topology: revision=%d steps=%d groups=%d invocations=%d", cp.Revision, cp.Steps, len(cp.Groups), len(cp.Invocations))
 	}
 	group := cp.Groups[0]

@@ -13,7 +13,7 @@ import (
 func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nestedState] {
 	t.Helper()
 	g := graph.New[nestedState]("fork")
-	add := func(name string, policy graph.FailureScope, body graph.Node[nestedState]) {
+	add := func(name string, policy graph.FailureScope, body graph.NodeFunc[nestedState]) {
 		t.Helper()
 		if err := g.AddNode(graph.NodeSpec[nestedState]{Name: name, OnError: policy, Run: func(ctx context.Context, call graph.CallInfo, s nestedState) (graph.Transition[nestedState], error) {
 			if err := c.attempt(ctx, call, "node", s); err != nil {
@@ -70,7 +70,7 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 			return graph.To(s, "innerjoin"), nil
 		})
 	}
-	merge := func(name string, nextPhase int, inner bool) graph.Merge[nestedState] {
+	merge := func(name string, nextPhase int, inner bool) graph.MergeFunc[nestedState] {
 		return func(ctx context.Context, call graph.CallInfo, _ nestedState, branches []graph.BranchResult[nestedState]) (nestedState, error) {
 			values := graph.BranchValues(branches)
 			if err := c.attempt(ctx, call, "join", values); err != nil {
@@ -124,7 +124,7 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 			return out, nil
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[nestedState]{Name: "innerjoin", From: "nested", OnError: graph.FailInvocation, Merge: merge("innerjoin", phaseInnerJoined, true)}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[nestedState]{Name: "innerjoin", FanOutSource: "nested", OnError: graph.FailInvocation, Merge: merge("innerjoin", phaseInnerJoined, true)}); err != nil {
 		t.Fatal(err)
 	}
 	add("deliver", graph.FailInvocation, func(_ context.Context, _ graph.CallInfo, s nestedState) (graph.Transition[nestedState], error) {
@@ -132,7 +132,7 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 		stamp(&s, phaseDeliver)
 		return graph.To(s, "outerjoin"), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[nestedState]{Name: "outerjoin", From: "fork", Merge: merge("outerjoin", phaseBoundary, false)}); err != nil {
+	if err := g.AddJoin(graph.JoinSpec[nestedState]{Name: "outerjoin", FanOutSource: "fork", Merge: merge("outerjoin", phaseBoundary, false)}); err != nil {
 		t.Fatal(err)
 	}
 	add("boundary", graph.FailInvocation, func(_ context.Context, _ graph.CallInfo, s nestedState) (graph.Transition[nestedState], error) {
@@ -162,7 +162,7 @@ func nestedRunner(t testing.TB, m nestedOracle, c *controller) *graph.Runner[nes
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[nestedState]{MachineID: "nested-model-v1", Clone: cloneNested})
+	runner, err := g.Compile(graph.Config[nestedState]{DefinitionID: "nested-model-v1", Clone: cloneNested})
 	if err != nil {
 		t.Fatal(err)
 	}

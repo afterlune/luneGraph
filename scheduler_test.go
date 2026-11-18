@@ -175,7 +175,7 @@ func TestResumeBatchCommitsExecutionFailureAfterInputPrefix(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		values := graph.BranchValues(branches)
 		return values[0], nil
 	}}); err != nil {
@@ -235,4 +235,44 @@ func findInvocation[S any](s graph.Checkpoint[S], id string) (int, *graph.Invoca
 		}
 	}
 	return -1, nil
+}
+
+func TestSerialBudgetAndCancellationPreservePendingCallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := graph.New[int]("first")
+	node(t, g, "first", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		return graph.To(state+1, "last"), nil
+	})
+	var calls []string
+	node(t, g, "last", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+		calls = append(calls, call.CallID)
+		cancel()
+		return graph.EndExecution(state + 1), nil
+	})
+	edge(t, g, "first", "last")
+	r := intRunner(t, g)
+	execution, budget, err := r.Start(ctx, "serial", 0, nil, graph.Options{MaxSteps: 1})
+	if err != nil || budget.Status != graph.StatusBudget || budget.Header.Steps != 1 || budget.Header.Revision != 2 {
+		t.Fatalf("budget = %+v, %v", budget, err)
+	}
+	before := mustCheckpoint(execution)
+	if len(before.Invocations) != 1 || before.Invocations[0].Node != "last" {
+		t.Fatalf("pending invocation = %+v", before.Invocations)
+	}
+	cancelled, err := execution.Advance(ctx, nil, graph.Options{})
+	if !errors.Is(err, context.Canceled) || cancelled.Status != graph.StatusCancelled || cancelled.Header.Steps != 1 || cancelled.Header.Revision != 2 {
+		t.Fatalf("cancelled = %+v, %v", cancelled, err)
+	}
+	after := mustCheckpoint(execution)
+	if len(after.Invocations) != 1 || after.Invocations[0].CallID != before.Invocations[0].CallID || after.Invocations[0].Node != "last" {
+		t.Fatalf("cancel changed pending invocation: %+v", after.Invocations)
+	}
+	_, resumed, err := r.Resume(context.Background(), after, nil, nil, graph.Options{})
+	if err != nil || resumed.Status != graph.StatusCompleted || resumed.Header.Steps != 2 || resumed.Header.Revision != 3 || resumed.Final == nil || *resumed.Final != 2 {
+		t.Fatalf("resumed = %+v, %v", resumed, err)
+	}
+	if len(calls) != 2 || calls[0] != before.Invocations[0].CallID || calls[1] != calls[0] {
+		t.Fatalf("callback identities = %v", calls)
+	}
 }

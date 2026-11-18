@@ -46,9 +46,9 @@ func TestStaticNodeTimeoutWithFailInvocation(t *testing.T) {
 
 	var mergeResults []graph.BranchResult[int]
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "join",
-		From:    "fork",
-		OnError: graph.FailExecution,
+		Name:         "join",
+		FanOutSource: "fork",
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			mergeResults = append([]graph.BranchResult[int](nil), branches...)
 			sum := parent
@@ -116,9 +116,9 @@ func TestDynamicBranchTimeoutOverride(t *testing.T) {
 
 	var mergeBranches []graph.BranchResult[int]
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			mergeBranches = append([]graph.BranchResult[int](nil), branches...)
 			values := graph.BranchValues(branches)
@@ -189,10 +189,10 @@ func TestJoinTimeoutWithFailExecution(t *testing.T) {
 		return graph.To(state+2, "join"), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "join",
-		From:    "fork",
-		Timeout: 20 * time.Millisecond,
-		OnError: graph.FailExecution,
+		Name:         "join",
+		FanOutSource: "fork",
+		Timeout:      20 * time.Millisecond,
+		OnError:      graph.FailExecution,
 		Merge: func(ctx context.Context, _ graph.CallInfo, _ int, _ []graph.BranchResult[int]) (int, error) {
 			select {
 			case <-ctx.Done():
@@ -262,9 +262,9 @@ func TestTimeoutPersistenceWithSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			return parent + values[0], nil

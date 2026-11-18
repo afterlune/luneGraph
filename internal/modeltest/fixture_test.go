@@ -16,7 +16,7 @@ func runner(t testing.TB, m model, c *controller) *graph.Runner[state] {
 		entry = "fork"
 	}
 	g := graph.New[state](entry)
-	add := func(name string, body graph.Node[state]) {
+	add := func(name string, body graph.NodeFunc[state]) {
 		t.Helper()
 		err := g.AddNode(graph.NodeSpec[state]{Name: name, Run: func(ctx context.Context, call graph.CallInfo, s state) (graph.Transition[state], error) {
 			if err := c.attempt(ctx, call, "node", s); err != nil {
@@ -65,7 +65,7 @@ func runner(t testing.TB, m model, c *controller) *graph.Runner[state] {
 				return graph.To(s, "join"), nil
 			})
 		}
-		if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", Merge: func(ctx context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
+		if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", FanOutSource: "fork", Merge: func(ctx context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
 			values := graph.BranchValues(branches)
 			if err := c.attempt(ctx, call, "join", values); err != nil {
 				values[0].Values["speculative"] = 1
@@ -115,7 +115,7 @@ func runner(t testing.TB, m model, c *controller) *graph.Runner[state] {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r, err := g.Compile(graph.Config[state]{MachineID: "model-v1", Clone: clone})
+	r, err := g.Compile(graph.Config[state]{DefinitionID: "model-v1", Clone: clone})
 	if err != nil {
 		t.Fatal(err)
 	}

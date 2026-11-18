@@ -29,7 +29,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 	}
 
 	g := New[int]("entry")
-	validNode := model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+	validNode := model.NodeFunc[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndExecution(0), nil
 	})
 	for _, spec := range []model.NodeSpec[int]{
@@ -48,14 +48,14 @@ func TestGraphBuilderValidation(t *testing.T) {
 		t.Fatal("duplicate node accepted")
 	}
 
-	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
+	merge := model.MergeFunc[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
 	for _, spec := range []model.JoinSpec[int]{
-		{Name: "", From: "entry", Merge: merge},
-		{Name: "join", From: "", Merge: merge},
-		{Name: "join", From: "entry"},
-		{Name: "join", From: "entry", Merge: merge, OnError: model.FailureScope(99)},
-		{Name: "join", From: "entry", Merge: merge, Timeout: -1},
-		{Name: "join", From: "entry", Merge: merge, Quorum: -1},
+		{Name: "", FanOutSource: "entry", Merge: merge},
+		{Name: "join", FanOutSource: "", Merge: merge},
+		{Name: "join", FanOutSource: "entry"},
+		{Name: "join", FanOutSource: "entry", Merge: merge, OnError: model.FailureScope(99)},
+		{Name: "join", FanOutSource: "entry", Merge: merge, Timeout: -1},
+		{Name: "join", FanOutSource: "entry", Merge: merge, Quorum: -1},
 	} {
 		if err := g.AddJoin(spec); err == nil {
 			t.Fatalf("AddJoin accepted %+v", spec)
@@ -63,11 +63,11 @@ func TestGraphBuilderValidation(t *testing.T) {
 	}
 	addDefinitionNode(t, g, "left", validNode)
 	addDefinitionNode(t, g, "right", validNode)
-	addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "joined", From: "entry", Merge: merge})
-	if err := g.AddJoin(model.JoinSpec[int]{Name: "joined", From: "entry", Merge: merge}); err == nil {
+	addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "joined", FanOutSource: "entry", Merge: merge})
+	if err := g.AddJoin(model.JoinSpec[int]{Name: "joined", FanOutSource: "entry", Merge: merge}); err == nil {
 		t.Fatal("duplicate join accepted")
 	}
-	if err := g.AddJoin(model.JoinSpec[int]{Name: "left", From: "entry", Merge: merge}); err == nil {
+	if err := g.AddJoin(model.JoinSpec[int]{Name: "left", FanOutSource: "entry", Merge: merge}); err == nil {
 		t.Fatal("join colliding with node accepted")
 	}
 
@@ -166,27 +166,27 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 	addDefinitionEdge(t, parent, "start", "worker")
 	addDefinitionEdge(t, parent, "worker", "after")
 
-	machine, err := expand(parent)
+	compiled, err := expand(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Entry != "start" || len(machine.Nodes) != 4 {
-		t.Fatalf("flattened machine entry=%q nodes=%v", machine.Entry, machine.Nodes)
+	if compiled.Entry != "start" || len(compiled.Nodes) != 4 {
+		t.Fatalf("compiled graph entry=%q nodes=%v", compiled.Entry, compiled.Nodes)
 	}
-	if !hasMachineEdge(machine, "start", "worker/begin") {
-		t.Fatalf("parent edge was not expanded: targets=%v", machine.EdgeTargets)
+	if !hasCompiledEdge(compiled, "start", "worker/begin") {
+		t.Fatalf("parent edge was not expanded: targets=%v", compiled.Edges)
 	}
-	if findMachineNode(machine, "worker") != nil {
+	if findCompiledNode(compiled, "worker") != nil {
 		t.Fatalf("mount alias became a runtime source")
 	}
-	startNode := findMachineNode(machine, "start")
-	beginNode := findMachineNode(machine, "worker/begin")
-	finishNode := findMachineNode(machine, "worker/finish")
-	if !hasMachineEdge(machine, "worker/begin", "worker/finish") || beginNode.ReturnTarget != "after" || finishNode.ReturnTarget != "after" {
+	startNode := findCompiledNode(compiled, "start")
+	beginNode := findCompiledNode(compiled, "worker/begin")
+	finishNode := findCompiledNode(compiled, "worker/finish")
+	if !hasCompiledEdge(compiled, "worker/begin", "worker/finish") || beginNode.ReturnEdge.Target != "after" || finishNode.ReturnEdge.Target != "after" {
 		t.Fatalf("flattened child edges or return targets mismatch")
 	}
-	if !hasMachineContinuation(machine, "worker/resume") {
-		t.Fatalf("continuation names = %v", machine.Continuations)
+	if !hasMachineContinuation(compiled, "worker/resume") {
+		t.Fatalf("continuation names = %v", compiled.Continuations)
 	}
 	start, err := startNode.Spec.Run(context.Background(), model.CallInfo{}, 3)
 	if err != nil || !reflect.DeepEqual(model.ReadTransition(start).AllTargets(), []string{"worker/begin"}) {
@@ -198,7 +198,7 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 	}
 }
 
-func findMachineNode[S any](m model.Machine[S], name string) *model.CompiledNode[S] {
+func findCompiledNode[S any](m model.CompiledGraph[S], name string) *model.CompiledNode[S] {
 	for i := range m.Nodes {
 		if m.Nodes[i].Spec.Name == name {
 			return &m.Nodes[i]
@@ -207,20 +207,20 @@ func findMachineNode[S any](m model.Machine[S], name string) *model.CompiledNode
 	return nil
 }
 
-func hasMachineEdge[S any](m model.Machine[S], from, to string) bool {
-	n := findMachineNode(m, from)
+func hasCompiledEdge[S any](m model.CompiledGraph[S], from, to string) bool {
+	n := findCompiledNode(m, from)
 	if n == nil {
 		return false
 	}
-	for _, target := range m.EdgeTargets[n.EdgeStart:n.EdgeEnd] {
-		if target == to {
+	for _, target := range m.Edges[n.EdgeStart:n.EdgeEnd] {
+		if target.Target == to {
 			return true
 		}
 	}
 	return false
 }
 
-func hasMachineContinuation[S any](m model.Machine[S], key string) bool {
+func hasMachineContinuation[S any](m model.CompiledGraph[S], key string) bool {
 	for _, c := range m.Continuations {
 		if c.Key == key {
 			return true
@@ -247,17 +247,17 @@ func TestExpandHandlesNestedAndRepeatedMounts(t *testing.T) {
 	root.entry = "begin"
 	addDefinitionEdge(t, root, "begin", "first")
 	addDefinitionEdge(t, root, "first", "second")
-	machine, err := expand(root)
+	compiled, err := expand(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRun := findMachineNode(machine, "first/run")
-	secondRun := findMachineNode(machine, "second/run")
+	firstRun := findCompiledNode(compiled, "first/run")
+	secondRun := findCompiledNode(compiled, "second/run")
 	if firstRun == nil {
-		t.Fatalf("first mount missing: %v", machine.Nodes)
+		t.Fatalf("first mount missing: %v", compiled.Nodes)
 	}
-	if secondRun == nil || firstRun.ReturnTarget != "second/run" {
-		t.Fatalf("repeated mounts nodes=%v first return=%v", machine.Nodes, firstRun.ReturnTarget)
+	if secondRun == nil || firstRun.ReturnEdge.Target != "second/run" {
+		t.Fatalf("repeated mounts nodes=%v first return=%v", compiled.Nodes, firstRun.ReturnEdge.Target)
 	}
 
 	inner := New[int]("inner-run")
@@ -281,25 +281,25 @@ func TestExpandHandlesNestedAndRepeatedMounts(t *testing.T) {
 		return model.EndExecution(value), nil
 	})
 	addDefinitionEdge(t, root, "outer", "done")
-	machine, err = expand(root)
+	compiled, err = expand(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	innerRun := findMachineNode(machine, "outer/nested/inner-run")
-	outerRun := findMachineNode(machine, "outer/outer-run")
-	if machine.Entry != "outer/nested/inner-run" || innerRun == nil || outerRun == nil || innerRun.ReturnTarget != "outer/outer-run" || outerRun.ReturnTarget != "done" {
-		t.Fatalf("nested entry=%q inner return=%v outer return=%v", machine.Entry, innerRun.ReturnTarget, outerRun.ReturnTarget)
+	innerRun := findCompiledNode(compiled, "outer/nested/inner-run")
+	outerRun := findCompiledNode(compiled, "outer/outer-run")
+	if compiled.Entry != "outer/nested/inner-run" || innerRun == nil || outerRun == nil || innerRun.ReturnEdge.Target != "outer/outer-run" || outerRun.ReturnEdge.Target != "done" {
+		t.Fatalf("nested entry=%q inner return=%v outer return=%v", compiled.Entry, innerRun.ReturnEdge.Target, outerRun.ReturnEdge.Target)
 	}
 }
 
 func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 	identity := func(value int) (int, error) { return value, nil }
-	validNode := model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+	validNode := model.NodeFunc[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndExecution(0), nil
 	})
-	merge := model.Merge[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
+	merge := model.MergeFunc[int](func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) { return 0, nil })
 	compile := func(g *Graph[int]) error {
-		_, err := g.Compile(model.Config[int]{MachineID: "machine", Clone: identity})
+		_, err := g.Compile(model.Config[int]{DefinitionID: "machine", Clone: identity})
 		return err
 	}
 	tests := []struct {
@@ -311,26 +311,26 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 		{name: "join entry", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("joined")
 			addDefinitionNode(t, g, "source", validNode)
-			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "joined", From: "source", Merge: merge})
+			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "joined", FanOutSource: "source", Merge: merge})
 			return g
 		}, match: "is a join"},
 		{name: "unknown join source", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("source")
 			addDefinitionNode(t, g, "source", validNode)
-			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "join", From: "missing", Merge: merge})
+			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "join", FanOutSource: "missing", Merge: merge})
 			return g
 		}, match: "unknown fan-out source"},
 		{name: "two joins for source", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("source")
 			addDefinitionNode(t, g, "source", validNode)
-			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "one", From: "source", Merge: merge})
-			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "two", From: "source", Merge: merge})
+			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "one", FanOutSource: "source", Merge: merge})
+			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "two", FanOutSource: "source", Merge: merge})
 			return g
 		}, match: "more than one join"},
 		{name: "join multiple outputs", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("source")
 			addDefinitionNode(t, g, "source", validNode)
-			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "join", From: "source", Merge: merge})
+			addDefinitionJoin(t, g, model.JoinSpec[int]{Name: "join", FanOutSource: "source", Merge: merge})
 			addDefinitionNode(t, g, "a", validNode)
 			addDefinitionNode(t, g, "b", validNode)
 			addDefinitionEdge(t, g, "join", "a")
@@ -408,13 +408,13 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 	if _, err := expand[int](nil); err == nil {
 		t.Fatal("expand accepted nil graph")
 	}
-	if _, err := (*Graph[int])(nil).Compile(model.Config[int]{MachineID: "m", Clone: identity}); err == nil {
+	if _, err := (*Graph[int])(nil).Compile(model.Config[int]{DefinitionID: "m", Clone: identity}); err == nil {
 		t.Fatal("Compile accepted nil graph")
 	}
 	if err := compile(New[int]("missing")); err == nil {
 		t.Fatal("Compile accepted an invalid entry")
 	}
-	for _, config := range []model.Config[int]{{MachineID: "", Clone: identity}, {MachineID: " machine", Clone: identity}, {MachineID: "m"}} {
+	for _, config := range []model.Config[int]{{DefinitionID: "", Clone: identity}, {DefinitionID: " machine", Clone: identity}, {DefinitionID: "m"}} {
 		g := New[int]("entry")
 		addDefinitionNode(t, g, "entry", validNode)
 		if _, err := g.Compile(config); err == nil {
@@ -425,26 +425,26 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 
 func TestCompileRejectsJoinWithBothEarlyMergeStrategies(t *testing.T) {
 	g := New[int]("source")
-	addDefinitionNode(t, g, "source", model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+	addDefinitionNode(t, g, "source", model.NodeFunc[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndExecution(0), nil
 	}))
 	addDefinitionJoin(t, g, model.JoinSpec[int]{
-		Name:     "joined",
-		From:     "source",
-		Quorum:   1,
-		CanMerge: func(int, []model.BranchResult[int]) bool { return true },
+		Name:         "joined",
+		FanOutSource: "source",
+		Quorum:       1,
+		CanMerge:     func(int, []model.BranchResult[int]) bool { return true },
 		Merge: func(context.Context, model.CallInfo, int, []model.BranchResult[int]) (int, error) {
 			return 0, nil
 		},
 	})
-	if _, err := g.Compile(model.Config[int]{MachineID: "ambiguous-join", Clone: func(value int) (int, error) { return value, nil }}); err == nil {
+	if _, err := g.Compile(model.Config[int]{DefinitionID: "ambiguous-join", Clone: func(value int) (int, error) { return value, nil }}); err == nil {
 		t.Fatal("Compile accepted both Quorum and CanMerge")
 	}
 }
 
 func TestRewriteNodePreservesNonRoutingActionsAndErrors(t *testing.T) {
 	boom := errors.New("node error")
-	run := model.Node[int](func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
+	run := model.NodeFunc[int](func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
 		return model.Return(state), nil
 	})
 	wrapped := rewriteNode(run, map[string]string{"next": "child/next"}, map[string]string{"wait": "child/wait"})
@@ -460,7 +460,7 @@ func TestRewriteNodePreservesNonRoutingActionsAndErrors(t *testing.T) {
 	}
 }
 
-func addDefinitionNode(t *testing.T, g *Graph[int], name string, run model.Node[int]) {
+func addDefinitionNode(t *testing.T, g *Graph[int], name string, run model.NodeFunc[int]) {
 	t.Helper()
 	if err := g.AddNode(model.NodeSpec[int]{Name: name, Run: run}); err != nil {
 		t.Fatal(err)

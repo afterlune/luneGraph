@@ -72,8 +72,8 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 		return graph.To(state+10, "outer-join"), nil
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name: "outer-join",
-		From: "root",
+		Name:         "outer-join",
+		FanOutSource: "root",
 		Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			states := graph.BranchValues(branches)
 			mergeCallCount.Add(1)
@@ -103,7 +103,7 @@ func TestNestedFailGroupRecoveryAfterSQLiteReopen(t *testing.T) {
 	}
 	compile := func() *graph.Runner[int] {
 		t.Helper()
-		runner, err := g.Compile(graph.Config[int]{MachineID: machineID, Clone: func(state int) (int, error) { return state, nil }})
+		runner, err := g.Compile(graph.Config[int]{DefinitionID: machineID, Clone: func(state int) (int, error) { return state, nil }})
 		if err != nil {
 			t.Fatal(err)
 		}

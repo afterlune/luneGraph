@@ -54,8 +54,8 @@ func TestNestedGroupFailureMessageSurvivesConflictAndReopen(t *testing.T) {
 					return graph.CompleteBranch(s + 1), nil
 				})
 				for _, join := range []graph.JoinSpec[int]{
-					{Name: "inner", From: "entry", OnError: graph.FailGroup, Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) { return 0, boom }},
-					{Name: "middle-join", From: "middle", Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) {
+					{Name: "inner", FanOutSource: "entry", OnError: graph.FailGroup, Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) { return 0, boom }},
+					{Name: "middle-join", FanOutSource: "middle", Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) {
 						return 0, errors.New("pruned middle join must not run")
 					}},
 				} {
@@ -64,7 +64,7 @@ func TestNestedGroupFailureMessageSurvivesConflictAndReopen(t *testing.T) {
 					}
 				}
 				merges := 0
-				if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+				if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 					merges++
 					if !branches[0].Failed() || branches[0].Error != boom.Error() || !branches[1].OK() {
 						return 0, errors.New("outer join lost branch failure message or survivor")

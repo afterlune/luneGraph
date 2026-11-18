@@ -20,8 +20,14 @@
 
 ### Performance and architecture
 
+- Run serial root nodes through the shared task and commit paths. The driver still
+  executes tasks synchronously when no concurrent work can be dispatched.
+
+- Store compiled outgoing edges in one slice and build name indices during graph
+  compilation. The Runner uses the compiled indices directly.
+
 - Adapt graph execution runtime to modern processor cache hierarchies and data-oriented design (DOD):
-  - Transition graph topology to a Compressed Sparse Row (CSR) vector layout with contiguous slices (`Nodes`, `Edges`, `Joins`, `Continuations`) and compile-time pre-resolved indices (`NodeIndex`, `JoinIndex`), eliminating all runtime hash map lookups on hot execution paths.
+  - Transition graph topology to a Compressed Sparse Row (CSR) vector layout with contiguous slices (`Nodes`, `Edges`, `Joins`, `Continuations`) and compile-time resolved edge indices (`TargetNodeIndex`, `TargetJoinIndex`).
   - Implement static small ID lookup tables (`AllocID`) to eliminate per-step ID string formatting heap allocations.
   - Implement direct fast commit (`commitFast`) for linear and fan-out paths across in-memory and durable stores (`store != nil`), bypassing full workspace cloning and diffing.
   - Add synchronous driver execution fast-path for non-concurrent steps, deferring worker channel and pool allocations.
@@ -29,6 +35,20 @@
   - Optimize memory store with pre-sorted binary-search slices, speeding up recovery and warm advance scaling.
 
 ### API and execution changes
+
+| Previous Go name | New Go name |
+| --- | --- |
+| `graph.Node[S]` | `graph.NodeFunc[S]` |
+| `graph.Merge[S]` | `graph.MergeFunc[S]` |
+| `JoinSpec.From` | `JoinSpec.FanOutSource` |
+| `Config.MachineID`, `Header.MachineID`, `Checkpoint.MachineID`, `Event.MachineID` | `DefinitionID` on each type |
+| Internal `Machine[S]` | `CompiledGraph[S]` |
+| Internal `CompiledNode.JoinIndex` | `CompiledNode.FanOutJoinIndex` |
+| Internal `CompiledEdge.NodeIndex`, `CompiledEdge.JoinIndex` | `CompiledEdge.TargetNodeIndex`, `CompiledEdge.TargetJoinIndex` |
+
+Use the new Go names with the same definition ID values when upgrading. The
+checkpoint JSON key remains `MachineID` and the SQLite column remains
+`machine_id`. Checkpoint format 8 and SQLite schema 2 are unchanged.
 
 - Separate scheduler decisions from callback preparation, worker lifecycle, and
   checkpoint submission inside the executor. Public APIs, checkpoint format 8,

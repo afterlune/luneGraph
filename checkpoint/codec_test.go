@@ -34,7 +34,7 @@ func TestJSONCheckpointRoundTripPreservesRecoveryFields(t *testing.T) {
 	want := graph.Checkpoint[codecState]{
 		FormatVersion:    graph.CheckpointFormatVersion,
 		RunID:            "run-1",
-		MachineID:        "machine-v1",
+		DefinitionID:     "machine-v1",
 		Revision:         7,
 		Steps:            12,
 		NextID:           9,
@@ -74,7 +74,7 @@ func TestJSONAppendMatchesMarshalAndKeepsPrefix(t *testing.T) {
 	want := graph.Checkpoint[codecState]{
 		FormatVersion: graph.CheckpointFormatVersion,
 		RunID:         "run-<雪>",
-		MachineID:     "machine-v1",
+		DefinitionID:  "machine-v1",
 		Revision:      2,
 		Invocations: []graph.Invocation[codecState]{
 			{ID: "i1", State: codecState{Value: "</script> 雪", Values: map[string]int{"z": 1, "a": 2}}, Next: []string{"a", "b"}},
@@ -97,12 +97,33 @@ func TestJSONAppendMatchesMarshalAndKeepsPrefix(t *testing.T) {
 	}
 }
 
+func TestFormat8DefinitionIDJSONCompatibility(t *testing.T) {
+	// Reference JSON for a waiting checkpoint written before the Go field rename.
+	const legacy = `{"FormatVersion":8,"RunID":"rename-legacy","MachineID":"durable-example-v1","Revision":2,"Steps":1,"NextID":4,"ScheduleCursor":1,"Completed":false,"Final":null,"Invocations":[{"ID":"i1","CallID":"c3","Node":"input","State":{"Value":0},"Status":"waiting","GroupID":"","ChildGroupID":"","BranchIndex":0,"Continuation":"value","Next":["finish"]}],"Groups":null,"HadLocalFailures":false,"Failure":null}`
+	type state struct{ Value int }
+	codec := checkpoint.JSON[graph.Checkpoint[state]]{}
+	cp, err := codec.Unmarshal([]byte(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.DefinitionID != "durable-example-v1" {
+		t.Fatalf("DefinitionID = %q", cp.DefinitionID)
+	}
+	data, err := codec.Append(nil, cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bytes.TrimSpace(data), []byte(legacy)) {
+		t.Fatalf("checkpoint JSON changed: %s", data)
+	}
+}
+
 func TestJSONAppendMatchesMarshalForCustomMarshaler(t *testing.T) {
 	final := customMarshalerState{Value: "<custom> 雪"}
 	want := graph.Checkpoint[customMarshalerState]{
 		FormatVersion: graph.CheckpointFormatVersion,
 		RunID:         "custom-json",
-		MachineID:     "machine-v1",
+		DefinitionID:  "machine-v1",
 		Revision:      1,
 		Final:         &final,
 	}

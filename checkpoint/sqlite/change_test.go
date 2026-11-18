@@ -41,15 +41,15 @@ func rejectChange(t *testing.T, path, statement string, cp graph.Checkpoint[stat
 }
 
 func TestSQLiteDeltaDeleteAndUpsertStatementFailures(t *testing.T) {
-	inv := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "delete-inv", MachineID: "m", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
+	inv := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "delete-inv", DefinitionID: "m", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
 	h := inv.Header()
 	h.Revision = 2
 	rejectChange(t, databasePath(t), `CREATE TRIGGER reject_delete BEFORE DELETE ON invocations BEGIN SELECT RAISE(ABORT,'delete'); END`, inv, graph.Change[state]{Header: h, DeleteInvocations: []string{"i1"}}, 1)
-	g := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "delete-group", MachineID: "m", Revision: 1, Groups: []graph.ActivationGroup{{ID: "g3"}}}
+	g := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "delete-group", DefinitionID: "m", Revision: 1, Groups: []graph.ActivationGroup{{ID: "g3"}}}
 	h = g.Header()
 	h.Revision = 2
 	rejectChange(t, databasePath(t), `CREATE TRIGGER reject_delete BEFORE DELETE ON groups BEGIN SELECT RAISE(ABORT,'delete'); END`, g, graph.Change[state]{Header: h, DeleteGroups: []string{"g3"}}, 1)
-	base := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "insert-inv", MachineID: "m", Revision: 1}
+	base := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "insert-inv", DefinitionID: "m", Revision: 1}
 	next := base.Header()
 	next.Revision = 2
 	change := graph.Change[state]{Header: next, UpsertInvocations: []graph.Invocation[state]{{ID: "i3", State: state{Values: map[string]int{"n": 3}}}}}
@@ -84,7 +84,7 @@ func TestFinalStateCodecFailureDoesNotCreateRun(t *testing.T) {
 	}
 	defer s.Close()
 	final := state{Values: map[string]int{"reject": 1}}
-	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "codec-error", MachineID: "m", Revision: 1, Completed: true, Final: &final}
+	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "codec-error", DefinitionID: "m", Revision: 1, Completed: true, Final: &final}
 	if err := s.Create(ctx, cp); err == nil {
 		t.Fatal("partial final encoding accepted")
 	}
@@ -113,7 +113,7 @@ func TestIncrementalCommitTouchesOnlyChangedStates(t *testing.T) {
 				defer s.Close()
 				store = s
 			}
-			cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "incremental", MachineID: "machine", Revision: 1, NextID: 100}
+			cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "incremental", DefinitionID: "machine", Revision: 1, NextID: 100}
 			for i := range 32 {
 				cp.Invocations = append(cp.Invocations, graph.Invocation[state]{ID: string(rune('a' + i)), State: state{Values: map[string]int{"n": i}}})
 			}
@@ -160,7 +160,7 @@ func TestSQLiteDeltaRollsBackAllTables(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
 	store := openStore(t, path)
-	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "rollback", MachineID: "m", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
+	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "rollback", DefinitionID: "m", Revision: 1, Invocations: []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": 1}}}}}
 	if err := store.Create(ctx, cp); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestSQLiteCorruptGroupsAndInvalidAdvance(t *testing.T) {
 	ctx := context.Background()
 	path := databasePath(t)
 	store := openStore(t, path)
-	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "groups", MachineID: "m", Revision: 1, Steps: 3, NextID: 10, Groups: []graph.ActivationGroup{{ID: "g3"}}}
+	cp := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "groups", DefinitionID: "m", Revision: 1, Steps: 3, NextID: 10, Groups: []graph.ActivationGroup{{ID: "g3"}}}
 	if err := store.Create(ctx, cp); err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,7 @@ func cloneDynamicState(state dynamicState) (dynamicState, error) { return state,
 func dynamicModelRunner(t testing.TB) *graph.Runner[dynamicState] {
 	t.Helper()
 	g := graph.New[dynamicState]("lead")
-	add := func(name string, run graph.Node[dynamicState]) {
+	add := func(name string, run graph.NodeFunc[dynamicState]) {
 		t.Helper()
 		if err := g.AddNode(graph.NodeSpec[dynamicState]{Name: name, Run: run}); err != nil {
 			t.Fatal(err)
@@ -69,7 +69,7 @@ func dynamicModelRunner(t testing.TB) *graph.Runner[dynamicState] {
 		}
 		return parent, nil
 	}
-	for _, join := range []graph.JoinSpec[dynamicState]{{Name: "lead-join", From: "lead", Merge: merge}, {Name: "worker-join", From: "split", Merge: merge}} {
+	for _, join := range []graph.JoinSpec[dynamicState]{{Name: "lead-join", FanOutSource: "lead", Merge: merge}, {Name: "worker-join", FanOutSource: "split", Merge: merge}} {
 		if err := g.AddJoin(join); err != nil {
 			t.Fatal(err)
 		}
@@ -85,7 +85,7 @@ func dynamicModelRunner(t testing.TB) *graph.Runner[dynamicState] {
 			t.Fatal(err)
 		}
 	}
-	r, err := g.Compile(graph.Config[dynamicState]{MachineID: "dynamic-model-v1", Clone: cloneDynamicState})
+	r, err := g.Compile(graph.Config[dynamicState]{DefinitionID: "dynamic-model-v1", Clone: cloneDynamicState})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func dynamicStore(t testing.TB, kind string) graph.Store[dynamicState] {
 }
 
 func checkDynamicPosition(cp graph.Checkpoint[dynamicState], tasks, maxDepth int) error {
-	if cp.MachineID != "dynamic-model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || cp.HadLocalFailures {
+	if cp.DefinitionID != "dynamic-model-v1" || cp.FormatVersion != graph.CheckpointFormatVersion || cp.Failure != nil || cp.HadLocalFailures {
 		return fmt.Errorf("unexpected header: %+v", cp.Header())
 	}
 	invocations := make(map[string]graph.Invocation[dynamicState], len(cp.Invocations))

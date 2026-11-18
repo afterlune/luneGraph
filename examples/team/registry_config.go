@@ -156,14 +156,14 @@ func buildTeamModelRegistry(config teamRegistryConfig, requestTimeout time.Durat
 			registry[id] = adapter
 		}
 	}
-	machineID, err := teamRegistryMachineID(config)
+	definitionID, err := teamRegistryDefinitionID(config)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	return registry, options, machineID, nil
+	return registry, options, definitionID, nil
 }
 
-func teamRegistryMachineID(config teamRegistryConfig) (string, error) {
+func teamRegistryDefinitionID(config teamRegistryConfig) (string, error) {
 	if err := normalizeTeamRegistryConfig(&config); err != nil {
 		return "", err
 	}

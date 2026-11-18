@@ -17,7 +17,7 @@ func TestLimiterCloneFailureReleasesPermit(t *testing.T) {
 		t.Error("callback ran after clone failed")
 		return s, nil
 	})
-	r, err := g.Compile(graph.Config[int]{MachineID: "clone-limit", Clone: func(s int) (int, error) {
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "clone-limit", Clone: func(s int) (int, error) {
 		copies++
 		if copies == 2 {
 			return 0, errors.New("clone failed")
@@ -58,7 +58,7 @@ func TestLimiterWaitingJoinCancellationDoesNotFailExecution(t *testing.T) {
 	// values. Initial and scheduling clones are counted to gate the first join
 	// input clone, after both node callbacks have released their permits.
 	var clones int
-	r, err := g.Compile(graph.Config[int]{MachineID: "join-limit", Clone: func(s int) (int, error) {
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "join-limit", Clone: func(s int) (int, error) {
 		clones++
 		if clones == 7 {
 			go func() {
@@ -92,7 +92,7 @@ func TestSharedLimiterWithDifferentStateTypes(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	strings, err := g.Compile(graph.Config[string]{MachineID: "string-limit", Clone: graph.ValueClone[string]})
+	strings, err := g.Compile(graph.Config[string]{DefinitionID: "string-limit", Clone: graph.ValueClone[string]})
 	if err != nil {
 		t.Fatal(err)
 	}

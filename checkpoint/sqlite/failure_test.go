@@ -27,7 +27,7 @@ func TestExecutionFailureSurvivesReopen(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "failure-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "failure-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

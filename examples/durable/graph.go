@@ -42,7 +42,7 @@ func newRunner() (*graph.Runner[state], error) {
 		return nil, err
 	}
 	return g.Compile(graph.Config[state]{
-		MachineID: "durable-example-v1",
-		Clone:     func(s state) (state, error) { return s, nil },
+		DefinitionID: "durable-example-v1",
+		Clone:        func(s state) (state, error) { return s, nil },
 	})
 }

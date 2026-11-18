@@ -57,7 +57,7 @@ type Event struct {
 	// not durable; use RunID and CallID to correlate logical callback replays.
 	OperationID  uint64
 	RunID        string
-	MachineID    string
+	DefinitionID string `json:"MachineID"`
 	InvocationID string
 	CallID       string
 	Node         string

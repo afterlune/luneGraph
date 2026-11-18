@@ -26,7 +26,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	holder, err := holderGraph.Compile(graph.Config[int]{MachineID: "no-merge-holder", Clone: graph.ValueClone[int]})
+	holder, err := holderGraph.Compile(graph.Config[int]{DefinitionID: "no-merge-holder", Clone: graph.ValueClone[int]})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 		}
 	}()
 	g := graph.New[int]("root")
-	add := func(name string, run graph.Node[int]) {
+	add := func(name string, run graph.NodeFunc[int]) {
 		t.Helper()
 		if err := g.AddNode(graph.NodeSpec[int]{Name: name, Run: run}); err != nil {
 			t.Fatal(err)
@@ -68,7 +68,7 @@ func TestJoinlessGroupSettlementNeedsNoCallbackPermit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "no-merge-limit", Clone: graph.ValueClone[int]})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "no-merge-limit", Clone: graph.ValueClone[int]})
 	if err != nil {
 		t.Fatal(err)
 	}

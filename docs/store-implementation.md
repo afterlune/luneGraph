@@ -17,7 +17,7 @@ before the atomic write.
 1. Validate context, header identity/version, expected+1 revision and change shape.
 2. Establish independent copies of changed states, Failure, routes, child lists
    and deletion IDs. Never call user Clone while holding a Store-wide lock.
-3. In a transaction/critical section, compare the current revision and machine.
+3. In a transaction/critical section, compare the current revision and definition ID.
    A stale/missing run returns ErrConflict without modifying any record.
 4. Reject terminal runs with ErrRunCompleted; reject decreasing Steps/NextID or
    clearing HadLocalFailures. Apply the authoritative Header and Final, listed
@@ -54,8 +54,9 @@ panics are Store panics and are not recovered as callback PanicError.
 Use the built-in Stores and internal/storetest suite as contract references.
 Test LoadHeader consistency after commits, missing-run and cancellation errors,
 and Failure copy ownership. Also test canonical Load ordering and preservation
-of child target order, ownership after caller mutation, stale/missing/wrong-machine
-writes, mixed delta atomicity, terminal rejection, cancellation, uncertain acks,
-concurrent loads/writes and single-run deletion. Add process-kill tests for
+of child target order, ownership after caller mutation, and writes with stale
+revisions, missing runs, or mismatched definition IDs. Cover mixed delta
+atomicity, terminal rejection, cancellation, uncertain acks, concurrent
+loads/writes and single-run deletion. Add process-kill tests for
 durable backends. Any serialization optimization must pass independent-reader
 and reopen checks.

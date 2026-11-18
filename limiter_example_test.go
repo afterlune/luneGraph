@@ -25,7 +25,7 @@ func ExampleLimiter() {
 	if err := g.AddEdge("prepare", "finish"); err != nil {
 		panic(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "limiter-dependency-example-v1", Clone: graph.ValueClone[int]})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "limiter-dependency-example-v1", Clone: graph.ValueClone[int]})
 	if err != nil {
 		panic(err)
 	}

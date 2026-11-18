@@ -64,7 +64,7 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 		if err := parent.AddEdge("worker", "after"); err != nil {
 			t.Fatal(err)
 		}
-		runner, err := parent.Compile(graph.Config[int]{MachineID: machineID, Clone: func(state int) (int, error) { return state, nil }})
+		runner, err := parent.Compile(graph.Config[int]{DefinitionID: machineID, Clone: func(state int) (int, error) { return state, nil }})
 		if err != nil {
 			t.Fatal(err)
 		}

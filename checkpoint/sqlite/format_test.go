@@ -18,7 +18,7 @@ func TestFormatEightRejectsFormatSevenWritesAndLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "format", MachineID: "m", Revision: 1, NextID: 3,
+	cp := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "format", DefinitionID: "m", Revision: 1, NextID: 3,
 		Invocations: []graph.Invocation[int]{{ID: "i1", CallID: "c2", Node: "work", Status: graph.InvocationReady, State: 1}}}
 	old := cp
 	old.FormatVersion = 7

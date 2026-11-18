@@ -24,7 +24,7 @@ func FuzzCheckpointValidation(f *testing.F) {
 	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		f.Fatal(err)
 	}
-	r, err := g.Compile(graph.Config[int]{MachineID: "fuzz-v1", Clone: func(state int) (int, error) { return state, nil }})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "fuzz-v1", Clone: func(state int) (int, error) { return state, nil }})
 	if err != nil {
 		f.Fatal(err)
 	}

@@ -14,7 +14,9 @@ The standard-library core is imported as `graph` from
 `github.com/afterlune/luneGraph`. Optional SQLite persistence uses modernc.org/sqlite.
 Implementation is separated into internal/definition, internal/executor,
 internal/model and internal/observation. The execution engine uses a cache-friendly
-Compressed Sparse Row (CSR) vector topology, zero-alloc ID lookup tables, and in-place
+Compressed Sparse Row (CSR) layout with one compiled edge slice. Compilation resolves
+entry and destination indices before handing the topology to the Runner. The runtime
+also uses zero-alloc ID lookup tables and in-place
 fast commit for high-throughput single-step and fan-out execution. Persistence and
 logging are separate packages. License: Apache-2.0.
 
@@ -40,7 +42,7 @@ func main() {
     }); err != nil { panic(err) }
     if err := g.AddEdge("count", "count"); err != nil { panic(err) }
     runner, err := g.Compile(graph.Config[int]{
-        MachineID: "counter-v1", Clone: graph.ValueClone[int],
+        DefinitionID: "counter-v1", Clone: graph.ValueClone[int],
     })
     if err != nil { panic(err) }
     execution, result, err := runner.Start(context.Background(), "run-1", 0, nil, graph.Options{})
@@ -76,8 +78,9 @@ target and branch slices; returned state follows the ownership-transfer contract
 | EndExecution(state) | Finish the run, supply Final, cancel/drain other tasks |
 | Return(state) | Leave a mounted subgraph through its sole exit |
 
-Register JoinSpec with From naming a FanOut source. Each activation joins only
-its own children. FanOut branches can repeat targets and carry independent
+Set `JoinSpec.FanOutSource` to the name of the node that dispatches the
+branches. Each activation joins only its own children. FanOut branches can
+repeat targets and carry independent
 states; zero and one branch still pass through a normal activation and Merge.
 Merge receives a clone of the state saved by FanOut, then ordered branch
 outcomes as `[]BranchResult[S]`. Each `BranchResult` reports `Index`, `Target`,
@@ -119,9 +122,10 @@ If quorum cannot be met due to branch failures, the join safely falls back to
 standard execution when all branches settle.
 
 AddSubgraph mounts a Graph with the same S. Compile expands it into the same
-machine/checkpoint, using qualified names such as `worker/review`. A mount has
-zero/one exit. Return follows that exit or ends its invocation. Change MachineID
-when a definition is incompatible with stored execution positions.
+compiled graph and checkpoint, using qualified names such as `worker/review`.
+A mount has at most one exit. Return follows that exit or ends its invocation.
+Change `DefinitionID` when a definition is incompatible with stored execution
+positions.
 
 Clone must copy every mutable reference a callback can change, including values
 inside containers. Copying a `map[string][]byte` alone still shares its byte
@@ -211,7 +215,7 @@ store, err := sqlite.Open(ctx, "runs.db", checkpoint.JSON[State]{})
 if err != nil { return err }
 defer store.Close()
 execution, result, err := runner.Start(ctx, "run-1", initial, store, graph.Options{})
-// Reopen with the same definition/MachineID in another process:
+// Reopen with the same graph definition and DefinitionID in another process:
 execution, result, err = runner.Recover(ctx, "run-1", inputs, store, graph.Options{})
 // Within this process, continue the same live execution without reloading all states:
 result, err = execution.Advance(ctx, moreInputs, graph.Options{})
@@ -397,7 +401,7 @@ go run ./examples/team continue -provider registry -config models.json -db runs.
 go run ./examples/team resume -provider registry -config models.json -db runs.db -run mixed-demo -invocation iN -call cN -approved=true
 ```
 
-Use the same registry configuration for `continue` and `resume`. Its MachineID
+Use the same registry configuration for `continue` and `resume`. Its DefinitionID
 fingerprint covers the Lead, worker allow-list, model mappings, and descriptions;
 changing those values rejects recovery. API keys and request limits are excluded
 from the fingerprint. OpenAI calls use the Responses API with structured JSON
@@ -416,17 +420,17 @@ the Runner and never enter checkpoints. Adapter calls receive `CallInfo` and
 are synchronous, concurrent, and at-least-once, so real integrations must honor
 context cancellation and reconcile effects with `RunID` and `CallID`.
 Keep model IDs and their request/response meaning stable while runs are active;
-change the example MachineID when adapter semantics become incompatible.
+change the example DefinitionID when adapter semantics become incompatible.
 
-The example uses MachineID `team-model-adapters-v2` because its stored state
+The example uses DefinitionID `team-model-adapters-v2` because its stored state
 shape changed. Resume old example runs with the previous source version or use a
 new run ID; the example does not migrate old state. Use the invocation and
 CallID printed by `start`; do not replace them with the current waiting identity
 after an uncertain resume result.
 
-DeepSeek executions use MachineID `team-deepseek-flash-v1`; resume them with
+DeepSeek executions use DefinitionID `team-deepseek-flash-v1`; resume them with
 `-provider deepseek` and the same model semantics. The offline default has a
-different MachineID and intentionally cannot recover a DeepSeek checkpoint.
+different DefinitionID and intentionally cannot recover a DeepSeek checkpoint.
 
 ```sh
 gofmt -w .

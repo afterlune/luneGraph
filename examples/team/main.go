@@ -74,12 +74,12 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	}
 	var models ModelRegistry
 	var workerModels []ModelOption
-	var machineID, startModelID string
+	var definitionID, startModelID string
 	switch *provider {
 	case "offline":
 		models = offlineModelRegistry()
 		workerModels = modelOptionsFromRegistry(models)
-		machineID = "team-model-adapters-v2"
+		definitionID = "team-model-adapters-v2"
 		startModelID = modelLead
 	case "deepseek":
 		apiKey := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY"))
@@ -95,14 +95,14 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 			return err
 		}
 		workerModels = []ModelOption{{ModelID: modelDeepSeekFlash, Provider: "deepseek", Model: deepSeekProviderModel}}
-		machineID = "team-deepseek-flash-v1"
+		definitionID = "team-deepseek-flash-v1"
 		startModelID = modelDeepSeekFlash
 	case "registry":
 		config, configErr := loadTeamRegistryConfig(*modelConfigPath)
 		if configErr != nil {
 			return configErr
 		}
-		models, workerModels, machineID, err = buildTeamModelRegistry(config, *requestTimeout, *maxTokens, diagnostics)
+		models, workerModels, definitionID, err = buildTeamModelRegistry(config, *requestTimeout, *maxTokens, diagnostics)
 		if err != nil {
 			return err
 		}
@@ -110,7 +110,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) (err
 	default:
 		return fmt.Errorf("unknown provider %q; expected offline, deepseek, or registry", *provider)
 	}
-	runner, err := newTeamRunnerWithModelOptions(models, machineID, workerModels)
+	runner, err := newTeamRunnerWithModelOptions(models, definitionID, workerModels)
 	if err != nil {
 		return err
 	}

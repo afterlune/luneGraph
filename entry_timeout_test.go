@@ -112,7 +112,7 @@ func entryTimeoutGraph(t *testing.T, mode string) *graph.Graph[int] {
 			})
 			edge(t, g, "entry", name)
 		}
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner", From: "entry", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "inner", FanOutSource: "entry", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
 			return s, nil
 		}}); err != nil {
 			t.Fatal(err)
@@ -130,7 +130,7 @@ func entryTimeoutGraph(t *testing.T, mode string) *graph.Graph[int] {
 			t.Fatal(err)
 		}
 	}
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, s int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "outer", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, s int, branches []graph.BranchResult[int]) (int, error) {
 		if !branches[0].OK() && !branches[0].Ended() {
 			return s, errors.New("entry branch failed")
 		}
@@ -231,10 +231,10 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 				return graph.EndExecution(s), nil
 			})
 			for _, join := range []graph.JoinSpec[int]{
-				{Name: "inner", From: "entry", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
+				{Name: "inner", FanOutSource: "entry", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
 					return s, nil
 				}},
-				{Name: "outer", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
+				{Name: "outer", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, s int, _ []graph.BranchResult[int]) (int, error) {
 					return s, nil
 				}},
 			} {
@@ -245,7 +245,7 @@ func TestRejectedEntryOutcomesRetainOverrideAndReplayIdentity(t *testing.T) {
 			for _, pair := range [][2]string{{"dispatch", "entry"}, {"entry", "leaf"}, {"inner", "finish"}, {"outer", "done"}} {
 				edge(t, g, pair[0], pair[1])
 			}
-			runner, err := g.Compile(graph.Config[int]{MachineID: "entry-retry", Clone: func(s int) (int, error) {
+			runner, err := g.Compile(graph.Config[int]{DefinitionID: "entry-retry", Clone: func(s int) (int, error) {
 				if cloneFails {
 					return 0, errors.New("clone rejected")
 				}
@@ -341,10 +341,10 @@ func TestEntryFanOutCloneFailureRetainsOverrideAndReplaysCallback(t *testing.T) 
 				return graph.EndExecution(s), nil
 			})
 			for _, join := range []graph.JoinSpec[int]{
-				{Name: "inner", From: "entry", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+				{Name: "inner", FanOutSource: "entry", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 					return branches[0].State + branches[1].State, nil
 				}},
-				{Name: "outer", From: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+				{Name: "outer", FanOutSource: "dispatch", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 					return branches[0].State, nil
 				}},
 			} {
@@ -359,7 +359,7 @@ func TestEntryFanOutCloneFailureRetainsOverrideAndReplaysCallback(t *testing.T) 
 			injectFailure := false
 			var clonedBranches []int
 			faults := 0
-			runner, err := g.Compile(graph.Config[int]{MachineID: "entry-fanout-clone", Clone: func(s int) (int, error) {
+			runner, err := g.Compile(graph.Config[int]{DefinitionID: "entry-fanout-clone", Clone: func(s int) (int, error) {
 				if injectFailure && (s == 1 || s == 2) {
 					clonedBranches = append(clonedBranches, s)
 					if s == 2 {

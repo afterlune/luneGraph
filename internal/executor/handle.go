@@ -68,7 +68,7 @@ func (e *Execution[S]) Advance(ctx context.Context, inputs []ResumeInput, opts O
 		if loadErr != nil {
 			return r.resultFromLiveOrEmpty(e.live, errorStatus(loadErr), loadErr)
 		}
-		if header.RunID != e.live.header.RunID || header.MachineID != r.id || header.Revision != e.live.header.Revision || header.FormatVersion != CheckpointFormatVersion {
+		if header.RunID != e.live.header.RunID || header.DefinitionID != r.id || header.Revision != e.live.header.Revision || header.FormatVersion != CheckpointFormatVersion {
 			return r.resultFromLiveOrEmpty(e.live, StatusFailed, ErrConflict)
 		}
 		if header.Completed {

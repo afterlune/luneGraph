@@ -73,7 +73,7 @@ func TestCloneAndMergePanics(t *testing.T) {
 	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndExecution(v), nil
 	})
-	r, err := g.Compile(graph.Config[int]{MachineID: "panic-clone", Clone: func(int) (int, error) { panic("clone") }})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "panic-clone", Clone: func(int) (int, error) { panic("clone") }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCloneAndMergePanics(t *testing.T) {
 		edge(t, cloneFork, "fork", name)
 	}
 	cloneCalls := 0
-	cloneRunner, err := cloneFork.Compile(graph.Config[int]{MachineID: "fanout-clone", Clone: func(v int) (int, error) {
+	cloneRunner, err := cloneFork.Compile(graph.Config[int]{DefinitionID: "fanout-clone", Clone: func(v int) (int, error) {
 		cloneCalls++
 		if cloneCalls == 3 {
 			panic("fanout clone")
@@ -113,7 +113,7 @@ func TestCloneAndMergePanics(t *testing.T) {
 	node(t, fork, "fork", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "a", "b"), nil
 	})
-	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) { panic("merge") }}); err != nil {
+	if err := fork.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(context.Context, graph.CallInfo, int, []graph.BranchResult[int]) (int, error) { panic("merge") }}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
@@ -138,7 +138,7 @@ func TestWrongJoinIsTransitionError(t *testing.T) {
 	node(t, g, "other", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndBranch[int](), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "other", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+	if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "other", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 		return 0, nil
 	}}); err != nil {
 		t.Fatal(err)

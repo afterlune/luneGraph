@@ -44,7 +44,7 @@ func fanoutRunner(t testing.TB, width, rounds, waitEvery int) *graph.Runner[stat
 		}
 		return graph.ToTargets(s, targets), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", From: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
+	if err := g.AddJoin(graph.JoinSpec[state]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, call graph.CallInfo, _ state, branches []graph.BranchResult[state]) (state, error) {
 		values := graph.BranchValues(branches)
 		if len(values) != width {
 			return state{}, fmt.Errorf("join received %d/%d branches", len(values), width)

@@ -144,7 +144,7 @@ func TestInterruptionDoesNotChangeOtherErrorBoundaries(t *testing.T) {
 			if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, marker }, func(_ context.Context, _ graph.CallInfo, s, p int) (int, error) { return s + p, nil }); err != nil {
 				t.Fatal(err)
 			}
-			r, err := g.Compile(graph.Config[int]{MachineID: "boundary", Clone: func(s int) (int, error) {
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "boundary", Clone: func(s int) (int, error) {
 				if kind == "clone" {
 					return 0, marker
 				}
@@ -208,7 +208,7 @@ func TestCloneInterruptionMarkerAtResumeAndJoin(t *testing.T) {
 				})
 				edge(t, g, "fork", name)
 			}
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 				t.Fatal("merge ran after clone error")
 				return 0, nil
 			}}); err != nil {
@@ -222,7 +222,7 @@ func TestCloneInterruptionMarkerAtResumeAndJoin(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			r, err := g.Compile(graph.Config[int]{MachineID: "clone-boundary", Clone: func(s int) (int, error) {
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "clone-boundary", Clone: func(s int) (int, error) {
 				if armed.Load() {
 					return 0, graph.Interrupt(nil)
 				}

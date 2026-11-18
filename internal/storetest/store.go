@@ -88,7 +88,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		if err := store.Commit(ctx, 2, (next).Change()); !errors.Is(err, graph.ErrConflict) {
 			t.Fatalf("stale revision = %v", err)
 		}
-		next.MachineID = "other-machine"
+		next.DefinitionID = "other-machine"
 		if err := store.Commit(ctx, 1, (next).Change()); !errors.Is(err, graph.ErrConflict) {
 			t.Fatalf("wrong machine = %v", err)
 		}
@@ -103,7 +103,7 @@ func Run(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		ctx := context.Background()
 		for _, change := range []func(*graph.Checkpoint[State]){
 			func(value *graph.Checkpoint[State]) { value.RunID = "" },
-			func(value *graph.Checkpoint[State]) { value.MachineID = " other " },
+			func(value *graph.Checkpoint[State]) { value.DefinitionID = " other " },
 			func(value *graph.Checkpoint[State]) { value.FormatVersion++ },
 			func(value *graph.Checkpoint[State]) { value.Revision = 0 },
 			func(value *graph.Checkpoint[State]) { value.Revision = 2 },
@@ -191,7 +191,7 @@ func loadHeader(t *testing.T, open func(*testing.T) graph.Store[State]) {
 		terminal := graph.Checkpoint[State]{
 			FormatVersion: graph.CheckpointFormatVersion,
 			RunID:         "terminal",
-			MachineID:     "machine-v1",
+			DefinitionID:  "machine-v1",
 			Revision:      1,
 			Completed:     true,
 			Failure:       &graph.Failure{Message: "original"},
@@ -286,7 +286,7 @@ func fixture() graph.Checkpoint[State] {
 	return graph.Checkpoint[State]{
 		FormatVersion: graph.CheckpointFormatVersion,
 		RunID:         "run",
-		MachineID:     "machine-v1",
+		DefinitionID:  "machine-v1",
 		Revision:      1,
 
 		Invocations:      []graph.Invocation[State]{{ID: "i1", CallID: "c2", State: State{Values: map[string]int{"n": 1}}, Next: []string{"next"}}},

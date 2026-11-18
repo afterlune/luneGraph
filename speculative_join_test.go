@@ -54,10 +54,10 @@ func TestSpeculativeJoinWithQuorum(t *testing.T) {
 
 	var observedBranches []graph.BranchResult[int]
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		Quorum:  2,
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		Quorum:       2,
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			observedBranches = append([]graph.BranchResult[int](nil), branches...)
 			sum := parent
@@ -156,9 +156,9 @@ func TestSpeculativeJoinWithCanMerge(t *testing.T) {
 	})
 
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		OnError:      graph.FailExecution,
 		CanMerge: func(_ int, branches []graph.BranchResult[int]) bool {
 			for _, b := range branches {
 				if b.OK() && b.State == 200 {
@@ -233,8 +233,8 @@ func TestCanMergeReceivesIsolatedStateCopies(t *testing.T) {
 		}
 	})
 	if err := g.AddJoin(graph.JoinSpec[speculativeState]{
-		Name: "joined",
-		From: "dispatch",
+		Name:         "joined",
+		FanOutSource: "dispatch",
 		CanMerge: func(parent speculativeState, branches []graph.BranchResult[speculativeState]) bool {
 			predicateCalls.Add(1)
 			if len(parent.Values) != 1 || parent.Values[0] != 9 || len(branches) != 2 || len(branches[0].State.Values) != 1 || len(branches[1].State.Values) != 1 || branches[1].State.Values[0] != 2 {
@@ -261,7 +261,7 @@ func TestCanMergeReceivesIsolatedStateCopies(t *testing.T) {
 	})
 	edge(t, g, "dispatch", "worker")
 	edge(t, g, "joined", "done")
-	runner, err := g.Compile(graph.Config[speculativeState]{MachineID: "can-merge-isolation", Clone: cloneSpeculativeState})
+	runner, err := g.Compile(graph.Config[speculativeState]{DefinitionID: "can-merge-isolation", Clone: cloneSpeculativeState})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestCanMergePanicUsesJoinFailurePolicy(t *testing.T) {
 	})
 	edge(t, g, "dispatch", "worker")
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name: "joined", From: "dispatch", OnError: graph.FailExecution,
+		Name: "joined", FanOutSource: "dispatch", OnError: graph.FailExecution,
 		CanMerge: func(int, []graph.BranchResult[int]) bool { panic("predicate panic") },
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, _ []graph.BranchResult[int]) (int, error) {
 			return parent, nil
@@ -326,7 +326,7 @@ func TestCanMergeCloneErrorDoesNotCommitTerminalFailure(t *testing.T) {
 	})
 	edge(t, g, "dispatch", "worker")
 	if err := g.AddJoin(graph.JoinSpec[speculativeState]{
-		Name: "joined", From: "dispatch", OnError: graph.FailExecution,
+		Name: "joined", FanOutSource: "dispatch", OnError: graph.FailExecution,
 		CanMerge: func(speculativeState, []graph.BranchResult[speculativeState]) bool { return true },
 		Merge: func(_ context.Context, _ graph.CallInfo, parent speculativeState, _ []graph.BranchResult[speculativeState]) (speculativeState, error) {
 			return parent, nil
@@ -334,7 +334,7 @@ func TestCanMergeCloneErrorDoesNotCommitTerminalFailure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[speculativeState]{MachineID: "can-merge-clone-error", Clone: clone})
+	runner, err := g.Compile(graph.Config[speculativeState]{DefinitionID: "can-merge-clone-error", Clone: clone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,10 +372,10 @@ func TestSpeculativeJoinFallbackWhenQuorumUnmet(t *testing.T) {
 
 	var mergeBranches []graph.BranchResult[int]
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		Quorum:  3, // Requires 3, but only 2 succeed
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		Quorum:       3, // Requires 3, but only 2 succeed
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			mergeBranches = append([]graph.BranchResult[int](nil), branches...)
 			sum := parent
@@ -460,10 +460,10 @@ func TestSpeculativeJoinPersistenceAndRecovery(t *testing.T) {
 	})
 
 	if err := g.AddJoin(graph.JoinSpec[int]{
-		Name:    "joined",
-		From:    "dispatch",
-		Quorum:  2,
-		OnError: graph.FailExecution,
+		Name:         "joined",
+		FanOutSource: "dispatch",
+		Quorum:       2,
+		OnError:      graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			sum := parent

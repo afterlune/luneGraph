@@ -8,7 +8,7 @@ import (
 )
 
 func TestDiagramNamesMountsAndRecursiveReferences(t *testing.T) {
-	run := model.Node[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
+	run := model.NodeFunc[int](func(context.Context, model.CallInfo, int) (model.Transition[int], error) {
 		return model.EndBranch[int](), nil
 	})
 	root := New[int]("a/b")

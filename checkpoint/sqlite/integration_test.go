@@ -58,7 +58,7 @@ func TestRecoverAfterSQLiteCommitAcknowledgementIsLost(t *testing.T) {
 	if err := g.AddEdge("first", "final"); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "ack-lost-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "ack-lost-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[int]{MachineID: "wait-v1", Clone: func(value int) (int, error) { return value, nil }})
+	runner, err := g.Compile(graph.Config[int]{DefinitionID: "wait-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestRunnerResumesAfterReopen(t *testing.T) {
 	if err := loop.AddEdge("loop", "loop"); err != nil {
 		t.Fatal(err)
 	}
-	loopRunner, err := loop.Compile(graph.Config[int]{MachineID: "loop-v1", Clone: func(value int) (int, error) { return value, nil }})
+	loopRunner, err := loop.Compile(graph.Config[int]{DefinitionID: "loop-v1", Clone: func(value int) (int, error) { return value, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

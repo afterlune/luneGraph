@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 
 	"github.com/afterlune/luneGraph/internal/limit"
@@ -82,13 +81,13 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				break
 			}
 			if lg, _, ok := l.group(ref.id, ref.slot); ref.join && ok && lg.group.JoinNode == "" {
-				terminalErr, err := r.commitResult(ctx, l, workResult[S]{ref: ref}, opts.MaxInvocations, cursor, store, obs, prepared)
-				if err != nil {
+				outcome := r.commitResult(ctx, l, workResult[S]{ref: ref}, opts.MaxInvocations, cursor, store, obs, prepared)
+				if err := outcome.CommitErr; err != nil {
 					l.enqueue(ref)
 					return finish(errorStatus(err), err)
 				}
-				if terminalErr != nil {
-					return finish(StatusFailed, terminalErr)
+				if outcome.TerminalErr != nil {
+					return finish(StatusFailed, outcome.TerminalErr)
 				}
 				if l.header.Completed {
 					return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)
@@ -100,103 +99,6 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				return finish(StatusFailed, ErrExecutionLimit)
 			}
 
-			// Tight inline fast-path for linear root node sequences without persistence/observation/limiter.
-			if !ref.join && store == nil && obs == nil && opts.Limiter == nil && len(running) == 0 && l.joinQueue.len() == 0 && l.nodeQueue.len() == 0 {
-				if inv, slot, ok := l.invocation(ref.id, ref.slot); ok && inv.GroupID == "" {
-					var n *CompiledNode[S]
-					if uint(ref.nodeIdx) < uint(len(r.nodes)) && r.nodes[ref.nodeIdx].Spec.Name == inv.Node {
-						n = &r.nodes[ref.nodeIdx]
-					} else {
-						n = r.node(inv.Node)
-					}
-					if n != nil && n.Spec.Timeout <= 0 {
-						invCursor := invocationNumber(inv.ID)
-						for {
-							if l.header.Revision == math.MaxUint64 || l.header.Steps == math.MaxUint64 {
-								l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: n.Index, join: false})
-								return finish(StatusFailed, ErrExecutionLimit)
-							}
-							if err := ctx.Err(); err != nil {
-								l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: n.Index, join: false})
-								return finish(StatusCancelled, err)
-							}
-							state, err := r.cloneState(inv.State, inv.ID)
-							if err != nil {
-								l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: n.Index, join: false})
-								outErr := fmt.Errorf("clone node state: %w", err)
-								return finish(errorStatus(outErr), outErr)
-							}
-							call := CallInfo{
-								RunID:        l.header.RunID,
-								InvocationID: inv.ID,
-								CallID:       inv.CallID,
-								Node:         inv.Node,
-								Step:         l.header.Steps,
-								BranchIndex:  inv.BranchIndex,
-							}
-							used++
-							cursor = invCursor
-							tr, runErr := r.runNode(ctx, call, n.Spec, state)
-							if err := ctx.Err(); err != nil {
-								l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: n.Index, join: false})
-								return finish(StatusCancelled, err)
-							}
-							if runErr == nil {
-								d := model.ReadTransition(tr)
-								if d.Action == ActionContinue && len(d.Targets) == 0 && d.Target != "" {
-									edges := r.edges[n.EdgeStart:n.EdgeEnd]
-									edgeIdx := -1
-									for i := range edges {
-										if edges[i].Target == d.Target {
-											edgeIdx = i
-											break
-										}
-									}
-									if edgeIdx >= 0 {
-										edge := edges[edgeIdx]
-										if edge.JoinIndex < 0 && edge.NodeIndex >= 0 && l.header.NextID < math.MaxUint64 {
-											inv.State = d.State
-											inv.Continuation = ""
-											inv.Next = nil
-											inv.Status = InvocationReady
-											inv.CallID = model.AllocID(&l.header.NextID, "c")
-											inv.Node = edge.Target
-											l.header.Revision++
-											l.header.Steps++
-											l.header.ScheduleCursor = cursor
-											n = &r.nodes[edge.NodeIndex]
-											if used < opts.MaxSteps && n.Spec.Timeout <= 0 {
-												continue
-											}
-											l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.NodeIndex, join: false})
-											break
-										}
-									}
-								} else if d.Action == ActionEndExecution {
-									l.finalVal = d.State
-									l.header.Revision++
-									l.header.Steps++
-									l.header.ScheduleCursor = cursor
-									l.header.Final = &l.finalVal
-									l.header.Completed = true
-									l.clearActive()
-									return finish(statusOf(l.header.Header(), 0, false), nil)
-								}
-							}
-							immediateResult = workResult[S]{
-								ref:        taskRef{id: inv.ID, slot: slot, nodeIdx: n.Index, join: false},
-								callID:     inv.CallID,
-								node:       n,
-								transition: tr,
-								err:        runErr,
-							}
-							immediate = true
-							break
-						}
-						break
-					}
-				}
-			}
 			var task workerTask[S]
 			var err error
 			// Ready join inputs cannot change while this activation is pending.
@@ -360,8 +262,8 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			l.enqueue(out.ref)
 			return finish(StatusInterrupted, out.err)
 		}
-		terminalErr, err := r.commitResult(ctx, l, out, opts.MaxInvocations, cursor, store, obs, prepared)
-		if err != nil {
+		outcome := r.commitResult(ctx, l, out, opts.MaxInvocations, cursor, store, obs, prepared)
+		if err := outcome.CommitErr; err != nil {
 			l.enqueue(out.ref)
 			if errors.Is(err, errInvocationBudget) {
 				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, err)
@@ -371,8 +273,8 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 			return finish(errorStatus(err), err)
 		}
 		reconcileTasks(l, prepared, running)
-		if terminalErr != nil {
-			return finish(StatusFailed, terminalErr)
+		if outcome.TerminalErr != nil {
+			return finish(StatusFailed, outcome.TerminalErr)
 		}
 		if l.header.Completed {
 			return finish(statusOf(l.header.Header(), l.readyNodes, false), nil)

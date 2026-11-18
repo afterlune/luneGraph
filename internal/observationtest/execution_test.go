@@ -174,7 +174,7 @@ func TestCloneFailureAndInvalidCheckpointEvents(t *testing.T) {
 		return graph.EndExecution(s), nil
 	})
 	boom := errors.New("clone failure")
-	r, err := g.Compile(graph.Config[int]{MachineID: "observation-v1", Clone: func(int) (int, error) { return 0, boom }})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "observation-v1", Clone: func(int) (int, error) { return 0, boom }})
 	if err != nil {
 		t.Fatal(err)
 	}

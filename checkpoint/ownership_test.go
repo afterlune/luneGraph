@@ -33,7 +33,7 @@ func TestStoreTerminalOwnershipAndCreateShape(t *testing.T) {
 				store = s
 			}
 			final := map[string]int{"n": 1}
-			cp := graph.Checkpoint[map[string]int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "final", MachineID: "m", Revision: 1, Completed: true, Final: &final}
+			cp := graph.Checkpoint[map[string]int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "final", DefinitionID: "m", Revision: 1, Completed: true, Final: &final}
 			if err := store.Create(ctx, cp); err != nil {
 				t.Fatal(err)
 			}

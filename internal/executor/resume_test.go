@@ -212,7 +212,7 @@ func TestRecoverValidationAndTerminalCheckpoints(t *testing.T) {
 		t.Fatalf("mismatched run ID = %+v, %v", result, err)
 	}
 	invalid := copyCheckpoint(checkpoint)
-	invalid.MachineID = "old-machine"
+	invalid.DefinitionID = "old-machine"
 	store.values["resume-run"] = invalid
 	if _, _, err := runner.Recover(context.Background(), "resume-run", nil, optionsStore, options); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("invalid recovered checkpoint error = %v", err)

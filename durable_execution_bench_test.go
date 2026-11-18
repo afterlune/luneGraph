@@ -131,7 +131,7 @@ func durableSequentialRunner(b *testing.B) *graph.Runner[durableBenchmarkState] 
 	if err := g.AddEdge("step", "step"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[durableBenchmarkState]{MachineID: "durable-sequential-v1", Clone: cloneDurableBenchmarkState})
+	runner, err := g.Compile(graph.Config[durableBenchmarkState]{DefinitionID: "durable-sequential-v1", Clone: cloneDurableBenchmarkState})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func durableFanoutRunner(b *testing.B, width int) *graph.Runner[durableBenchmark
 	}}); err != nil {
 		b.Fatal(err)
 	}
-	if err := g.AddJoin(graph.JoinSpec[durableBenchmarkState]{Name: "join", From: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ durableBenchmarkState, branches []graph.BranchResult[durableBenchmarkState]) (durableBenchmarkState, error) {
+	if err := g.AddJoin(graph.JoinSpec[durableBenchmarkState]{Name: "join", FanOutSource: "fork", Merge: func(_ context.Context, _ graph.CallInfo, _ durableBenchmarkState, branches []graph.BranchResult[durableBenchmarkState]) (durableBenchmarkState, error) {
 		states := graph.BranchValues(branches)
 		merged, err := cloneDurableBenchmarkState(states[0])
 		if err != nil {
@@ -185,7 +185,7 @@ func durableFanoutRunner(b *testing.B, width int) *graph.Runner[durableBenchmark
 	if err := g.AddEdge("repeat", "fork"); err != nil {
 		b.Fatal(err)
 	}
-	runner, err := g.Compile(graph.Config[durableBenchmarkState]{MachineID: "durable-fanout-v1", Clone: cloneDurableBenchmarkState})
+	runner, err := g.Compile(graph.Config[durableBenchmarkState]{DefinitionID: "durable-fanout-v1", Clone: cloneDurableBenchmarkState})
 	if err != nil {
 		b.Fatal(err)
 	}

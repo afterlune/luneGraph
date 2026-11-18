@@ -20,7 +20,7 @@ func TestSlogLevelsAndMetadata(t *testing.T) {
 	for _, operation := range []graph.EventOperation{graph.OperationStart, graph.OperationResume, graph.OperationRecover, graph.OperationAdvance, graph.OperationNode, graph.OperationJoin, graph.OperationDecode, graph.OperationApply, graph.OperationCreate, graph.OperationLoad, graph.OperationCommit, graph.OperationDelete} {
 		for _, failed := range []bool{false, true} {
 			output.Reset()
-			event := graph.Event{Operation: operation, Phase: graph.PhaseFinished, OperationID: 7, RunID: "run", MachineID: "machine", InvocationID: "i1", CallID: "c2", Node: "worker/work", Continuation: "worker/input", Revision: 9, Time: time.Unix(123, 0), Duration: time.Second, Status: graph.StatusWaiting, Action: graph.ActionWait}
+			event := graph.Event{Operation: operation, Phase: graph.PhaseFinished, OperationID: 7, RunID: "run", DefinitionID: "machine", InvocationID: "i1", CallID: "c2", Node: "worker/work", Continuation: "worker/input", Revision: 9, Time: time.Unix(123, 0), Duration: time.Second, Status: graph.StatusWaiting, Action: graph.ActionWait}
 			if failed {
 				event.Err = errors.New("write acknowledgement missing")
 			}

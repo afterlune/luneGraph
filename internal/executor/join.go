@@ -4,8 +4,13 @@ import (
 	"fmt"
 )
 
+type commitCandidate[S any] struct {
+	Change      Change[S]
+	TerminalErr error
+}
+
 // resultChange builds an isolated candidate containing only touched topology.
-func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations int) (Change[S], error, error) {
+func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations int) (commitCandidate[S], error) {
 	id := out.ref.id
 	scope := FailInvocation
 	node := ""
@@ -69,13 +74,13 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 			parent.State = out.state
 			next := ""
 			if j := r.join(g.JoinNode); j != nil {
-				next = j.NextTarget
+				next = j.NextEdge.Target
 			}
 			if next == "" {
 				parent.Status = InvocationEnded
 				parent.CallID = ""
 			} else if err := r.setTarget(&after, parent, next); err != nil {
-				return Change[S]{}, nil, &TransitionError{InvocationID: id, Node: node, Cause: err}
+				return commitCandidate[S]{}, &TransitionError{InvocationID: id, Node: node, Cause: err}
 			}
 		}
 	} else {
@@ -83,19 +88,19 @@ func (r *Runner[S]) resultChange(l *live[S], out workResult[S], maxInvocations i
 		if out.err != nil {
 			terminalErr = r.recordFailure(&after, &index, id, node, scope, out.err)
 		} else {
-			if _, err := r.applyTransition(&after, &index, id, out.transition, invocationBudget{retained: l.invocationCount(), maximum: maxInvocations}); err != nil {
-				return Change[S]{}, nil, err
+			if err := r.applyTransition(&after, &index, id, out.transition, invocationBudget{retained: l.invocationCount(), maximum: maxInvocations}); err != nil {
+				return commitCandidate[S]{}, err
 			}
 			if !after.Completed {
 				_, inv := indexedInvocation(&index, &after, id)
 				if err := clearEntryTimeout(&after, inv); err != nil {
-					return Change[S]{}, nil, err
+					return commitCandidate[S]{}, err
 				}
 			}
 		}
 	}
 	if terminalErr != nil && after.Failure == nil {
-		return Change[S]{}, nil, fmt.Errorf("record failure: %w", terminalErr)
+		return commitCandidate[S]{}, fmt.Errorf("record failure: %w", terminalErr)
 	}
-	return l.workspace.change(before, after), terminalErr, nil
+	return commitCandidate[S]{Change: l.workspace.change(before, after), TerminalErr: terminalErr}, nil
 }

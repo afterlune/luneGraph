@@ -36,16 +36,16 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	t.Run("continue", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		ended, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"), invocationBudget{})
-		if err != nil || ended || checkpoint.Invocations[0].Node != "next" || checkpoint.Invocations[0].State != 7 || checkpoint.Invocations[0].CallID != "c3" {
-			t.Fatalf("continue = %+v, ended=%t err=%v", checkpoint, ended, err)
+		err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"), invocationBudget{})
+		if err != nil || checkpoint.Completed || checkpoint.Invocations[0].Node != "next" || checkpoint.Invocations[0].State != 7 || checkpoint.Invocations[0].CallID != "c3" {
+			t.Fatalf("continue = %+v, err=%v", checkpoint, err)
 		}
 	})
 
 	t.Run("wait", func(t *testing.T) {
 		runner := makeRunner(nil)
 		checkpoint := executorTestReadyCheckpoint("source", 1)
-		_, err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"), invocationBudget{})
+		err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationWaiting || checkpoint.Invocations[0].State != 8 || checkpoint.Invocations[0].Continuation != "resume" || !reflect.DeepEqual(checkpoint.Invocations[0].Next, []string{"next"}) {
 			t.Fatalf("wait = %+v, %v", checkpoint, err)
 		}
@@ -60,7 +60,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			checkpoint := executorTestReadyCheckpoint("source", 1)
-			if _, err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition, invocationBudget{}); err == nil {
+			if err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition, invocationBudget{}); err == nil {
 				t.Fatalf("invalid transition accepted: %+v", transition)
 			}
 		})
@@ -68,7 +68,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end branch", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int](), invocationBudget{})
+		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int](), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" {
 			t.Fatalf("EndBranch = %+v, %v", checkpoint, err)
 		}
@@ -76,15 +76,15 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("end execution", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		ended, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11), invocationBudget{})
-		if err != nil || !ended || !checkpoint.Completed || checkpoint.Final == nil || *checkpoint.Final != 11 || len(checkpoint.Invocations) != 0 {
-			t.Fatalf("EndExecution = %+v, ended=%t err=%v", checkpoint, ended, err)
+		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11), invocationBudget{})
+		if err != nil || !checkpoint.Completed || checkpoint.Final == nil || *checkpoint.Final != 11 || len(checkpoint.Invocations) != 0 {
+			t.Fatalf("EndExecution = %+v, err=%v", checkpoint, err)
 		}
 	})
 
 	t.Run("return with destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
+		err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Node != "done" || checkpoint.Invocations[0].State != 12 {
 			t.Fatalf("Return route = %+v, %v", checkpoint, err)
 		}
@@ -92,7 +92,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return without destination", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
+		err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded {
 			t.Fatalf("terminal Return = %+v, %v", checkpoint, err)
 		}
@@ -100,7 +100,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("return outside mount", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		_, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
+		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		var transitionErr *TransitionError
 		if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), "outside a subgraph") {
 			t.Fatalf("root Return error = %v", err)
@@ -109,14 +109,14 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("missing invocation", func(t *testing.T) {
 		checkpoint := executorTestReadyCheckpoint("source", 4)
-		if _, err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0), invocationBudget{}); err == nil {
+		if err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0), invocationBudget{}); err == nil {
 			t.Fatal("transition accepted missing invocation")
 		}
 	})
 }
 
 func TestJoinTargetValidationAndRouting(t *testing.T) {
-	join := JoinSpec[int]{Name: "joined", From: "fork", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, nil }}
+	join := JoinSpec[int]{Name: "joined", FanOutSource: "fork", Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, nil }}
 	runner := executorTestRunner(t, "fork", []NodeSpec[int]{
 		executorTestNode("fork", executorTestEnd, FailInvocation),
 		executorTestNode("a", executorTestEnd, FailInvocation),
@@ -184,7 +184,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 			executorTestNode("done", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 				return model.EndExecution(value), nil
 			}, FailInvocation),
-		}, []JoinSpec[int]{{Name: "joined", From: "fork", Merge: func(_ context.Context, call CallInfo, _ int, branches []BranchResult[int]) (int, error) {
+		}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", Merge: func(_ context.Context, call CallInfo, _ int, branches []BranchResult[int]) (int, error) {
 			if call.CallID == "" || call.RunID != "parallel-join" || len(branches) != 2 || branches[0].State != 1 || branches[1].State != 2 {
 				return 0, fmt.Errorf("invalid merge call: %+v branches=%v", call, branches)
 			}
@@ -239,7 +239,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 		executorTestNode("b", func(_ context.Context, _ CallInfo, value int) (Transition[int], error) {
 			return model.To(value, "joined"), nil
 		}, FailInvocation),
-	}, []JoinSpec[int]{{Name: "joined", From: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
+	}, []JoinSpec[int]{{Name: "joined", FanOutSource: "fork", OnError: FailExecution, Merge: func(context.Context, CallInfo, int, []BranchResult[int]) (int, error) { return 0, boom }}}, map[string][]string{"fork": {"a", "b"}, "a": {"joined"}, "b": {"joined"}}, nil, nil)
 	_, result, err := mergeFailure.Start(context.Background(), "merge-failure", 0, nil, Options{MaxConcurrency: 1})
 	if !errors.Is(err, boom) || result.Status != StatusFailed || result.Header.Failure == nil {
 		t.Fatalf("join failure = %+v, %v", result, err)

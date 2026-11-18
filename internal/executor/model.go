@@ -24,7 +24,7 @@ type (
 	Invocation[S any]           = model.Invocation[S]
 	InvocationStatus            = model.InvocationStatus
 	JoinSpec[S any]             = model.JoinSpec[S]
-	Machine[S any]              = model.Machine[S]
+	CompiledGraph[S any]        = model.CompiledGraph[S]
 	NodeSpec[S any]             = model.NodeSpec[S]
 	Options                     = model.Options
 	PanicError                  = model.PanicError

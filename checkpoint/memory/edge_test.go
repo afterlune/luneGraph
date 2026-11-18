@@ -21,7 +21,7 @@ func TestStoreRejectsNilAndCanceledContextsAndNilReceiver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1}
+	value := graph.Checkpoint[int]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1}
 	next := value
 	next.Revision = 2
 
@@ -143,7 +143,7 @@ func stateCheckpoint(runID string, revision uint64, value int) graph.Checkpoint[
 	return graph.Checkpoint[state]{
 		FormatVersion: graph.CheckpointFormatVersion,
 		RunID:         runID,
-		MachineID:     "machine-v1",
+		DefinitionID:  "machine-v1",
 		Revision:      revision,
 		Invocations:   []graph.Invocation[state]{{ID: "i1", State: state{Values: map[string]int{"n": value}}}},
 	}

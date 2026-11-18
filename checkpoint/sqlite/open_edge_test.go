@@ -53,7 +53,7 @@ func TestOpenRejectsInvalidInputs(t *testing.T) {
 
 func TestStoreMethodsRejectNilAndCanceledContextAndNilReceiver(t *testing.T) {
 	ctx := context.Background()
-	value := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", MachineID: "machine-v1", Revision: 1}
+	value := graph.Checkpoint[state]{FormatVersion: graph.CheckpointFormatVersion, RunID: "run", DefinitionID: "machine-v1", Revision: 1}
 	next := value
 	next.Revision = 2
 

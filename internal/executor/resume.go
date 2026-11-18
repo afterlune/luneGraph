@@ -40,7 +40,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 	}
 	activeStore := observation.WrapStore(store, obs)
 	if activeStore != nil {
-		if !validName(checkpoint.RunID) || checkpoint.MachineID != r.id || checkpoint.Revision == 0 || checkpoint.FormatVersion != CheckpointFormatVersion {
+		if !validName(checkpoint.RunID) || checkpoint.DefinitionID != r.id || checkpoint.Revision == 0 || checkpoint.FormatVersion != CheckpointFormatVersion {
 			result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 			return nil, result, errors.Join(invalidCheckpoint("invalid resume reference"), resultErr)
 		}
@@ -49,7 +49,7 @@ func (r *Runner[S]) Resume(ctx context.Context, checkpoint Checkpoint[S], inputs
 			result, resultErr := r.resultFromCheckpoint(checkpoint, errorStatus(loadErr))
 			return nil, result, errors.Join(loadErr, resultErr)
 		}
-		if latest.MachineID != checkpoint.MachineID || latest.Revision != checkpoint.Revision || latest.RunID != checkpoint.RunID {
+		if latest.DefinitionID != checkpoint.DefinitionID || latest.Revision != checkpoint.Revision || latest.RunID != checkpoint.RunID {
 			result, resultErr := r.resultFromCheckpoint(checkpoint, StatusFailed)
 			return nil, result, errors.Join(ErrConflict, resultErr)
 		}
@@ -131,7 +131,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 			return r.resultFromLiveOrEmpty(l, status, err)
 		}
 		out := workResult[S]{ref: taskRef{id: inv.ID}, transition: model.ToTargets(updated, inv.Next), err: err}
-		c, terminalErr, buildErr := r.resultChange(l, out, opts.MaxInvocations)
+		candidate, buildErr := r.resultChange(l, out, opts.MaxInvocations)
 		if buildErr != nil {
 			if errors.Is(buildErr, errInvocationBudget) {
 				obs.ResolveSelected(ctx, model.OutcomeDiscarded, l.header.Revision, buildErr)
@@ -139,11 +139,12 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 			}
 			return r.resultFromLiveOrEmpty(l, errorStatus(buildErr), buildErr)
 		}
+		c := candidate.Change
 		c.Header.Steps = l.header.Steps
 		if err := r.submit(ctx, l, c, store, obs); err != nil {
 			return r.resultFromLiveOrEmpty(l, errorStatus(err), err)
 		}
-		if terminalErr != nil {
+		if terminalErr := candidate.TerminalErr; terminalErr != nil {
 			return r.resultFromLiveOrEmpty(l, StatusFailed, terminalErr)
 		}
 	}

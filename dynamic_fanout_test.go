@@ -7,9 +7,11 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	graph "github.com/afterlune/luneGraph"
 	"github.com/afterlune/luneGraph/checkpoint"
@@ -77,7 +79,7 @@ func teamRunner(t *testing.T) *graph.Runner[teamState] {
 		s.Trace = []string{s.TaskID + "@" + s.Model}
 		return graph.CompleteBranch(s), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "worker-join", From: "worker-b", OnError: graph.FailExecution,
+	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "worker-join", FanOutSource: "worker-b", OnError: graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, branches []graph.BranchResult[teamState]) (teamState, error) {
 			parent.Trace = nil
 			parent.MergeCalls++
@@ -94,7 +96,7 @@ func teamRunner(t *testing.T) *graph.Runner[teamState] {
 	node(t, g, "worker-return", func(_ context.Context, _ graph.CallInfo, s teamState) (graph.Transition[teamState], error) {
 		return graph.CompleteBranch(s), nil
 	})
-	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "lead-join", From: "lead", OnError: graph.FailExecution,
+	if err := g.AddJoin(graph.JoinSpec[teamState]{Name: "lead-join", FanOutSource: "lead", OnError: graph.FailExecution,
 		Merge: func(_ context.Context, _ graph.CallInfo, parent teamState, branches []graph.BranchResult[teamState]) (teamState, error) {
 			parent.Trace = nil
 			parent.MergeCalls++
@@ -127,7 +129,7 @@ func teamRunner(t *testing.T) *graph.Runner[teamState] {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r, err := g.Compile(graph.Config[teamState]{MachineID: "dynamic-team-v1", Clone: cloneTeamState})
+	r, err := g.Compile(graph.Config[teamState]{DefinitionID: "dynamic-team-v1", Clone: cloneTeamState})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +237,16 @@ func TestDynamicTeamFanOutMemoryStore(t *testing.T) {
 	}
 }
 
-func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], targets []string) *graph.Runner[int] {
+func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], targets []string, entryTimeout ...time.Duration) *graph.Runner[int] {
 	t.Helper()
 	g := graph.New[int]("dispatch")
 	node(t, g, "dispatch", func(_ context.Context, _ graph.CallInfo, _ int) (graph.Transition[int], error) {
 		branches := make([]graph.Branch[int], len(targets))
 		for i, target := range targets {
 			branches[i] = graph.Branch[int]{Target: target, State: i + 1}
+			if len(entryTimeout) > 0 {
+				branches[i].EntryTimeout = entryTimeout[0]
+			}
 		}
 		return graph.FanOut(0, branches...), nil
 	})
@@ -249,7 +254,7 @@ func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], ta
 		return graph.CompleteBranch(s), nil
 	})
 	if join {
-		if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+		if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, _ graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 			return parent + len(branches), nil
 		}}); err != nil {
 			t.Fatal(err)
@@ -271,7 +276,7 @@ func dynamicValidationRunner(t *testing.T, join bool, clone graph.Clone[int], ta
 			t.Fatal(err)
 		}
 	}
-	r, err := g.Compile(graph.Config[int]{MachineID: "dynamic-validation-v1", Clone: clone})
+	r, err := g.Compile(graph.Config[int]{DefinitionID: "dynamic-validation-v1", Clone: clone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,11 +321,59 @@ func TestDynamicFanOutValidationAndAtomicCloneFailure(t *testing.T) {
 	}
 }
 
+func TestFanOutValidationBeforeCloningWithAndWithoutStore(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		join    bool
+		targets []string
+		timeout time.Duration
+		limit   int
+		message string
+	}{
+		{name: "missing join", targets: []string{"worker"}, message: "requires a JoinSpec"},
+		{name: "undeclared target", join: true, targets: []string{"worker", "unlinked"}, message: "undeclared branch target"},
+		{name: "join target", join: true, targets: []string{"joined"}, message: "not an executable node"},
+		{name: "negative timeout before budget", join: true, targets: []string{"worker"}, timeout: -time.Second, limit: 1, message: "timeout must not be negative"},
+		{name: "budget", join: true, targets: []string{"worker", "worker"}, limit: 1},
+	} {
+		for _, mode := range []string{"no-store", "memory"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				branchClones := 0
+				r := dynamicValidationRunner(t, tc.join, func(v int) (int, error) {
+					if v != 0 {
+						branchClones++
+					}
+					return v, nil
+				}, tc.targets, tc.timeout)
+				var store graph.Store[int]
+				if mode == "memory" {
+					store = dynamicRetryStore(t, mode)
+				}
+				execution, result, err := r.Start(context.Background(), "validation", 0, store, graph.Options{MaxInvocations: tc.limit})
+				if tc.message == "" {
+					if err != nil || result.Status != graph.StatusBudget || result.BudgetReason != graph.BudgetMaxInvocations {
+						t.Fatalf("budget rejection = %+v, %v", result, err)
+					}
+				} else {
+					var transitionErr *graph.TransitionError
+					if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), tc.message) || result.Status != graph.StatusFailed {
+						t.Fatalf("transition rejection = %+v, %v", result, err)
+					}
+				}
+				cp := mustCheckpoint(execution)
+				if branchClones != 0 || cp.Revision != 1 || cp.NextID != 3 || len(cp.Groups) != 0 || len(cp.Invocations) != 1 || cp.Invocations[0].CallID != "c2" {
+					t.Fatalf("rejected FanOut changed position: %+v, branch clones=%d", cp, branchClones)
+				}
+			})
+		}
+	}
+}
+
 func TestDynamicFanOutRejectsIDOverflowBeforeBranchCloning(t *testing.T) {
 	var clones int
 	r := dynamicValidationRunner(t, true, func(v int) (int, error) { clones++; return v, nil }, []string{"worker", "worker", "worker"})
 	position := graph.Checkpoint[int]{
-		FormatVersion: graph.CheckpointFormatVersion, RunID: "overflow", MachineID: "dynamic-validation-v1",
+		FormatVersion: graph.CheckpointFormatVersion, RunID: "overflow", DefinitionID: "dynamic-validation-v1",
 		Revision: 1, NextID: math.MaxUint64 - 7,
 		Invocations: []graph.Invocation[int]{{ID: "i1", CallID: "c2", Node: "dispatch", Status: graph.InvocationReady}},
 	}
@@ -370,7 +423,7 @@ func TestDynamicMergeParentCloneFailureKeepsCommittedChildren(t *testing.T) {
 				workerCalls.Add(1)
 				return graph.CompleteBranch(state + 1), nil
 			})
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 				mergeCalls.Add(1)
 				mergeIDsMu.Lock()
 				mergeIDs = append(mergeIDs, call.CallID)
@@ -384,7 +437,7 @@ func TestDynamicMergeParentCloneFailureKeepsCommittedChildren(t *testing.T) {
 			})
 			edge(t, g, "dispatch", "worker")
 			edge(t, g, "joined", "done")
-			r, err := g.Compile(graph.Config[int]{MachineID: "dynamic-parent-clone-v1", Clone: func(state int) (int, error) {
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "dynamic-parent-clone-v1", Clone: func(state int) (int, error) {
 				if state == 5 && failParentClone.Load() {
 					return 0, errors.New("parent clone failed")
 				}
@@ -504,7 +557,7 @@ func TestDynamicFanOutRejectedMergeReplaysOnlyMerge(t *testing.T) {
 				workers.Add(1)
 				return graph.CompleteBranch(state + 1), nil
 			})
-			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", From: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
+			if err := g.AddJoin(graph.JoinSpec[int]{Name: "joined", FanOutSource: "dispatch", OnError: graph.FailExecution, Merge: func(_ context.Context, call graph.CallInfo, parent int, branches []graph.BranchResult[int]) (int, error) {
 				mergeCalls <- call
 				return parent + branches[0].State, nil
 			}}); err != nil {
@@ -515,7 +568,7 @@ func TestDynamicFanOutRejectedMergeReplaysOnlyMerge(t *testing.T) {
 			})
 			edge(t, g, "dispatch", "worker")
 			edge(t, g, "joined", "done")
-			r, err := g.Compile(graph.Config[int]{MachineID: "dynamic-replay-v1", Clone: graph.ValueClone[int]})
+			r, err := g.Compile(graph.Config[int]{DefinitionID: "dynamic-replay-v1", Clone: graph.ValueClone[int]})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -629,9 +682,9 @@ func TestDynamicFanOutTolerantJoinWithPartialFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := g.AddJoin(graph.JoinSpec[tolerantTestState]{
-				Name:    "joined",
-				From:    "dispatch",
-				OnError: graph.FailExecution,
+				Name:         "joined",
+				FanOutSource: "dispatch",
+				OnError:      graph.FailExecution,
 				Merge: func(_ context.Context, call graph.CallInfo, parent tolerantTestState, branches []graph.BranchResult[tolerantTestState]) (tolerantTestState, error) {
 					mergeCalls <- call
 					mergeResults = append([]graph.BranchResult[tolerantTestState](nil), branches...)
@@ -663,7 +716,7 @@ func TestDynamicFanOutTolerantJoinWithPartialFailures(t *testing.T) {
 			edge(t, g, "dispatch", "worker-fail")
 			edge(t, g, "joined", "done")
 
-			r, err := g.Compile(graph.Config[tolerantTestState]{MachineID: "tolerant-join-v1", Clone: cloneTolerantState})
+			r, err := g.Compile(graph.Config[tolerantTestState]{DefinitionID: "tolerant-join-v1", Clone: cloneTolerantState})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -380,7 +380,7 @@ func TestAddTeamDefinitionRejectsDuplicateRegistrations(t *testing.T) {
 	for _, name := range []string{"worker-join", "lead-join"} {
 		t.Run("join/"+name, func(t *testing.T) {
 			g := graph.New[teamState]("lead")
-			if err := g.AddJoin(graph.JoinSpec[teamState]{Name: name, From: "lead", Merge: mergeTeamResults}); err != nil {
+			if err := g.AddJoin(graph.JoinSpec[teamState]{Name: name, FanOutSource: "lead", Merge: mergeTeamResults}); err != nil {
 				t.Fatal(err)
 			}
 			if err := addTeamDefinition(g, offlineModelRegistry()); err == nil {
