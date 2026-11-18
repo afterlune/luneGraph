@@ -12,7 +12,11 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-func executionTestIndex[S any](checkpoint Checkpoint[S]) *invocationIndex {
+func testCandidate[S any](cp Checkpoint[S]) candidatePosition[S] {
+	return candidatePosition[S]{Header: cp.Header(), Final: cp.Final, Invocations: cp.Invocations, Groups: cp.Groups}
+}
+
+func executionTestIndex[S any](checkpoint candidatePosition[S]) *invocationIndex {
 	index := newInvocationIndex(checkpoint)
 	return &index
 }
@@ -35,7 +39,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("continue", func(t *testing.T) {
 		runner := makeRunner(nil)
-		checkpoint := executorTestReadyCheckpoint("source", 1)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 1))
 		err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.To(7, "next"), invocationBudget{})
 		if err != nil || checkpoint.Completed || checkpoint.Invocations[0].Node != "next" || checkpoint.Invocations[0].State != 7 || checkpoint.Invocations[0].CallID != "c3" {
 			t.Fatalf("continue = %+v, err=%v", checkpoint, err)
@@ -44,7 +48,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 
 	t.Run("wait", func(t *testing.T) {
 		runner := makeRunner(nil)
-		checkpoint := executorTestReadyCheckpoint("source", 1)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 1))
 		err := runner.applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Wait(8, "resume", "next"), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationWaiting || checkpoint.Invocations[0].State != 8 || checkpoint.Invocations[0].Continuation != "resume" || !reflect.DeepEqual(checkpoint.Invocations[0].Next, []string{"next"}) {
 			t.Fatalf("wait = %+v, %v", checkpoint, err)
@@ -59,7 +63,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 		"zero transition":      {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			checkpoint := executorTestReadyCheckpoint("source", 1)
+			checkpoint := testCandidate(executorTestReadyCheckpoint("source", 1))
 			if err := makeRunner(map[string]string{"source": "next"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", transition, invocationBudget{}); err == nil {
 				t.Fatalf("invalid transition accepted: %+v", transition)
 			}
@@ -67,7 +71,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	}
 
 	t.Run("end branch", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndBranch[int](), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded || checkpoint.Invocations[0].CallID != "" {
 			t.Fatalf("EndBranch = %+v, %v", checkpoint, err)
@@ -75,7 +79,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	t.Run("end execution", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.EndExecution(11), invocationBudget{})
 		if err != nil || !checkpoint.Completed || checkpoint.Final == nil || *checkpoint.Final != 11 || len(checkpoint.Invocations) != 0 {
 			t.Fatalf("EndExecution = %+v, err=%v", checkpoint, err)
@@ -83,7 +87,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	t.Run("return with destination", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		err := makeRunner(map[string]string{"source": "done"}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Node != "done" || checkpoint.Invocations[0].State != 12 {
 			t.Fatalf("Return route = %+v, %v", checkpoint, err)
@@ -91,7 +95,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	t.Run("return without destination", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		err := makeRunner(map[string]string{"source": ""}).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		if err != nil || checkpoint.Invocations[0].Status != InvocationEnded {
 			t.Fatalf("terminal Return = %+v, %v", checkpoint, err)
@@ -99,7 +103,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	t.Run("return outside mount", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "i1", model.Return(12), invocationBudget{})
 		var transitionErr *TransitionError
 		if !errors.As(err, &transitionErr) || !strings.Contains(err.Error(), "outside a subgraph") {
@@ -108,7 +112,7 @@ func TestApplyTransitionActionsAndSubgraphReturn(t *testing.T) {
 	})
 
 	t.Run("missing invocation", func(t *testing.T) {
-		checkpoint := executorTestReadyCheckpoint("source", 4)
+		checkpoint := testCandidate(executorTestReadyCheckpoint("source", 4))
 		if err := makeRunner(nil).applyTransition(&checkpoint, executionTestIndex(checkpoint), "missing", model.Return(0), invocationBudget{}); err == nil {
 			t.Fatal("transition accepted missing invocation")
 		}
@@ -121,31 +125,31 @@ func TestJoinTargetValidationAndRouting(t *testing.T) {
 		executorTestNode("fork", executorTestEnd, FailInvocation),
 		executorTestNode("a", executorTestEnd, FailInvocation),
 	}, []JoinSpec[int]{join}, map[string][]string{"fork": {"a", "joined"}, "a": {"joined"}}, nil, nil)
-	checkpoint := Checkpoint[int]{Groups: []ActivationGroup{{ID: "g3", JoinNode: "joined"}}}
+	checkpoint := candidatePosition[int]{Groups: []ActivationGroup{{ID: "g3", JoinNode: "joined"}}}
 	inv := &Invocation[int]{ID: "i1", Node: "fork", GroupID: "g3"}
-	if err := runner.checkJoinTargets(&checkpoint, inv, []string{"joined"}); err != nil {
+	if err := runner.checkJoinTargets(checkpoint.Groups, inv, []string{"joined"}); err != nil {
 		t.Fatalf("matching activation join rejected: %v", err)
 	}
-	if err := runner.checkJoinTargets(&checkpoint, inv, []string{"a", "joined"}); err != nil {
+	if err := runner.checkJoinTargets(checkpoint.Groups, inv, []string{"a", "joined"}); err != nil {
 		t.Fatalf("source fan-out join rejected: %v", err)
 	}
 	inv.GroupID = "missing"
-	if err := runner.checkJoinTargets(&checkpoint, inv, []string{"joined"}); err == nil {
+	if err := runner.checkJoinTargets(checkpoint.Groups, inv, []string{"joined"}); err == nil {
 		t.Fatal("join accepted invocation without its activation group")
 	}
 	inv.GroupID = "g3"
 	checkpoint.Groups[0].JoinNode = "other"
-	if err := runner.checkJoinTargets(&checkpoint, inv, []string{"joined"}); err == nil {
+	if err := runner.checkJoinTargets(checkpoint.Groups, inv, []string{"joined"}); err == nil {
 		t.Fatal("join accepted mismatched activation group")
 	}
 
 	for _, test := range []struct {
 		name string
 		inv  Invocation[int]
-		cp   Checkpoint[int]
+		cp   candidatePosition[int]
 	}{
 		{name: "outside group", inv: Invocation[int]{ID: "i1", Node: "fork"}},
-		{name: "missing group", inv: Invocation[int]{ID: "i1", Node: "a", GroupID: "g99"}, cp: Checkpoint[int]{}},
+		{name: "missing group", inv: Invocation[int]{ID: "i1", Node: "a", GroupID: "g99"}, cp: candidatePosition[int]{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := runner.setTarget(&test.cp, &test.inv, "joined"); err == nil {
@@ -153,13 +157,13 @@ func TestJoinTargetValidationAndRouting(t *testing.T) {
 			}
 		})
 	}
-	wrongGroup := Checkpoint[int]{Groups: []ActivationGroup{{ID: "g3", JoinNode: "other"}}}
+	wrongGroup := candidatePosition[int]{Groups: []ActivationGroup{{ID: "g3", JoinNode: "other"}}}
 	wrongInv := Invocation[int]{ID: "i1", Node: "a", GroupID: "g3"}
 	if err := runner.setTarget(&wrongGroup, &wrongInv, "joined"); err == nil {
 		t.Fatal("join from another group accepted")
 	}
 
-	ready := executorTestReadyCheckpoint("fork", 1)
+	ready := testCandidate(executorTestReadyCheckpoint("fork", 1))
 	ready.NextID = 3
 	if err := runner.checkTargets("fork", nil); err == nil {
 		t.Fatal("empty target list accepted")
@@ -249,7 +253,7 @@ func TestFanoutJoinAndFailureScopes(t *testing.T) {
 func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 	copyErr := errors.New("copy")
 	runner := executorTestRunner(t, "source", []NodeSpec[int]{executorTestNode("source", executorTestEnd, FailInvocation)}, nil, nil, nil, nil)
-	checkpoint := executorTestReadyCheckpoint("source", 1)
+	checkpoint := testCandidate(executorTestReadyCheckpoint("source", 1))
 	if err := runner.checkTargets("source", []string{"next"}); err == nil {
 		t.Fatal("unregistered edge accepted")
 	}
@@ -265,32 +269,32 @@ func TestCheckpointsFailuresAndExecutionLimits(t *testing.T) {
 		executorTestNode("b", executorTestEnd, FailInvocation),
 	}, nil, map[string][]string{"fork": {"a", "b"}}, nil, nil)
 	cloneFailure.clone = func(int) (int, error) { return 0, copyErr }
-	checkpoint = executorTestReadyCheckpoint("fork", 1)
+	checkpoint = testCandidate(executorTestReadyCheckpoint("fork", 1))
 	err := cloneFailure.route(&checkpoint, executionTestIndex(checkpoint), "i1", "fork", 1, []string{"a", "b"}, invocationBudget{})
 	var stateErr *stateCopyError
 	if !errors.As(err, &stateErr) || !errors.Is(err, copyErr) {
 		t.Fatalf("fan-out clone error = %v", err)
 	}
 
-	checkpoint = executorTestReadyCheckpoint("source", 1)
+	checkpoint = testCandidate(executorTestReadyCheckpoint("source", 1))
 	checkpoint.NextID = math.MaxUint64 - 1
 	if err := runner.route(&checkpoint, executionTestIndex(checkpoint), "i1", "source", 1, []string{"source", "source2"}, invocationBudget{}); !errors.Is(err, ErrExecutionLimit) {
 		t.Fatalf("fan-out ID overflow = %v", err)
 	}
 
-	checkpoint = Checkpoint[int]{Invocations: []Invocation[int]{{ID: "i1", Node: "source", Status: InvocationWaiting}}}
+	checkpoint = candidatePosition[int]{Invocations: []Invocation[int]{{ID: "i1", Node: "source", Status: InvocationWaiting}}}
 	if err := runner.recordFailure(&checkpoint, executionTestIndex(checkpoint), "missing", "source", FailInvocation, copyErr); err == nil {
 		t.Fatal("recordFailure accepted missing invocation")
 	}
-	checkpoint = executorTestReadyCheckpoint("source", 1)
+	checkpoint = testCandidate(executorTestReadyCheckpoint("source", 1))
 	if err := runner.recordFailure(&checkpoint, executionTestIndex(checkpoint), "i1", "source", FailInvocation, copyErr); err != nil || checkpoint.Invocations[0].Status != InvocationFailed {
 		t.Fatalf("local recordFailure = %+v, %v", checkpoint, err)
 	}
-	rootGroupFailure := executorTestReadyCheckpoint("source", 1)
+	rootGroupFailure := testCandidate(executorTestReadyCheckpoint("source", 1))
 	if err := runner.recordFailure(&rootGroupFailure, executionTestIndex(rootGroupFailure), "i1", "source", FailGroup, copyErr); !errors.Is(err, copyErr) || !rootGroupFailure.Completed || rootGroupFailure.Failure == nil {
 		t.Fatalf("root FailGroup = %+v, %v", rootGroupFailure, err)
 	}
-	if !errors.Is(recoveredFailure(rootGroupFailure), ErrRunFailed) || recoveredFailure(Checkpoint[int]{}) != nil {
+	if !errors.Is(recoveredFailure(Checkpoint[int]{Failure: rootGroupFailure.Failure}), ErrRunFailed) || recoveredFailure(Checkpoint[int]{}) != nil {
 		t.Fatal("recovered failure mapping incorrect")
 	}
 }

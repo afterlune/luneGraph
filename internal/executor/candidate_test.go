@@ -146,14 +146,14 @@ func TestCandidateUpsertsChangedActivationBranchRecords(t *testing.T) {
 	before := Checkpoint[int]{Groups: []ActivationGroup{{ID: "g1", Branches: []ActivationBranch{{InvocationID: "i1", Target: "worker"}}}}}
 
 	unchanged := model.Copy(before)
-	change := workspace.change(before, unchanged)
+	change := workspace.change(testCandidate(before), testCandidate(unchanged))
 	if len(change.UpsertGroups) != 0 {
 		t.Fatalf("unchanged group produced upserts: %+v", change.UpsertGroups)
 	}
 
 	after := model.Copy(before)
 	after.Groups[0].Branches[0].Error = "worker failed"
-	change = workspace.change(before, after)
+	change = workspace.change(testCandidate(before), testCandidate(after))
 	if len(change.UpsertGroups) != 1 || change.UpsertGroups[0].Branches[0].Error != "worker failed" {
 		t.Fatalf("changed branch metadata was not upserted: %+v", change.UpsertGroups)
 	}
@@ -167,8 +167,42 @@ func TestCandidateUpsertsChangedActivationBranchRecords(t *testing.T) {
 	}
 	wideAfter := model.Copy(wideBefore)
 	wideAfter.Groups[3].Branches = []ActivationBranch{{InvocationID: "i4", Target: "worker"}}
-	change = workspace.change(wideBefore, wideAfter)
+	change = workspace.change(testCandidate(wideBefore), testCandidate(wideAfter))
 	if len(change.UpsertGroups) != 1 || change.UpsertGroups[0].ID != "g4" {
 		t.Fatalf("wide group metadata change was not upserted: %+v", change.UpsertGroups)
+	}
+}
+
+func TestCandidateCommitPreservesIndependentActivation(t *testing.T) {
+	cp := nestedCandidatePosition()
+	r := executorTestRunner(t, "worker",
+		[]NodeSpec[int]{executorTestNode("worker", executorTestEnd, FailInvocation)},
+		[]JoinSpec[int]{{Name: "inner-join", FanOutSource: "worker"}}, nil, nil, nil)
+	l := newLive(cp, r)
+	candidate, err := r.resultChange(l, workResult[int]{ref: taskRef{id: "g5", join: true}, state: 42}, 0)
+	if err != nil || candidate.TerminalErr != nil {
+		t.Fatalf("build candidate = %v, %v", err, candidate.TerminalErr)
+	}
+	change := candidate.Change
+	slices.Sort(change.DeleteInvocations)
+	if !slices.Equal(change.DeleteInvocations, []string{"i6", "i7"}) || !slices.Equal(change.DeleteGroups, []string{"g5"}) {
+		t.Fatalf("unexpected deletions: invocations=%v groups=%v", change.DeleteInvocations, change.DeleteGroups)
+	}
+	store := newExecutorTestStore()
+	store.values[cp.RunID] = cp
+	if err := r.submit(context.Background(), l, change, store, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, position := range []Checkpoint[int]{l.snapshot(), store.values[cp.RunID]} {
+		if _, child := model.FindInvocation(&position, "i9"); child == nil || child.Status != InvocationReady {
+			t.Fatalf("unrelated invocation was lost: %+v", child)
+		}
+		if _, group := model.FindGroup(&position, "g8"); group == nil || len(group.Branches) != 2 {
+			t.Fatalf("unrelated group was lost: %+v", group)
+		}
+	}
+	ref, ok := l.next(true, nil)
+	if !ok || ref.join || ref.id != "i9" {
+		t.Fatalf("next independent task = %+v, %v", ref, ok)
 	}
 }

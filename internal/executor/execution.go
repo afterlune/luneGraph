@@ -8,7 +8,7 @@ import (
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id string, transition Transition[S], budget invocationBudget) error {
+func (r *Runner[S]) applyTransition(s *candidatePosition[S], index *invocationIndex, id string, transition Transition[S], budget invocationBudget) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return &TransitionError{InvocationID: id, Cause: fmt.Errorf("invocation disappeared")}
@@ -28,7 +28,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if err := r.checkTargets(source, tr.Targets); err != nil {
 			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
-		if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
+		if err := r.checkJoinTargets(s.Groups, inv, tr.Targets); err != nil {
 			return &TransitionError{InvocationID: id, Node: source, Cause: err}
 		}
 		if err := r.route(s, index, id, source, tr.State, tr.Targets, budget); err != nil {
@@ -55,12 +55,12 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 			if err := r.checkTargets(source, tr.Targets); err != nil {
 				return &TransitionError{InvocationID: id, Node: source, Cause: err}
 			}
-			if err := r.checkJoinTargets(s, inv, tr.Targets); err != nil {
+			if err := r.checkJoinTargets(s.Groups, inv, tr.Targets); err != nil {
 				return &TransitionError{InvocationID: id, Node: source, Cause: err}
 			}
 			next = append([]string(nil), tr.Targets...)
 		}
-		setWaiting(inv, tr.State, newID(s, "c"), tr.Continuation, next)
+		setWaiting(inv, tr.State, model.AllocID(&s.NextID, "c"), tr.Continuation, next)
 		return nil
 	case ActionFanOut:
 		if err := r.fanOut(s, index, inv, source, tr.State, tr.Branches, budget); err != nil {
@@ -74,7 +74,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 		if inv.GroupID == "" {
 			return &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch used outside an activation group")}
 		}
-		_, activation := group(s, inv.GroupID)
+		activation := findActivationGroup(s.Groups, inv.GroupID)
 		if activation == nil || activation.JoinNode == "" {
 			return &TransitionError{InvocationID: id, Node: source, Cause: errors.New("CompleteBranch requires a group with a join")}
 		}
@@ -119,7 +119,7 @@ func (r *Runner[S]) applyTransition(s *Checkpoint[S], index *invocationIndex, id
 	}
 }
 
-func (r *Runner[S]) applyEdgeTransition(s *Checkpoint[S], inv *Invocation[S], state S, edge CompiledEdge) error {
+func (r *Runner[S]) applyEdgeTransition(s *candidatePosition[S], inv *Invocation[S], state S, edge CompiledEdge) error {
 	source := inv.Node
 	if edge.TargetJoinIndex >= 0 {
 		if err := checkJoinDestination(inv.ID, edge, invocationJoin(s, inv)); err != nil {
@@ -167,9 +167,9 @@ func setWaiting[S any](inv *Invocation[S], state S, callID, continuation string,
 	inv.Next = next
 }
 
-func invocationJoin[S any](s *Checkpoint[S], inv *Invocation[S]) string {
+func invocationJoin[S any](s *candidatePosition[S], inv *Invocation[S]) string {
 	if inv.GroupID != "" {
-		if _, activation := group(s, inv.GroupID); activation != nil {
+		if activation := findActivationGroup(s.Groups, inv.GroupID); activation != nil {
 			return activation.JoinNode
 		}
 	}
@@ -183,7 +183,7 @@ func checkJoinDestination(invocationID string, edge CompiledEdge, expected strin
 	return nil
 }
 
-func (r *Runner[S]) checkJoinTargets(s *Checkpoint[S], inv *Invocation[S], targets []string) error {
+func (r *Runner[S]) checkJoinTargets(groups []ActivationGroup, inv *Invocation[S], targets []string) error {
 	if len(r.joins) == 0 {
 		return nil
 	}
@@ -197,7 +197,7 @@ func (r *Runner[S]) checkJoinTargets(s *Checkpoint[S], inv *Invocation[S], targe
 				expected = r.joins[n.FanOutJoinIndex].Spec.Name
 			}
 		} else if inv.GroupID != "" {
-			_, group := group(s, inv.GroupID)
+			group := findActivationGroup(groups, inv.GroupID)
 			if group != nil {
 				expected = group.JoinNode
 			}
@@ -214,7 +214,7 @@ type stateCopyError struct{ cause error }
 func (e *stateCopyError) Error() string { return e.cause.Error() }
 func (e *stateCopyError) Unwrap() error { return e.cause }
 
-func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source string, state S, targets []string, budget invocationBudget) error {
+func (r *Runner[S]) route(s *candidatePosition[S], index *invocationIndex, id, source string, state S, targets []string, budget invocationBudget) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("invocation %q disappeared", id)
@@ -260,7 +260,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
 	}
 	reserveInvocationIndex(index, s, len(targets))
-	groupID := newID(s, "g")
+	groupID := model.AllocID(&s.NextID, "g")
 	group := ActivationGroup{
 		ID:       groupID,
 		Source:   source,
@@ -269,7 +269,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		Branches: make([]ActivationBranch, len(targets)),
 	}
 	if group.JoinNode != "" {
-		group.CallID = newID(s, "c")
+		group.CallID = model.AllocID(&s.NextID, "c")
 	}
 	inv.State = state
 	inv.Status = InvocationGroup
@@ -282,7 +282,7 @@ func (r *Runner[S]) route(s *Checkpoint[S], index *invocationIndex, id, source s
 		if err != nil {
 			return &stateCopyError{cause: fmt.Errorf("clone fan-out state: %w", err)}
 		}
-		child := Invocation[S]{ID: newID(s, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
+		child := Invocation[S]{ID: model.AllocID(&s.NextID, "i"), State: childState, GroupID: groupID, BranchIndex: branchIndex}
 		group.Branches[branchIndex] = ActivationBranch{InvocationID: child.ID, Target: target}
 		appended := appendInvocation(index, s, child)
 		if err := r.setTarget(s, appended, target); err != nil {
@@ -324,16 +324,16 @@ func (r *Runner[S]) validateFanOut(sourceNode *CompiledNode[S], source string, b
 }
 
 // fanOut creates a dynamic activation from declared, independently cloned tasks.
-func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], budget invocationBudget) error {
+func (r *Runner[S]) fanOut(s *candidatePosition[S], index *invocationIndex, parent *Invocation[S], source string, parentState S, branches []Branch[S], budget invocationBudget) error {
 	join, err := r.validateFanOut(r.node(source), source, branches, budget, s.NextID)
 	if err != nil {
 		return err
 	}
 	reserveInvocationIndex(index, s, len(branches))
-	groupID := newID(s, "g")
+	groupID := model.AllocID(&s.NextID, "g")
 	activation := ActivationGroup{
 		ID:       groupID,
-		CallID:   newID(s, "c"),
+		CallID:   model.AllocID(&s.NextID, "c"),
 		Source:   source,
 		ParentID: parent.ID,
 		JoinNode: join.Spec.Name,
@@ -351,7 +351,7 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 			return &stateCopyError{cause: fmt.Errorf("clone FanOut branch %d: %w", branchIndex, err)}
 		}
 		child := Invocation[S]{
-			ID:          newID(s, "i"),
+			ID:          model.AllocID(&s.NextID, "i"),
 			State:       state,
 			Status:      InvocationReady,
 			GroupID:     groupID,
@@ -367,12 +367,12 @@ func (r *Runner[S]) fanOut(s *Checkpoint[S], index *invocationIndex, parent *Inv
 	return nil
 }
 
-func (r *Runner[S]) setTargetEdge(s *Checkpoint[S], inv *Invocation[S], edge CompiledEdge) error {
+func (r *Runner[S]) setTargetEdge(s *candidatePosition[S], inv *Invocation[S], edge CompiledEdge) error {
 	if edge.TargetJoinIndex >= 0 {
 		if inv.GroupID == "" {
 			return fmt.Errorf("invocation %q reached join %q outside a group", inv.ID, edge.Target)
 		}
-		_, group := group(s, inv.GroupID)
+		group := findActivationGroup(s.Groups, inv.GroupID)
 		if group == nil {
 			return fmt.Errorf("invocation %q has missing group %q", inv.ID, inv.GroupID)
 		}
@@ -389,13 +389,13 @@ func (r *Runner[S]) setTargetEdge(s *Checkpoint[S], inv *Invocation[S], edge Com
 			return fmt.Errorf("allocate node call ID: %w", ErrExecutionLimit)
 		}
 		inv.Status = InvocationReady
-		inv.CallID = newID(s, "c")
+		inv.CallID = model.AllocID(&s.NextID, "c")
 	}
 	inv.Node = edge.Target
 	return nil
 }
 
-func (r *Runner[S]) setTarget(s *Checkpoint[S], inv *Invocation[S], target string) error {
+func (r *Runner[S]) setTarget(s *candidatePosition[S], inv *Invocation[S], target string) error {
 	nIdx := -1
 	if idx, ok := r.nodeIndex[target]; ok {
 		nIdx = idx

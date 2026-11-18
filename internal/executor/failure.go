@@ -5,9 +5,9 @@ import (
 	"slices"
 )
 
-// recordFailure changes a candidate checkpoint. An execution-level error
+// recordFailure changes a candidate position. An execution-level error
 // leaves a terminal candidate for the caller to commit before returning.
-func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, node string, scope FailureScope, cause error) error {
+func (r *Runner[S]) recordFailure(s *candidatePosition[S], index *invocationIndex, id, node string, scope FailureScope, cause error) error {
 	_, inv := indexedInvocation(index, s, id)
 	if inv == nil {
 		return fmt.Errorf("missing failed invocation %q", id)
@@ -31,7 +31,7 @@ func (r *Runner[S]) recordFailure(s *Checkpoint[S], index *invocationIndex, id, 
 	return markInvocationFailed(s, inv, cause.Error())
 }
 
-func markInvocationFailed[S any](s *Checkpoint[S], inv *Invocation[S], message string) error {
+func markInvocationFailed[S any](s *candidatePosition[S], inv *Invocation[S], message string) error {
 	branch, activation, err := activationBranch(s, inv)
 	if err != nil {
 		return err
@@ -47,8 +47,8 @@ func markInvocationFailed[S any](s *Checkpoint[S], inv *Invocation[S], message s
 	return nil
 }
 
-func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id, message string) error {
-	_, activation := group(s, id)
+func (r *Runner[S]) failGroup(s *candidatePosition[S], index *invocationIndex, id, message string) error {
+	activation := findActivationGroup(s.Groups, id)
 	if activation == nil {
 		return fmt.Errorf("missing failed group %q", id)
 	}
@@ -62,7 +62,7 @@ func (r *Runner[S]) failGroup(s *Checkpoint[S], index *invocationIndex, id, mess
 		if removeGroups[groupID] {
 			continue
 		}
-		_, current := group(s, groupID)
+		current := findActivationGroup(s.Groups, groupID)
 		if current == nil {
 			continue
 		}

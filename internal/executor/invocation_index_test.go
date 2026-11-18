@@ -1,13 +1,13 @@
 package executor
 
 import (
-	"github.com/afterlune/luneGraph/internal/model"
+	"slices"
 	"strconv"
 	"testing"
 )
 
-func TestInvocationIndexTracksAppendCompactionAndCheckpointCopy(t *testing.T) {
-	checkpoint := Checkpoint[int]{Invocations: []Invocation[int]{
+func TestInvocationIndexTracksAppendCompactionAndCandidateCopy(t *testing.T) {
+	checkpoint := candidatePosition[int]{Invocations: []Invocation[int]{
 		{ID: "i1", State: 1},
 		{ID: "i2", State: 2},
 	}}
@@ -21,9 +21,7 @@ func TestInvocationIndexTracksAppendCompactionAndCheckpointCopy(t *testing.T) {
 	}
 	appendInvocation(&index, &checkpoint, Invocation[int]{ID: "i3", State: 3})
 
-	var spare Checkpoint[int]
-	model.CopyInto(&spare, checkpoint)
-	candidate := spare
+	candidate := candidatePosition[int]{Invocations: slices.Clone(checkpoint.Invocations)}
 	if position, invocation := indexedInvocation(&index, &candidate, "i3"); position != 2 || invocation == nil || invocation.State != 3 {
 		t.Fatalf("copied lookup = position %d, invocation %+v", position, invocation)
 	}
@@ -53,7 +51,7 @@ func TestInvocationIndexTracksAppendCompactionAndCheckpointCopy(t *testing.T) {
 }
 
 func TestInvocationIndexMapsLargeCheckpointsAndShrinks(t *testing.T) {
-	checkpoint := Checkpoint[int]{Invocations: make([]Invocation[int], 12)}
+	checkpoint := candidatePosition[int]{Invocations: make([]Invocation[int], 12)}
 	for i := range checkpoint.Invocations {
 		checkpoint.Invocations[i] = Invocation[int]{ID: "i" + strconv.Itoa(i+1), State: i + 1}
 	}

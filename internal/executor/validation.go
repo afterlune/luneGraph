@@ -107,7 +107,7 @@ func (r *Runner[S]) validateCheckpoint(s Checkpoint[S]) error {
 				if err := r.checkTargets(inv.Node, inv.Next); err != nil {
 					return invalidCheckpoint("invocation %q: %v", inv.ID, err)
 				}
-				if err := r.checkJoinTargets(&s, &inv, inv.Next); err != nil {
+				if err := r.checkJoinTargets(s.Groups, &inv, inv.Next); err != nil {
 					return invalidCheckpoint("invocation %q: %v", inv.ID, err)
 				}
 			}

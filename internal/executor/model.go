@@ -89,9 +89,3 @@ func copyCheckpoint[S any](value Checkpoint[S]) Checkpoint[S] {
 func invocation[S any](value *Checkpoint[S], id string) (int, *Invocation[S]) {
 	return model.FindInvocation(value, id)
 }
-func group[S any](value *Checkpoint[S], id string) (int, *ActivationGroup) {
-	return model.FindGroup(value, id)
-}
-func newID[S any](value *Checkpoint[S], prefix string) string {
-	return model.NewID(value, prefix)
-}

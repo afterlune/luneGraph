@@ -1,5 +1,22 @@
 package executor
 
+// candidatePosition contains only records that one callback outcome can change.
+type candidatePosition[S any] struct {
+	Header
+	Final       *S
+	Invocations []Invocation[S]
+	Groups      []ActivationGroup
+}
+
+func findActivationGroup(groups []ActivationGroup, id string) *ActivationGroup {
+	for i := range groups {
+		if groups[i].ID == id {
+			return &groups[i]
+		}
+	}
+	return nil
+}
+
 type groupWorkItem struct {
 	id       string
 	children bool
@@ -24,7 +41,7 @@ type candidateMembers struct {
 	invocationHint int
 }
 
-func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *Checkpoint[S], id string, m *candidateMembers) {
+func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *candidatePosition[S], id string, m *candidateMembers) {
 	if m.invocations != nil {
 		if m.invocations[id] {
 			return
@@ -58,7 +75,7 @@ func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *Checkpoint[S], id 
 	cp.Invocations = append(cp.Invocations, v)
 }
 
-func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], startID string, startChildren bool, m *candidateMembers) {
+func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *candidatePosition[S], startID string, startChildren bool, m *candidateMembers) {
 	w.groupQueue = append(w.groupQueue[:0], groupWorkItem{id: startID, children: startChildren})
 	for len(w.groupQueue) > 0 {
 		curr := w.groupQueue[len(w.groupQueue)-1]
@@ -110,8 +127,8 @@ func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *Checkpoint[S], startID 
 	}
 }
 
-func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joinGroupID string) Checkpoint[S] {
-	cp := l.header
+func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joinGroupID string) candidatePosition[S] {
+	cp := candidatePosition[S]{Header: l.header.Header(), Final: l.header.Final}
 	if w.beforeInv == nil {
 		w.beforeInv = w.beforeInvInline[:0]
 	}
@@ -149,7 +166,7 @@ func (w *candidateWorkspace[S]) collect(l *live[S], id string, subtree bool, joi
 }
 
 // prepare creates independent structural working slices for one outcome.
-func (w *candidateWorkspace[S]) prepare(l *live[S], id string, subtree bool, joinGroupID string) (Checkpoint[S], Checkpoint[S]) {
+func (w *candidateWorkspace[S]) prepare(l *live[S], id string, subtree bool, joinGroupID string) (candidatePosition[S], candidatePosition[S]) {
 	if w.afterInv == nil {
 		w.afterInv = w.afterInvInline[:0]
 	}
@@ -163,9 +180,9 @@ func (w *candidateWorkspace[S]) prepare(l *live[S], id string, subtree bool, joi
 	return before, after
 }
 
-func (w *candidateWorkspace[S]) change(before, after Checkpoint[S]) Change[S] {
+func (w *candidateWorkspace[S]) change(before, after candidatePosition[S]) Change[S] {
 	w.afterInv, w.afterGroups = after.Invocations, after.Groups
-	c := Change[S]{Header: after.Header(), Final: after.Final, UpsertInvocations: after.Invocations}
+	c := Change[S]{Header: after.Header, Final: after.Final, UpsertInvocations: after.Invocations}
 	if len(before.Invocations)+len(after.Invocations) < 16 {
 		for _, v := range before.Invocations {
 			found := false
