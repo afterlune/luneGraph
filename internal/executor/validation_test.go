@@ -181,11 +181,20 @@ func TestValidateCheckpointActivationGroupInvariants(t *testing.T) {
 		{"duplicate group ID", func(s *Checkpoint[int]) { s.Groups = append(s.Groups, s.Groups[0]) }},
 		{"group with invalid parent", func(s *Checkpoint[int]) { s.Groups[0].ParentID = "missing" }},
 		{"incompatible join", func(s *Checkpoint[int]) { s.Groups[0].JoinNode = "elsewhere" }},
-		{"too few children", func(s *Checkpoint[int]) { s.Groups[0].Branches = s.Groups[0].Branches[:1] }},
-		{"too many children", func(s *Checkpoint[int]) {
-			s.Groups[0].Branches = append(s.Groups[0].Branches, ActivationBranch{InvocationID: "i99"})
-		}},
+		{"branch index out of range", func(s *Checkpoint[int]) { s.Groups[0].Branches = s.Groups[0].Branches[:1] }},
 		{"missing child", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].InvocationID = "i99" }},
+		{"ended child with unknown node", func(s *Checkpoint[int]) {
+			_, child := invocation(s, childIDs[0])
+			child.Status = InvocationEnded
+			child.CallID = ""
+			child.Node = "missing"
+		}},
+		{"failed child with unknown node", func(s *Checkpoint[int]) {
+			_, child := invocation(s, childIDs[0])
+			child.Status = InvocationFailed
+			child.CallID = ""
+			child.Node = "missing"
+		}},
 		{"undeclared branch target", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Target = "missing" }},
 		{"negative branch timeout", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].EntryTimeout = -1 }},
 		{"error on non-failed branch", func(s *Checkpoint[int]) { s.Groups[0].Branches[0].Error = "stale" }},

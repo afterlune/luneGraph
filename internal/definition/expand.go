@@ -136,16 +136,12 @@ func expand[S any](g *Graph[S]) (model.CompiledGraph[S], error) {
 	}
 
 	for _, c := range g.continuations {
-		for scope, st := range scopeMaps {
-			if scope == "" {
-				if !strings.Contains(c.Key, "/") {
-					st.continuations[c.Key] = c.Key
-				}
-			} else if strings.HasPrefix(c.Key, scope+"/") {
-				localKey := strings.TrimPrefix(c.Key, scope+"/")
-				st.continuations[localKey] = c.Key
-			}
+		st := getScope(c.MountPrefix)
+		localKey := c.Key
+		if c.MountPrefix != "" {
+			localKey = strings.TrimPrefix(c.Key, c.MountPrefix+"/")
 		}
+		st.continuations[localKey] = c.Key
 	}
 
 	type rawNode struct {
@@ -184,7 +180,10 @@ func expand[S any](g *Graph[S]) (model.CompiledGraph[S], error) {
 		return strings.Compare(a.Name, b.Name)
 	})
 
-	allContinuations := slices.Clone(g.continuations)
+	allContinuations := make([]model.CompiledContinuation[S], len(g.continuations))
+	for i, c := range g.continuations {
+		allContinuations[i] = model.CompiledContinuation[S]{Key: c.Key, Cont: c.Cont}
+	}
 	slices.SortFunc(allContinuations, func(a, b model.CompiledContinuation[S]) int {
 		return strings.Compare(a.Key, b.Key)
 	})

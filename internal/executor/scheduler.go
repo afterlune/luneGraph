@@ -92,10 +92,11 @@ func (r *Runner[S]) driveLive(ctx context.Context, l *live[S], opts Options, obs
 				if l.header.Completed {
 					return finish(statusOf(l.header, l.readyNodes, false), nil)
 				}
-				cancelInvalidTasks(l, running)
+				reconcileTasks(l, prepared, running)
 				continue
 			}
 			if l.header.Revision == math.MaxUint64 || (!ref.isJoin && l.header.Steps == math.MaxUint64) {
+				l.enqueue(ref)
 				return finish(StatusFailed, ErrExecutionLimit)
 			}
 

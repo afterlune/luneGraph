@@ -56,6 +56,12 @@ type edgeSpec struct {
 	to   string
 }
 
+type continuationSpec[S any] struct {
+	Key         string
+	MountPrefix string
+	Cont        model.Continuation[S]
+}
+
 // Graph is a mutable builder backed by a single flat vector of vertices and index-based edges.
 type Graph[S any] struct {
 	id                 uint64
@@ -64,7 +70,7 @@ type Graph[S any] struct {
 	vertices           []Vertex[S]
 	edges              []Edge
 	mountEdges         []edgeSpec
-	continuations      []model.CompiledContinuation[S]
+	continuations      []continuationSpec[S]
 	mounts             []MountInfo
 	ancestorIDs        []uint64
 	hasRecursiveMount  bool
@@ -309,6 +315,11 @@ func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 		qKey := qualify(name, c.Key)
 		newC := c
 		newC.Key = qKey
+		if newC.MountPrefix == "" {
+			newC.MountPrefix = name
+		} else {
+			newC.MountPrefix = qualify(name, newC.MountPrefix)
+		}
 		g.continuations = append(g.continuations, newC)
 	}
 
@@ -426,7 +437,7 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 			return fmt.Errorf("duplicate continuation %q", key)
 		}
 	}
-	g.continuations = append(g.continuations, model.CompiledContinuation[S]{
+	g.continuations = append(g.continuations, continuationSpec[S]{
 		Key: key,
 		Cont: model.Continuation[S]{
 			Decode: func(payload []byte) (any, error) {

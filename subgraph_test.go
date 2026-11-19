@@ -450,3 +450,74 @@ func TestCompiledSubgraphIsIndependentOfLaterBuilderChanges(t *testing.T) {
 		t.Fatalf("result = %+v, error = %v", out, err)
 	}
 }
+
+func TestContinuationScopeBindingsWithSlashesAndNestedSubgraphs(t *testing.T) {
+	t.Run("root continuation key with slash", func(t *testing.T) {
+		root := graph.New[int]("ask")
+		node(t, root, "ask", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.Wait(state, "approval/v1", "done"), nil
+		})
+		node(t, root, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.EndExecution(state), nil
+		})
+		edge(t, root, "ask", "done")
+		if err := graph.RegisterContinuation(root, "approval/v1", func(payload []byte) (int, error) {
+			return strconv.Atoi(string(payload))
+		}, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) {
+			return state + value, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		runner := intRunner(t, root)
+		exec, paused, err := runner.Start(context.Background(), "slash-cont", 10, nil, graph.Options{})
+		if err != nil || paused.Status != graph.StatusWaiting {
+			t.Fatalf("Start = %+v, %v", paused, err)
+		}
+		pending := exec.Pending()
+		if len(pending) != 1 || pending[0].Continuation != "approval/v1" {
+			t.Fatalf("Pending = %+v", pending)
+		}
+		resumed, err := exec.Advance(context.Background(), []graph.ResumeInput{{
+			InvocationID: pending[0].InvocationID,
+			CallID:       pending[0].CallID,
+			Payload:      []byte("5"),
+		}}, graph.Options{})
+		if err != nil || resumed.Status != graph.StatusCompleted || resumed.Final == nil || *resumed.Final != 15 {
+			t.Fatalf("Advance = %+v, %v", resumed, err)
+		}
+	})
+
+	t.Run("nested subgraph continuation does not leak to outer subgraph", func(t *testing.T) {
+		inner := graph.New[int]("work")
+		node(t, inner, "work", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.Return(state), nil
+		})
+		if err := graph.RegisterContinuation(inner, "secret", func([]byte) (int, error) {
+			return 1, nil
+		}, func(_ context.Context, _ graph.CallInfo, state, value int) (int, error) {
+			return state + value, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		outer := graph.New[int]("leak")
+		node(t, outer, "leak", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+			return graph.Wait(state, "inner/secret", "inner"), nil
+		})
+		if err := outer.AddSubgraph("inner", inner); err != nil {
+			t.Fatal(err)
+		}
+		edge(t, outer, "leak", "inner")
+
+		root := graph.New[int]("outer")
+		if err := root.AddSubgraph("outer", outer); err != nil {
+			t.Fatal(err)
+		}
+		_, out, err := intRunner(t, root).Start(context.Background(), "leak-run", 0, nil, graph.Options{})
+		var transitionErr *graph.TransitionError
+		if !errors.As(err, &transitionErr) || out.Status != graph.StatusFailed {
+			t.Fatalf("expected TransitionError when outer references inner continuation, got %+v, %v", out, err)
+		}
+	})
+}

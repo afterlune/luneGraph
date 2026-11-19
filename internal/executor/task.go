@@ -34,9 +34,7 @@ type workerTask[S any] struct {
 func (r *Runner[S]) executeTask(t workerTask[S]) workResult[S] {
 	out := workResult[S]{ref: t.ref, callID: t.call.CallID, node: t.node}
 	if t.ref.isJoin {
-		if t.joinSpec.Merge != nil {
-			out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.joinSpec, t.state, t.branches)
-		}
+		out.state, out.err = r.observedMerge(t.ctx, t.obs, t.revision, t.call, t.joinSpec, t.state, t.branches)
 	} else if t.obs == nil {
 		out.transition, out.err = r.runNode(t.ctx, t.call, t.node.Spec, t.state)
 	} else {
@@ -57,11 +55,16 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 		if !exists {
 			return t, invalidCheckpoint("join group %q parent %q missing", ref.id, g.ParentID)
 		}
+		var j *CompiledJoin[S]
 		if lg.join != nil {
-			t.joinSpec = lg.join.Spec
-		} else if j := r.join(g.JoinNode); j != nil {
-			t.joinSpec = j.Spec
+			j = lg.join
+		} else {
+			j = r.join(g.JoinNode)
 		}
+		if j == nil {
+			return t, invalidCheckpoint("join group %q has unknown join %q", ref.id, g.JoinNode)
+		}
+		t.joinSpec = j.Spec
 		t.timeout = t.joinSpec.Timeout
 		t.call = CallInfo{RunID: l.header.RunID, InvocationID: parent.ID, CallID: g.CallID, Node: g.JoinNode, Step: l.header.Steps, BranchIndex: parent.BranchIndex}
 		if t.joinSpec.CanMerge != nil && lg.remaining > 0 {

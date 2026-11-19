@@ -118,9 +118,16 @@ func (r *Runner[S]) validateCheckpoint(cp Checkpoint[S]) error {
 			if r.node(inv.Node) == nil {
 				return invalidCheckpoint("group parent %q has unknown node", inv.ID)
 			}
-		case InvocationJoined, InvocationEnded, InvocationFailed:
+		case InvocationJoined:
 			if inv.CallID != "" {
 				return invalidCheckpoint("inactive invocation %q has a callback ID", inv.ID)
+			}
+		case InvocationEnded, InvocationFailed:
+			if inv.CallID != "" {
+				return invalidCheckpoint("inactive invocation %q has a callback ID", inv.ID)
+			}
+			if r.node(inv.Node) == nil {
+				return invalidCheckpoint("invocation %q has unknown node %q", inv.ID, inv.Node)
 			}
 		default:
 			return invalidCheckpoint("invocation %q has invalid status", inv.ID)

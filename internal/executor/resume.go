@@ -111,7 +111,7 @@ func (r *Runner[S]) advanceLive(ctx context.Context, l *live[S], inputs []Resume
 		}
 		inv, ok := l.getInvocation(input.id)
 		if !ok || inv.Status != InvocationWaiting {
-			return r.resultFromLiveWithErr(l, StatusFailed, fmt.Errorf("%w: invocation %q is no longer waiting", ErrInvalidResumeInput, input.id))
+			continue
 		}
 		state, err := r.cloneState(inv.State, inv.ID)
 		if err != nil {

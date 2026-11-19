@@ -73,7 +73,7 @@ func (r *Runner[S]) Recover(ctx context.Context, runID string, inputs []ResumeIn
 			result, retErr = r.resultFromLiveWithErr(l, StatusFailed, failure)
 			return execution, result, retErr
 		}
-		status := statusOf(checkpoint.Header(), 0, false)
+		status := statusOf(l.header, 0, false)
 		result, retErr = r.resultFromLiveWithErr(l, status, nil)
 		return execution, result, retErr
 	}
