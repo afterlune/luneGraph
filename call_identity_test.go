@@ -168,8 +168,8 @@ func TestCallInfoMetadata(t *testing.T) {
 	var joinCalls []graph.CallInfo
 	var contCalls []graph.CallInfo
 
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
 		nodeCalls = append(nodeCalls, call)
 		return graph.To(state, "b0", "b1"), nil
 	})
@@ -183,7 +183,7 @@ func TestCallInfoMetadata(t *testing.T) {
 	})
 	if err := g.AddJoin(graph.JoinSpec[int]{
 		Name:         "join",
-		FanOutSource: "start",
+		FanOutSource: graph.Start,
 		Merge: func(_ context.Context, call graph.CallInfo, _ int, branches []graph.BranchResult[int]) (int, error) {
 			values := graph.BranchValues(branches)
 			joinCalls = append(joinCalls, call)
@@ -200,8 +200,8 @@ func TestCallInfoMetadata(t *testing.T) {
 		nodeCalls = append(nodeCalls, call)
 		return graph.EndExecution(state), nil
 	})
-	edge(t, g, "start", "b0")
-	edge(t, g, "start", "b1")
+	edge(t, g, graph.Start, "b0")
+	edge(t, g, graph.Start, "b1")
 	edge(t, g, "b0", "join")
 	edge(t, g, "b1", "join")
 	edge(t, g, "join", "pause")

@@ -116,6 +116,9 @@ const (
 	BudgetMaxInvocations = model.BudgetMaxInvocations
 
 	CheckpointFormatVersion = model.CheckpointFormatVersion
+
+	// Start is the conventional name for a graph's initial entry node.
+	Start = model.Start
 )
 
 var (

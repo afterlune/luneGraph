@@ -147,8 +147,8 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parent := New[int]("start")
-	addDefinitionNode(t, parent, "start", func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
+	parent := New[int](model.Start)
+	addDefinitionNode(t, parent, model.Start, func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
 		return model.To(state, "worker"), nil
 	})
 	addDefinitionNode(t, parent, "after", func(_ context.Context, _ model.CallInfo, state int) (model.Transition[int], error) {
@@ -157,23 +157,23 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 	if err := parent.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	addDefinitionEdge(t, parent, "start", "worker")
+	addDefinitionEdge(t, parent, model.Start, "worker")
 	addDefinitionEdge(t, parent, "worker", "after")
 
 	compiled, err := expand(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compiled.Entry != "start" || len(compiled.Nodes) != 4 {
+	if compiled.Entry != model.Start || len(compiled.Nodes) != 4 {
 		t.Fatalf("compiled graph entry=%q nodes=%v", compiled.Entry, compiled.Nodes)
 	}
-	if !hasCompiledEdge(compiled, "start", "worker/begin") {
+	if !hasCompiledEdge(compiled, model.Start, "worker/begin") {
 		t.Fatalf("parent edge was not expanded: nodes=%v", compiled.Nodes)
 	}
 	if findCompiledNode(compiled, "worker") != nil {
 		t.Fatalf("mount alias became a runtime source")
 	}
-	startNode := findCompiledNode(compiled, "start")
+	startNode := findCompiledNode(compiled, model.Start)
 	beginNode := findCompiledNode(compiled, "worker/begin")
 	finishNode := findCompiledNode(compiled, "worker/finish")
 	if !hasCompiledEdge(compiled, "worker/begin", "worker/finish") || beginNode.ReturnEdge.Target != "after" || finishNode.ReturnEdge.Target != "after" {

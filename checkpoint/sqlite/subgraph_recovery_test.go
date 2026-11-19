@@ -44,8 +44,8 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		parent := graph.New[int]("start")
-		if err := parent.AddNode(graph.NodeSpec[int]{Name: "start", Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+		parent := graph.New[int](graph.Start)
+		if err := parent.AddNode(graph.NodeSpec[int]{Name: graph.Start, Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 			return graph.To(state, "worker"), nil
 		}}); err != nil {
 			t.Fatal(err)
@@ -58,7 +58,7 @@ func TestSubgraphContinuationRecoversAfterReopen(t *testing.T) {
 		if err := parent.AddSubgraph("worker", child); err != nil {
 			t.Fatal(err)
 		}
-		if err := parent.AddEdge("start", "worker"); err != nil {
+		if err := parent.AddEdge(graph.Start, "worker"); err != nil {
 			t.Fatal(err)
 		}
 		if err := parent.AddEdge("worker", "after"); err != nil {

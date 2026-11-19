@@ -157,9 +157,9 @@ func TestDynamicBranchTimeoutOverride(t *testing.T) {
 func TestNodeTimeoutEscapeDetection(t *testing.T) {
 	// A node that ignores ctx and returns nil error after sleeping past its deadline
 	// must be caught by the runtime and reported as DeadlineExceeded.
-	g := graph.New[int]("start")
+	g := graph.New[int](graph.Start)
 	if err := g.AddNode(graph.NodeSpec[int]{
-		Name:    "start",
+		Name:    graph.Start,
 		Timeout: 10 * time.Millisecond,
 		OnError: graph.FailExecution,
 		Run: func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {

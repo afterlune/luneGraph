@@ -15,8 +15,8 @@ func TestSubgraphEnterAndReturn(t *testing.T) {
 		return graph.Return(state + 3), nil
 	})
 
-	parent := graph.New[int]("start")
-	node(t, parent, "start", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+	parent := graph.New[int](graph.Start)
+	node(t, parent, graph.Start, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "normalize"), nil
 	})
 	node(t, parent, "after", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
@@ -25,7 +25,7 @@ func TestSubgraphEnterAndReturn(t *testing.T) {
 	if err := parent.AddSubgraph("normalize", child); err != nil {
 		t.Fatal(err)
 	}
-	edge(t, parent, "start", "normalize")
+	edge(t, parent, graph.Start, "normalize")
 	edge(t, parent, "normalize", "after")
 	_, out, err := intRunner(t, parent).Start(context.Background(), "subgraph", 4, nil, graph.Options{})
 	if err != nil || out.Status != graph.StatusCompleted || out.Final == nil || *out.Final != 7 {
@@ -126,8 +126,8 @@ func TestNestedAndRepeatedSubgraphsHaveIndependentNames(t *testing.T) {
 		return graph.Return(state + 1), nil
 	})
 
-	repeated := graph.New[int]("start")
-	node(t, repeated, "start", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+	repeated := graph.New[int](graph.Start)
+	node(t, repeated, graph.Start, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "first"), nil
 	})
 	node(t, repeated, "done", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
@@ -138,7 +138,7 @@ func TestNestedAndRepeatedSubgraphsHaveIndependentNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	edge(t, repeated, "start", "first")
+	edge(t, repeated, graph.Start, "first")
 	edge(t, repeated, "first", "second")
 	edge(t, repeated, "second", "done")
 	runner := intRunner(t, repeated)
@@ -284,8 +284,8 @@ func TestSubgraphContinuationRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := graph.New[int]("start")
-	node(t, root, "start", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
+	root := graph.New[int](graph.Start)
+	node(t, root, graph.Start, func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
 		return graph.To(state, "worker"), nil
 	})
 	node(t, root, "after", func(_ context.Context, _ graph.CallInfo, state int) (graph.Transition[int], error) {
@@ -294,7 +294,7 @@ func TestSubgraphContinuationRecovers(t *testing.T) {
 	if err := root.AddSubgraph("worker", child); err != nil {
 		t.Fatal(err)
 	}
-	edge(t, root, "start", "worker")
+	edge(t, root, graph.Start, "worker")
 	edge(t, root, "worker", "after")
 	runner := intRunner(t, root)
 	pausedExecution, paused, err := runner.Start(context.Background(), "subgraph-wait", 4, store, graph.Options{})

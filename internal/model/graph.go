@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// Start is the conventional name for a graph's initial entry node.
+const Start = "start"
+
 // NodeFunc performs one invocation and chooses its next control action. CallInfo
 // carries a stable callback ID across recovery replays.
 type NodeFunc[S any] func(context.Context, CallInfo, S) (Transition[S], error)

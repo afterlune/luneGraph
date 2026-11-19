@@ -375,14 +375,14 @@ func TestRegisterJSONContinuation(t *testing.T) {
 	type ResumePayload struct {
 		Delta int `json:"delta"`
 	}
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "increment", "end"), nil
 	})
 	node(t, g, "end", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndExecution(v), nil
 	})
-	edge(t, g, "start", "end")
+	edge(t, g, graph.Start, "end")
 	if err := graph.RegisterJSONContinuation(g, "increment", func(_ context.Context, _ graph.CallInfo, s int, p ResumePayload) (int, error) {
 		return s + p.Delta, nil
 	}); err != nil {
@@ -405,12 +405,12 @@ func TestRegisterJSONContinuation(t *testing.T) {
 }
 
 func TestRunnerFork(t *testing.T) {
-	g := graph.New[int]("start")
+	g := graph.New[int](graph.Start)
 	startCalls := 0
 	stepCalls := 0
 	applyCalls := 0
 	finishCalls := 0
-	node(t, g, "start", func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
+	node(t, g, graph.Start, func(_ context.Context, call graph.CallInfo, state int) (graph.Transition[int], error) {
 		startCalls++
 		return graph.To(state+1, "step1"), nil
 	})
@@ -422,7 +422,7 @@ func TestRunnerFork(t *testing.T) {
 		finishCalls++
 		return graph.EndExecution(state), nil
 	})
-	edge(t, g, "start", "step1")
+	edge(t, g, graph.Start, "step1")
 	edge(t, g, "step1", "finish")
 	if err := graph.RegisterJSONContinuation(g, "input", func(_ context.Context, call graph.CallInfo, state, delta int) (int, error) {
 		applyCalls++
@@ -509,8 +509,8 @@ func TestRunnerFork(t *testing.T) {
 }
 
 func TestRunnerForkEdgeCases(t *testing.T) {
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndExecution(v), nil
 	})
 	r := intRunner(t, g)
@@ -525,7 +525,7 @@ func TestRunnerForkEdgeCases(t *testing.T) {
 		Revision:      1,
 		NextID:        3,
 		Invocations: []graph.Invocation[int]{
-			{ID: "i1", CallID: "c2", Node: "start", Status: graph.InvocationReady},
+			{ID: "i1", CallID: "c2", Node: graph.Start, Status: graph.InvocationReady},
 		},
 	}
 
@@ -597,8 +597,8 @@ func TestExportMermaid(t *testing.T) {
 		return graph.Return(v), nil
 	})
 
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.To(v, "worker"), nil
 	})
 	if err := g.AddSubgraph("worker", child); err != nil {
@@ -607,7 +607,7 @@ func TestExportMermaid(t *testing.T) {
 	node(t, g, "finish", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndExecution(v), nil
 	})
-	edge(t, g, "start", "worker")
+	edge(t, g, graph.Start, "worker")
 	edge(t, g, "worker", "finish")
 
 	builderDiagram, diagramErr := g.ExportMermaid()

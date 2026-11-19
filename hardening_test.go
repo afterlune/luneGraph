@@ -54,12 +54,12 @@ func TestIllegalTransitionIsTopLevel(t *testing.T) {
 		graph.To(1, "missing"),
 		graph.Wait(1, "missing", "next"),
 	} {
-		g := graph.New[int]("start")
-		node(t, g, "start", func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) { return tr, nil })
+		g := graph.New[int](graph.Start)
+		node(t, g, graph.Start, func(context.Context, graph.CallInfo, int) (graph.Transition[int], error) { return tr, nil })
 		node(t, g, "next", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 			return graph.EndExecution(v), nil
 		})
-		edge(t, g, "start", "next")
+		edge(t, g, graph.Start, "next")
 		_, out, err := intRunner(t, g).Start(context.Background(), "bad-transition", 0, nil, graph.Options{})
 		var transitionErr *graph.TransitionError
 		if !errors.As(err, &transitionErr) || out.Header.Revision != 1 || out.Header.Steps != 0 || (out.Header.Failure != nil || out.Header.HadLocalFailures) {
@@ -69,8 +69,8 @@ func TestIllegalTransitionIsTopLevel(t *testing.T) {
 }
 
 func TestCloneAndMergePanics(t *testing.T) {
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.EndExecution(v), nil
 	})
 	r, err := g.Compile(graph.Config[int]{DefinitionID: "panic-clone", Clone: func(int) (int, error) { panic("clone") }})
@@ -131,8 +131,8 @@ func TestCloneAndMergePanics(t *testing.T) {
 }
 
 func TestWrongJoinIsTransitionError(t *testing.T) {
-	g := graph.New[int]("start")
-	node(t, g, "start", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
+	g := graph.New[int](graph.Start)
+	node(t, g, graph.Start, func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
 		return graph.Wait(v, "input", "join"), nil
 	})
 	node(t, g, "other", func(_ context.Context, _ graph.CallInfo, v int) (graph.Transition[int], error) {
@@ -143,7 +143,7 @@ func TestWrongJoinIsTransitionError(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	edge(t, g, "start", "join")
+	edge(t, g, graph.Start, "join")
 	if err := graph.RegisterContinuation(g, "input", func([]byte) (int, error) { return 0, nil }, func(_ context.Context, _ graph.CallInfo, state, _ int) (int, error) { return state, nil }); err != nil {
 		t.Fatal(err)
 	}
