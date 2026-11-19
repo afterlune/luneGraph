@@ -6,10 +6,9 @@ import (
 )
 
 type taskRef struct {
-	id      string
-	slot    int
-	nodeIdx int
-	isJoin  bool
+	id     string
+	slot   int
+	isJoin bool
 }
 
 // readyQueue owns FIFO storage only. The live position decides task eligibility.

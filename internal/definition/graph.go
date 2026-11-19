@@ -8,179 +8,43 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync/atomic"
 
 	"github.com/afterlune/luneGraph/internal/diagram"
 	"github.com/afterlune/luneGraph/internal/executor"
 	"github.com/afterlune/luneGraph/internal/model"
 )
 
-var nextGraphID atomic.Uint64
-
-// VertexKind identifies whether a vertex in the flat vector is a Node or a Join.
-type VertexKind uint8
-
-const (
-	VertexNode VertexKind = iota
-	VertexJoin
-)
-
-// Vertex stores one node or join in the flat vector.
-type Vertex[S any] struct {
-	Kind         VertexKind
-	Name         string
-	Node         model.NodeSpec[S]
-	Join         model.JoinSpec[S]
-	MountPrefix  string
-	ReturnTarget string
-	Mounted      bool
-}
-
-// Edge represents a directed transition between two vertices by integer index.
-type Edge struct {
-	From int
-	To   int
-}
-
-// MountInfo tracks the index range and entry of a flattened subgraph.
-type MountInfo struct {
-	Name         string
-	EntryIdx     int
-	ChildStart   int
-	ChildEnd     int
-	ReturnTarget string
-}
-
-type edgeSpec struct {
-	from string
-	to   string
-}
-
-type continuationSpec[S any] struct {
-	Key         string
-	MountPrefix string
-	Cont        model.Continuation[S]
-}
-
-// Graph is a mutable builder backed by a single flat vector of vertices and index-based edges.
+// Graph is a self-referential mutable builder; each mounted subgraph is a *Graph[S].
+// Compile validates and copies its definition tree into an immutable Runner.
 type Graph[S any] struct {
-	id                 uint64
-	entry              string
-	entryIdx           int
-	vertices           []Vertex[S]
-	edges              []Edge
-	mountEdges         []edgeSpec
-	continuations      []continuationSpec[S]
-	mounts             []MountInfo
-	ancestorIDs        []uint64
-	hasRecursiveMount  bool
-	recursiveMountName string
+	entry         string
+	nodes         map[string]model.NodeSpec[S]
+	joins         map[string]model.JoinSpec[S]
+	subgraphs     map[string]*Graph[S]
+	edges         map[string]map[string]struct{}
+	continuations map[string]model.Continuation[S]
 }
 
 // New creates a graph builder with the given entry vertex name.
 func New[S any](entry string) *Graph[S] {
 	return &Graph[S]{
-		id:       nextGraphID.Add(1),
-		entry:    entry,
-		entryIdx: -1,
+		entry:         entry,
+		nodes:         make(map[string]model.NodeSpec[S]),
+		joins:         make(map[string]model.JoinSpec[S]),
+		subgraphs:     make(map[string]*Graph[S]),
+		edges:         make(map[string]map[string]struct{}),
+		continuations: make(map[string]model.Continuation[S]),
 	}
-}
-
-func (g *Graph[S]) hasAncestor(id uint64) bool {
-	return slices.Contains(g.ancestorIDs, id)
-}
-
-func (g *Graph[S]) addAncestor(id uint64) {
-	if !g.hasAncestor(id) {
-		g.ancestorIDs = append(g.ancestorIDs, id)
-	}
-}
-
-func (g *Graph[S]) entryVertexIdx() int {
-	if g == nil || g.entry == "" {
-		return -1
-	}
-	for i := range g.vertices {
-		if g.vertices[i].Name == g.entry {
-			return i
-		}
-	}
-	for _, m := range g.mounts {
-		if m.Name == g.entry {
-			return m.EntryIdx
-		}
-	}
-	return -1
-}
-
-func (g *Graph[S]) isNode(name string) bool {
-	for i := range g.vertices {
-		if g.vertices[i].Name == name && g.vertices[i].Kind == VertexNode {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Graph[S]) isJoin(name string) bool {
-	for i := range g.vertices {
-		if g.vertices[i].Name == name && g.vertices[i].Kind == VertexJoin {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Graph[S]) isSubgraph(name string) bool {
-	for i := range g.mounts {
-		if g.mounts[i].Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Graph[S]) isRootNode(name string) bool {
-	for i := range g.vertices {
-		if g.vertices[i].Name == name && !g.vertices[i].Mounted && g.vertices[i].Kind == VertexNode {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Graph[S]) isRootJoin(name string) bool {
-	for i := range g.vertices {
-		if g.vertices[i].Name == name && !g.vertices[i].Mounted && g.vertices[i].Kind == VertexJoin {
-			return true
-		}
-	}
-	return false
 }
 
 func (g *Graph[S]) occupied(name string) bool {
-	return g.isRootNode(name) || g.isRootJoin(name) || g.isSubgraph(name)
+	_, node := g.nodes[name]
+	_, join := g.joins[name]
+	_, subgraph := g.subgraphs[name]
+	return node || join || subgraph
 }
 
-func (g *Graph[S]) findVertexIdx(name string) int {
-	for i := range g.vertices {
-		if g.vertices[i].Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
-func (g *Graph[S]) findMountIdx(name string) int {
-	for i := range g.mounts {
-		if g.mounts[i].Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
-// AddNode registers a named node into the flat vertex vector.
+// AddNode registers a named node.
 func (g *Graph[S]) AddNode(spec model.NodeSpec[S]) error {
 	if g == nil {
 		return errors.New("graph is nil")
@@ -200,19 +64,14 @@ func (g *Graph[S]) AddNode(spec model.NodeSpec[S]) error {
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}
-	idx := len(g.vertices)
-	if spec.Name == g.entry {
-		g.entryIdx = idx
+	if g.nodes == nil {
+		g.nodes = make(map[string]model.NodeSpec[S])
 	}
-	g.vertices = append(g.vertices, Vertex[S]{
-		Kind: VertexNode,
-		Name: spec.Name,
-		Node: spec,
-	})
+	g.nodes[spec.Name] = spec
 	return nil
 }
 
-// AddJoin registers a join into the flat vertex vector for one fan-out source.
+// AddJoin registers a join for one fan-out source.
 func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	if g == nil {
 		return errors.New("graph is nil")
@@ -235,19 +94,16 @@ func (g *Graph[S]) AddJoin(spec model.JoinSpec[S]) error {
 	if g.occupied(spec.Name) {
 		return fmt.Errorf("duplicate vertex %q", spec.Name)
 	}
-	idx := len(g.vertices)
-	if spec.Name == g.entry {
-		g.entryIdx = idx
+	if g.joins == nil {
+		g.joins = make(map[string]model.JoinSpec[S])
 	}
-	g.vertices = append(g.vertices, Vertex[S]{
-		Kind: VertexJoin,
-		Name: spec.Name,
-		Join: spec,
-	})
+	g.joins[spec.Name] = spec
 	return nil
 }
 
-// AddSubgraph flattens child into the parent graph's single vertex vector with prefix names.
+// AddSubgraph mounts child at name. The child must use the same state type.
+// A mounted graph may have zero or one outgoing edge from its mount vertex;
+// that edge is the destination of a Return transition.
 func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 	if g == nil {
 		return errors.New("graph is nil")
@@ -261,100 +117,14 @@ func (g *Graph[S]) AddSubgraph(name string, child *Graph[S]) error {
 	if g.occupied(name) {
 		return fmt.Errorf("duplicate vertex %q", name)
 	}
-
-	// Recursive subgraph cycle detection
-	if child == g || g.hasAncestor(child.id) || child.hasRecursiveMount {
-		g.hasRecursiveMount = true
-		g.recursiveMountName = name
-		child.hasRecursiveMount = true
-		child.recursiveMountName = name
-		return nil
+	if g.subgraphs == nil {
+		g.subgraphs = make(map[string]*Graph[S])
 	}
-	child.addAncestor(g.id)
-	for _, anc := range g.ancestorIDs {
-		child.addAncestor(anc)
-	}
-
-	baseIdx := len(g.vertices)
-	origEntryIdx := child.entryVertexIdx()
-	childEntryIdx := -1
-	if origEntryIdx >= 0 {
-		childEntryIdx = baseIdx + origEntryIdx
-	}
-
-	for _, v := range child.vertices {
-		qName := qualify(name, v.Name)
-		newV := v
-		newV.Name = qName
-		newV.Mounted = true
-		if newV.MountPrefix == "" {
-			newV.MountPrefix = name
-		} else {
-			newV.MountPrefix = qualify(name, newV.MountPrefix)
-		}
-		if newV.ReturnTarget != "" {
-			newV.ReturnTarget = qualify(name, newV.ReturnTarget)
-		}
-		if newV.Kind == VertexJoin {
-			if newV.Join.FanOutSource != "" {
-				newV.Join.FanOutSource = qualify(name, newV.Join.FanOutSource)
-			}
-			newV.Join.Name = qName
-		}
-		g.vertices = append(g.vertices, newV)
-	}
-
-	for _, e := range child.edges {
-		g.edges = append(g.edges, Edge{
-			From: baseIdx + e.From,
-			To:   baseIdx + e.To,
-		})
-	}
-
-	for _, c := range child.continuations {
-		qKey := qualify(name, c.Key)
-		newC := c
-		newC.Key = qKey
-		if newC.MountPrefix == "" {
-			newC.MountPrefix = name
-		} else {
-			newC.MountPrefix = qualify(name, newC.MountPrefix)
-		}
-		g.continuations = append(g.continuations, newC)
-	}
-
-	for _, m := range child.mounts {
-		retTarget := m.ReturnTarget
-		if retTarget != "" {
-			retTarget = qualify(name, retTarget)
-		}
-		childMountEntry := -1
-		if m.EntryIdx >= 0 {
-			childMountEntry = baseIdx + m.EntryIdx
-		}
-		g.mounts = append(g.mounts, MountInfo{
-			Name:         qualify(name, m.Name),
-			EntryIdx:     childMountEntry,
-			ChildStart:   baseIdx + m.ChildStart,
-			ChildEnd:     baseIdx + m.ChildEnd,
-			ReturnTarget: retTarget,
-		})
-	}
-
-	g.mounts = append(g.mounts, MountInfo{
-		Name:       name,
-		EntryIdx:   childEntryIdx,
-		ChildStart: baseIdx,
-		ChildEnd:   len(g.vertices),
-	})
-
-	if name == g.entry {
-		g.entryIdx = childEntryIdx
-	}
+	g.subgraphs[name] = child
 	return nil
 }
 
-// AddEdge declares a legal transition using integer indices into the vertex vector.
+// AddEdge declares a legal transition between registered vertices.
 func (g *Graph[S]) AddEdge(from, to string) error {
 	if g == nil {
 		return errors.New("graph is nil")
@@ -365,61 +135,16 @@ func (g *Graph[S]) AddEdge(from, to string) error {
 	if !g.occupied(to) {
 		return fmt.Errorf("unknown target %q", to)
 	}
-
-	for _, me := range g.mountEdges {
-		if me.from == from && me.to == to {
-			return fmt.Errorf("duplicate edge %q -> %q", from, to)
-		}
+	if g.edges == nil {
+		g.edges = make(map[string]map[string]struct{})
 	}
-
-	if g.isSubgraph(from) {
-		g.mountEdges = append(g.mountEdges, edgeSpec{from: from, to: to})
-		resolvedTo := to
-		if toMountIdx := g.findMountIdx(to); toMountIdx >= 0 {
-			entryIdx := g.mounts[toMountIdx].EntryIdx
-			if entryIdx >= 0 && entryIdx < len(g.vertices) {
-				resolvedTo = g.vertices[entryIdx].Name
-			}
-		}
-		for i := range g.mounts {
-			if g.mounts[i].Name == from {
-				g.mounts[i].ReturnTarget = resolvedTo
-				for v := g.mounts[i].ChildStart; v < g.mounts[i].ChildEnd; v++ {
-					if g.vertices[v].ReturnTarget == "" {
-						g.vertices[v].ReturnTarget = resolvedTo
-					}
-				}
-				break
-			}
-		}
-		return nil
+	if g.edges[from] == nil {
+		g.edges[from] = make(map[string]struct{})
 	}
-
-	fromIdx := g.findVertexIdx(from)
-	toIdx := g.findVertexIdx(to)
-
-	if toIdx < 0 && g.isSubgraph(to) {
-		for _, m := range g.mounts {
-			if m.Name == to {
-				toIdx = m.EntryIdx
-				break
-			}
-		}
+	if _, exists := g.edges[from][to]; exists {
+		return fmt.Errorf("duplicate edge %q -> %q", from, to)
 	}
-
-	if fromIdx < 0 {
-		return fmt.Errorf("unknown source %q", from)
-	}
-	if toIdx < 0 {
-		return fmt.Errorf("unknown target %q", to)
-	}
-
-	for _, e := range g.edges {
-		if e.From == fromIdx && e.To == toIdx {
-			return fmt.Errorf("duplicate edge %q -> %q", from, to)
-		}
-	}
-	g.edges = append(g.edges, Edge{From: fromIdx, To: toIdx})
+	g.edges[from][to] = struct{}{}
 	return nil
 }
 
@@ -432,23 +157,21 @@ func RegisterContinuation[S, P any](g *Graph[S], key string, decode func([]byte)
 	if !model.ValidName(key) || decode == nil || apply == nil {
 		return errors.New("continuation needs a valid key, decoder and handler")
 	}
-	for _, c := range g.continuations {
-		if c.Key == key {
-			return fmt.Errorf("duplicate continuation %q", key)
-		}
+	if g.continuations == nil {
+		g.continuations = make(map[string]model.Continuation[S])
 	}
-	g.continuations = append(g.continuations, continuationSpec[S]{
-		Key: key,
-		Cont: model.Continuation[S]{
-			Decode: func(payload []byte) (any, error) {
-				value, err := decode(payload)
-				return continuationValue[P]{value: value}, err
-			},
-			Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
-				return apply(ctx, call, state, value.(continuationValue[P]).value)
-			},
+	if _, exists := g.continuations[key]; exists {
+		return fmt.Errorf("duplicate continuation %q", key)
+	}
+	g.continuations[key] = model.Continuation[S]{
+		Decode: func(payload []byte) (any, error) {
+			value, err := decode(payload)
+			return continuationValue[P]{value: value}, err
 		},
-	})
+		Apply: func(ctx context.Context, call model.CallInfo, state S, value any) (S, error) {
+			return apply(ctx, call, state, value.(continuationValue[P]).value)
+		},
+	}
 	return nil
 }
 
@@ -489,121 +212,62 @@ func (g *Graph[S]) Compile(config model.Config[S]) (*executor.Runner[S], error) 
 	return executor.New(definition), nil
 }
 
-// ExportMermaid renders the builder topology directly from flat vectors.
+// ExportMermaid renders the builder topology recursively and rejects cyclic mounts.
 func (g *Graph[S]) ExportMermaid() (string, error) {
 	if g == nil {
 		return "", errors.New("graph is nil")
 	}
-	if g.hasRecursiveMount {
-		return "", fmt.Errorf("recursive subgraph reference at %q", g.recursiveMountName)
-	}
-
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
 	var names diagram.Names
-
-	id := func(name string) string { return names.ID(name) }
-
-	// Collect entry names
-	entryNames := make(map[string]bool)
-	entryName := g.entry
-	if g.entryIdx >= 0 && g.entryIdx < len(g.vertices) {
-		entryName = g.vertices[g.entryIdx].Name
+	if err := g.renderMermaid(&sb, "", "    ", &names, make(map[*Graph[S]]bool)); err != nil {
+		return "", err
 	}
-	if entryName != "" {
-		entryNames[entryName] = true
-	}
-	for _, m := range g.mounts {
-		if m.EntryIdx >= 0 && m.EntryIdx < len(g.vertices) {
-			entryNames[g.vertices[m.EntryIdx].Name] = true
-		}
-	}
-
-	// Group vertices by mount scope
-	rootVertices := make([]Vertex[S], 0, len(g.vertices))
-	mountMap := make(map[string][]Vertex[S])
-
-	for _, v := range g.vertices {
-		if v.MountPrefix == "" {
-			rootVertices = append(rootVertices, v)
-		} else {
-			mountMap[v.MountPrefix] = append(mountMap[v.MountPrefix], v)
-		}
-	}
-
-	slices.SortFunc(rootVertices, func(a, b Vertex[S]) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-
-	// Emit root entry first
-	if entryName != "" {
-		fmt.Fprintf(&sb, "    %s([\"%s (entry)\"])\n", id(entryName), diagram.Label(entryName))
-	}
-
-	// Emit other root vertices
-	for _, v := range rootVertices {
-		if v.Name == entryName {
-			continue
-		}
-		if v.Kind == VertexNode {
-			fmt.Fprintf(&sb, "    %s[\"%s\"]\n", id(v.Name), diagram.Label(v.Name))
-		} else {
-			fmt.Fprintf(&sb, "    %s{{\"%s (join)\"}}\n", id(v.Name), diagram.Label(v.Name))
-		}
-	}
-
-	// Sort mount scopes deterministically
-	mountScopes := make([]string, 0, len(mountMap))
-	for scope := range mountMap {
-		mountScopes = append(mountScopes, scope)
-	}
-	slices.Sort(mountScopes)
-
-	for _, scope := range mountScopes {
-		subID := id("subgraph:" + scope)
-		fmt.Fprintf(&sb, "    subgraph %s [\"%s\"]\n", subID, diagram.Label(scope))
-		verts := mountMap[scope]
-		slices.SortFunc(verts, func(a, b Vertex[S]) int {
-			return strings.Compare(a.Name, b.Name)
-		})
-		for _, v := range verts {
-			labelName := v.Name
-			if v.MountPrefix != "" {
-				labelName = strings.TrimPrefix(v.Name, v.MountPrefix+"/")
-			}
-			if entryNames[v.Name] {
-				fmt.Fprintf(&sb, "        %s([\"%s (entry)\"])\n", id(v.Name), diagram.Label(labelName))
-			} else if v.Kind == VertexNode {
-				fmt.Fprintf(&sb, "        %s[\"%s\"]\n", id(v.Name), diagram.Label(labelName))
-			} else {
-				fmt.Fprintf(&sb, "        %s{{\"%s (join)\"}}\n", id(v.Name), diagram.Label(labelName))
-			}
-		}
-		fmt.Fprintf(&sb, "    end\n")
-	}
-
-	// Emit edges
-	type edgeDisplay struct {
-		from string
-		to   string
-	}
-	displayEdges := make([]edgeDisplay, 0, len(g.edges))
-	for _, e := range g.edges {
-		displayEdges = append(displayEdges, edgeDisplay{
-			from: g.vertices[e.From].Name,
-			to:   g.vertices[e.To].Name,
-		})
-	}
-	slices.SortFunc(displayEdges, func(a, b edgeDisplay) int {
-		if c := strings.Compare(a.from, b.from); c != 0 {
-			return c
-		}
-		return strings.Compare(a.to, b.to)
-	})
-
-	for _, e := range displayEdges {
-		fmt.Fprintf(&sb, "    %s --> %s\n", id(e.from), id(e.to))
-	}
-
 	return sb.String(), nil
+}
+
+func (g *Graph[S]) renderMermaid(sb *strings.Builder, path, indent string, names *diagram.Names, active map[*Graph[S]]bool) error {
+	if g == nil {
+		return fmt.Errorf("subgraph at %q is nil", path)
+	}
+	if active[g] {
+		return fmt.Errorf("recursive subgraph reference at %q", path)
+	}
+	active[g] = true
+	defer delete(active, g)
+
+	id := func(name string) string { return names.ID(fmt.Sprintf("%s%d:%s", path, len(name), name)) }
+	if g.entry != "" {
+		fmt.Fprintf(sb, "%s%s([\"%s (entry)\"])\n", indent, id(g.entry), diagram.Label(g.entry))
+	}
+	for _, name := range sortedKeys(g.nodes) {
+		if name != g.entry {
+			fmt.Fprintf(sb, "%s%s[\"%s\"]\n", indent, id(name), diagram.Label(name))
+		}
+	}
+	for _, name := range sortedKeys(g.joins) {
+		fmt.Fprintf(sb, "%s%s{{\"%s (join)\"}}\n", indent, id(name), diagram.Label(name))
+	}
+	for _, name := range sortedKeys(g.subgraphs) {
+		fmt.Fprintf(sb, "%ssubgraph %s [\"%s\"]\n", indent, id(name), diagram.Label(name))
+		if err := g.subgraphs[name].renderMermaid(sb, fmt.Sprintf("%s%d:%s", path, len(name), name), indent+"    ", names, active); err != nil {
+			return err
+		}
+		fmt.Fprintf(sb, "%send\n", indent)
+	}
+	for _, from := range sortedKeys(g.edges) {
+		for _, to := range sortedKeys(g.edges[from]) {
+			fmt.Fprintf(sb, "%s%s --> %s\n", indent, id(from), id(to))
+		}
+	}
+	return nil
+}
+
+func sortedKeys[V any](items map[string]V) []string {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }

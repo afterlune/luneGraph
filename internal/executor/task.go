@@ -132,12 +132,7 @@ func (r *Runner[S]) prepareTask(ctx context.Context, l *live[S], ref taskRef, ob
 			return t, fmt.Errorf("clone node state: %w", err)
 		}
 		t.state = state
-		var n *CompiledNode[S]
-		if uint(ref.nodeIdx) < uint(len(r.nodes)) && r.nodes[ref.nodeIdx].Spec.Name == v.Node {
-			n = &r.nodes[ref.nodeIdx]
-		} else {
-			n = r.node(v.Node)
-		}
+		n := r.node(v.Node)
 		if n == nil {
 			return t, invalidCheckpoint("invocation %q has unknown node %q", v.ID, v.Node)
 		}

@@ -122,13 +122,7 @@ func TestGraphBuilderValidation(t *testing.T) {
 	if err := RegisterContinuation[int, int](g, "typed", decode, apply); err == nil {
 		t.Fatal("duplicate continuation accepted")
 	}
-	var continuation model.Continuation[int]
-	for _, c := range g.continuations {
-		if c.Key == "typed" {
-			continuation = c.Cont
-			break
-		}
-	}
+	continuation := g.continuations["typed"]
 	value, err := continuation.Decode(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +168,7 @@ func TestExpandRewritesMountedGraphAndContinuationNames(t *testing.T) {
 		t.Fatalf("compiled graph entry=%q nodes=%v", compiled.Entry, compiled.Nodes)
 	}
 	if !hasCompiledEdge(compiled, "start", "worker/begin") {
-		t.Fatalf("parent edge was not expanded: targets=%v", compiled.Edges)
+		t.Fatalf("parent edge was not expanded: nodes=%v", compiled.Nodes)
 	}
 	if findCompiledNode(compiled, "worker") != nil {
 		t.Fatalf("mount alias became a runtime source")
@@ -212,7 +206,7 @@ func hasCompiledEdge[S any](m model.CompiledGraph[S], from, to string) bool {
 	if n == nil {
 		return false
 	}
-	for _, target := range m.Edges[n.EdgeStart:n.EdgeEnd] {
+	for _, target := range n.Edges {
 		if target.Target == to {
 			return true
 		}
@@ -371,29 +365,29 @@ func TestCompileAndExpandRejectInvalidDefinitions(t *testing.T) {
 			g := New[int]("worker")
 			child := New[int]("work")
 			addDefinitionNode(t, child, "work", validNode)
-			registerDefinitionContinuation(t, child, "input")
-			registerDefinitionContinuation(t, g, "worker/input")
 			if err := g.AddSubgraph("worker", child); err != nil {
 				t.Fatal(err)
 			}
+			registerDefinitionContinuation(t, g, "worker/input")
+			registerDefinitionContinuation(t, child, "input")
 			return g
 		}, match: "collides"},
 		{name: "nil child from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.mounts = append(g.mounts, MountInfo{Name: "broken", EntryIdx: -1})
+			g.subgraphs["broken"] = nil
 			return g
 		}, match: "is nil"},
 		{name: "unknown edge source from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.edges = append(g.edges, Edge{From: -1, To: 0})
+			g.edges["missing"] = map[string]struct{}{"entry": {}}
 			return g
 		}, match: "unknown edge source"},
 		{name: "unknown edge target from malformed builder", build: func(t *testing.T) *Graph[int] {
 			g := New[int]("entry")
 			addDefinitionNode(t, g, "entry", validNode)
-			g.edges = append(g.edges, Edge{From: 0, To: 999})
+			g.edges["entry"] = map[string]struct{}{"missing": {}}
 			return g
 		}, match: "unknown edge target"},
 	}

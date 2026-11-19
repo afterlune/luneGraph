@@ -318,7 +318,7 @@ func TestCallbackPanicWrappers(t *testing.T) {
 			Apply:  func(context.Context, CallInfo, int, any) (int, error) { panic(boom) },
 		},
 	}}
-	runner.contIndex = map[string]int{"panic": 0}
+	runner.contByKey = map[string]*Continuation[int]{"panic": &runner.continuations[0].Cont}
 	if _, err := runner.decodeInput("i1", "panic", nil); !errors.Is(err, boom) {
 		t.Fatalf("decode panic wrapper = %v", err)
 	}

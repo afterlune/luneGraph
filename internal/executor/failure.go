@@ -55,16 +55,14 @@ func (r *Runner[S]) failGroup(pos *candidatePosition[S], index *invocationIndex,
 	parentID := activation.ParentID
 	removeInv := make(map[string]bool)
 	removeGroups := make(map[string]bool)
-	queue := []string{id}
-	for len(queue) > 0 {
-		groupID := queue[len(queue)-1]
-		queue = queue[:len(queue)-1]
+	var walk func(string)
+	walk = func(groupID string) {
 		if removeGroups[groupID] {
-			continue
+			return
 		}
 		current := findActivationGroup(pos.Groups, groupID)
 		if current == nil {
-			continue
+			return
 		}
 		removeGroups[groupID] = true
 		for _, branch := range current.Branches {
@@ -72,10 +70,11 @@ func (r *Runner[S]) failGroup(pos *candidatePosition[S], index *invocationIndex,
 			removeInv[childID] = true
 			_, child := indexedInvocation(index, pos, childID)
 			if child != nil && child.ChildGroupID != "" {
-				queue = append(queue, child.ChildGroupID)
+				walk(child.ChildGroupID)
 			}
 		}
 	}
+	walk(id)
 	removeInvocations(index, pos, removeInv)
 	groups := pos.Groups[:0]
 	for _, group := range pos.Groups {

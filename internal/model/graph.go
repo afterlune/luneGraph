@@ -108,29 +108,27 @@ type Config[S any] struct {
 	Clone        Clone[S]
 }
 
-// CompiledEdge holds a pre-resolved outgoing edge target and its node/join index.
-type CompiledEdge struct {
-	Target          string
-	TargetNodeIndex int // index in CompiledGraph.Nodes, or -1
-	TargetJoinIndex int // index in CompiledGraph.Joins, or -1
+// CompiledEdge holds a pre-resolved outgoing edge target and direct target pointer.
+type CompiledEdge[S any] struct {
+	Target string
+	Node   *CompiledNode[S]
+	Join   *CompiledJoin[S]
 }
 
 // CompiledNode stores the node specification, its fan-out join, return target,
-// and the range of its outgoing edges.
+// and its outgoing edges.
 type CompiledNode[S any] struct {
-	Spec            NodeSpec[S]
-	Index           int // index in CompiledGraph.Nodes
-	FanOutJoinIndex int // index in CompiledGraph.Joins, or -1 if no join for this fanout source
-	ReturnEdge      CompiledEdge
-	Mounted         bool
-	EdgeStart       int // start index in CompiledGraph.Edges
-	EdgeEnd         int // end index in CompiledGraph.Edges
+	Spec       NodeSpec[S]
+	FanOutJoin *CompiledJoin[S]
+	ReturnEdge CompiledEdge[S]
+	Mounted    bool
+	Edges      []CompiledEdge[S]
 }
 
 // CompiledJoin combines join specification and its unique outgoing edge target.
 type CompiledJoin[S any] struct {
 	Spec     JoinSpec[S]
-	NextEdge CompiledEdge
+	NextEdge CompiledEdge[S]
 }
 
 // CompiledContinuation holds registered typed continuation with sorted key.
@@ -141,27 +139,23 @@ type CompiledContinuation[S any] struct {
 
 // CompiledGraph is the immutable definition consumed by the executor.
 type CompiledGraph[S any] struct {
-	ID                string
-	Entry             string
-	EntryIndex        int
-	Clone             Clone[S]
-	Nodes             []CompiledNode[S]
-	Edges             []CompiledEdge
-	Joins             []CompiledJoin[S]
-	Continuations     []CompiledContinuation[S]
-	NodeIndex         map[string]int
-	JoinIndex         map[string]int
-	ContinuationIndex map[string]int
+	ID            string
+	Entry         string
+	Clone         Clone[S]
+	Nodes         []CompiledNode[S]
+	Joins         []CompiledJoin[S]
+	Continuations []CompiledContinuation[S]
+	NodeByName    map[string]*CompiledNode[S]
+	JoinByName    map[string]*CompiledJoin[S]
+	ContByKey     map[string]*Continuation[S]
 }
 
-// ResolveTarget precomputes the indices for a named destination.
-func (g CompiledGraph[S]) ResolveTarget(target string) CompiledEdge {
-	edge := CompiledEdge{Target: target, TargetNodeIndex: -1, TargetJoinIndex: -1}
-	if idx, ok := g.NodeIndex[target]; ok && target != "" {
-		edge.TargetNodeIndex = idx
-	}
-	if idx, ok := g.JoinIndex[target]; ok && target != "" {
-		edge.TargetJoinIndex = idx
+// ResolveTarget binds the target node or join pointer for a named destination.
+func (g *CompiledGraph[S]) ResolveTarget(target string) CompiledEdge[S] {
+	edge := CompiledEdge[S]{Target: target}
+	if target != "" {
+		edge.Node = g.NodeByName[target]
+		edge.Join = g.JoinByName[target]
 	}
 	return edge
 }

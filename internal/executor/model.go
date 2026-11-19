@@ -13,7 +13,7 @@ type (
 	CallInfo                    = model.CallInfo
 	Checkpoint[S any]           = model.Checkpoint[S]
 	Clone[S any]                = model.Clone[S]
-	CompiledEdge                = model.CompiledEdge
+	CompiledEdge[S any]         = model.CompiledEdge[S]
 	CompiledNode[S any]         = model.CompiledNode[S]
 	CompiledJoin[S any]         = model.CompiledJoin[S]
 	CompiledContinuation[S any] = model.CompiledContinuation[S]

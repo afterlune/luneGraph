@@ -12,78 +12,83 @@ import (
 type Runner[S any] struct {
 	definitionID  string
 	entry         string
-	entryIndex    int
 	clone         Clone[S]
 	nodes         []CompiledNode[S]
-	edges         []CompiledEdge
 	joins         []CompiledJoin[S]
 	continuations []CompiledContinuation[S]
-	nodeIndex     map[string]int
-	joinIndex     map[string]int
-	contIndex     map[string]int
+	nodeByName    map[string]*CompiledNode[S]
+	joinByName    map[string]*CompiledJoin[S]
+	contByKey     map[string]*Continuation[S]
 }
 
 func New[S any](compiled CompiledGraph[S]) *Runner[S] {
-	return &Runner[S]{
+	r := &Runner[S]{
 		definitionID:  compiled.ID,
 		entry:         compiled.Entry,
-		entryIndex:    compiled.EntryIndex,
 		clone:         compiled.Clone,
 		nodes:         compiled.Nodes,
-		edges:         compiled.Edges,
 		joins:         compiled.Joins,
 		continuations: compiled.Continuations,
-		nodeIndex:     compiled.NodeIndex,
-		joinIndex:     compiled.JoinIndex,
-		contIndex:     compiled.ContinuationIndex,
+		nodeByName:    compiled.NodeByName,
+		joinByName:    compiled.JoinByName,
+		contByKey:     compiled.ContByKey,
 	}
+	if r.nodeByName == nil && len(r.nodes) > 0 {
+		r.nodeByName = make(map[string]*CompiledNode[S], len(r.nodes))
+		for i := range r.nodes {
+			r.nodeByName[r.nodes[i].Spec.Name] = &r.nodes[i]
+		}
+	}
+	if r.joinByName == nil && len(r.joins) > 0 {
+		r.joinByName = make(map[string]*CompiledJoin[S], len(r.joins))
+		for i := range r.joins {
+			r.joinByName[r.joins[i].Spec.Name] = &r.joins[i]
+		}
+	}
+	if r.contByKey == nil && len(r.continuations) > 0 {
+		r.contByKey = make(map[string]*Continuation[S], len(r.continuations))
+		for i := range r.continuations {
+			r.contByKey[r.continuations[i].Key] = &r.continuations[i].Cont
+		}
+	}
+	return r
 }
 
 func (r *Runner[S]) node(name string) *CompiledNode[S] {
 	if r == nil {
 		return nil
 	}
-	if idx, ok := r.nodeIndex[name]; ok {
-		return &r.nodes[idx]
-	}
-	return nil
+	return r.nodeByName[name]
 }
 
 func (r *Runner[S]) join(name string) *CompiledJoin[S] {
 	if r == nil {
 		return nil
 	}
-	if idx, ok := r.joinIndex[name]; ok {
-		return &r.joins[idx]
-	}
-	return nil
+	return r.joinByName[name]
 }
 
 func (r *Runner[S]) continuation(key string) *Continuation[S] {
 	if r == nil {
 		return nil
 	}
-	if idx, ok := r.contIndex[key]; ok {
-		return &r.continuations[idx].Cont
-	}
-	return nil
+	return r.contByKey[key]
 }
 
-func (r *Runner[S]) resolveEdge(node *CompiledNode[S], from string, target string) (CompiledEdge, error) {
+func (r *Runner[S]) resolveEdge(node *CompiledNode[S], from string, target string) (CompiledEdge[S], error) {
 	if target == "" {
-		return CompiledEdge{}, fmt.Errorf("node %q selected no target", from)
+		return CompiledEdge[S]{}, fmt.Errorf("node %q selected no target", from)
 	}
 	if node == nil || node.Spec.Name != from {
 		node = r.node(from)
 		if node == nil {
-			return CompiledEdge{}, fmt.Errorf("node %q is unknown", from)
+			return CompiledEdge[S]{}, fmt.Errorf("node %q is unknown", from)
 		}
 	}
-	edges := r.edges[node.EdgeStart:node.EdgeEnd]
-	if i := findEdge(edges, target); i >= 0 {
-		return edges[i], nil
+	if i := findEdge(node.Edges, target); i >= 0 {
+		return node.Edges[i], nil
 	}
-	return CompiledEdge{}, fmt.Errorf("node %q selected unknown edge to %q", from, target)
+	return CompiledEdge[S]{}, fmt.Errorf("node %q selected unknown edge to %q", from, target)
 }
 
 func (r *Runner[S]) checkTargets(from string, targets []string) error {
@@ -94,7 +99,7 @@ func (r *Runner[S]) checkTargets(from string, targets []string) error {
 	if node == nil {
 		return fmt.Errorf("node %q is unknown", from)
 	}
-	allowed := r.edges[node.EdgeStart:node.EdgeEnd]
+	allowed := node.Edges
 	if len(targets) == 1 {
 		target := targets[0]
 		if findEdge(allowed, target) < 0 {
@@ -126,7 +131,7 @@ func (r *Runner[S]) checkTargets(from string, targets []string) error {
 	return nil
 }
 
-func findEdge(allowed []CompiledEdge, target string) int {
+func findEdge[S any](allowed []CompiledEdge[S], target string) int {
 	for i := range allowed {
 		if allowed[i].Target == target {
 			return i
@@ -161,7 +166,7 @@ func (r *Runner[S]) ExportMermaid() string {
 	}
 	for i := range r.nodes {
 		from := r.nodes[i].Spec.Name
-		for _, to := range r.edges[r.nodes[i].EdgeStart:r.nodes[i].EdgeEnd] {
+		for _, to := range r.nodes[i].Edges {
 			fmt.Fprintf(&sb, "%s%s --> %s\n", indent, id(from), id(to.Target))
 		}
 	}

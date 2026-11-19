@@ -245,9 +245,9 @@ func (r *Runner[S]) tryCommitFast(ctx context.Context, l *live[S], out workResul
 	}
 }
 
-func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocation[S], slot int, lg *liveGroup[S], state S, edge CompiledEdge, cursor uint64, store Store[S], obs *observation.Session) (bool, string, error) {
+func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocation[S], slot int, lg *liveGroup[S], state S, edge CompiledEdge[S], cursor uint64, store Store[S], obs *observation.Session) (bool, string, error) {
 	updatedGroup, hasTimeoutUpdate := cloneGroupWithTimeoutCleared(lg, inv.BranchIndex)
-	if edge.TargetJoinIndex >= 0 {
+	if edge.Join != nil {
 		if lg == nil || lg.group.JoinNode != edge.Target {
 			return false, "", nil
 		}
@@ -295,7 +295,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 		obs.ResolveSelected(ctx, model.OutcomeCommitted, l.header.Revision, nil)
 		return true, groupID, nil
 	}
-	if edge.TargetNodeIndex < 0 || l.header.NextID == math.MaxUint64 {
+	if edge.Node == nil || l.header.NextID == math.MaxUint64 {
 		return false, "", nil
 	}
 
@@ -336,7 +336,7 @@ func (r *Runner[S]) commitFastEdge(ctx context.Context, l *live[S], inv *Invocat
 	l.header.NextID = nextID
 	l.readyNodes += b2i(oldStatus != InvocationReady)
 	l.waitingInvocations -= b2i(oldStatus == InvocationWaiting)
-	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, nodeIdx: edge.TargetNodeIndex, isJoin: false})
+	l.nodeQueue.push(taskRef{id: inv.ID, slot: slot, isJoin: false})
 	l.header.Revision++
 	l.header.Steps++
 	l.header.ScheduleCursor = cursor
@@ -414,7 +414,6 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 		ok, groupID, _ := r.commitFastEndBranch(ctx, l, parent, parentGroup, parentState, true, cursor, nil, obs)
 		return ok, groupID
 	}
-	edges := r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd]
 	clonedStates := make([]S, len(branches))
 	for i, branch := range branches {
 		state, err := r.cloneState(branch.State, parent.ID)
@@ -452,7 +451,6 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 			Target:       branch.Target,
 			EntryTimeout: branch.EntryTimeout,
 		}
-		nodeIdx := edges[findEdge(edges, branch.Target)].TargetNodeIndex
 		childSlot := l.putNewInvocation(Invocation[S]{
 			ID:          childID,
 			CallID:      callID,
@@ -463,7 +461,7 @@ func (r *Runner[S]) tryCommitFastFanOut(ctx context.Context, l *live[S], parent 
 			BranchIndex: branchIndex,
 		})
 		l.readyNodes++
-		l.nodeQueue.push(taskRef{id: childID, slot: childSlot, nodeIdx: nodeIdx, isJoin: false})
+		l.nodeQueue.push(taskRef{id: childID, slot: childSlot, isJoin: false})
 	}
 	gSlot := l.putGroup(liveGroup[S]{
 		group: ActivationGroup{
@@ -503,9 +501,7 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 	if !pOk {
 		return false, ""
 	}
-	nextTarget := ""
-	nextNodeIdx := -1
-	nextJoinIdx := -1
+	var nextEdge CompiledEdge[S]
 	if lg.group.JoinNode != "" {
 		j := lg.join
 		if j == nil {
@@ -514,19 +510,17 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 		if j == nil {
 			return false, ""
 		}
-		nextTarget = j.NextEdge.Target
-		nextNodeIdx = j.NextEdge.TargetNodeIndex
-		nextJoinIdx = j.NextEdge.TargetJoinIndex
-		if nextTarget != "" {
-			if nextJoinIdx >= 0 {
+		nextEdge = j.NextEdge
+		if nextEdge.Target != "" {
+			if nextEdge.Join != nil {
 				if parent.GroupID == "" {
 					return false, ""
 				}
 				pg, _, pgOk := l.group(parent.GroupID, -1)
-				if !pgOk || pg.group.JoinNode != nextTarget {
+				if !pgOk || pg.group.JoinNode != nextEdge.Target {
 					return false, ""
 				}
-			} else if nextNodeIdx < 0 || l.header.NextID == math.MaxUint64 {
+			} else if nextEdge.Node == nil || l.header.NextID == math.MaxUint64 {
 				return false, ""
 			}
 		}
@@ -550,19 +544,19 @@ func (r *Runner[S]) tryCommitFastJoin(ctx context.Context, l *live[S], out workR
 		parent.CallID = ""
 	} else {
 		parent.State = out.state
-		if nextTarget == "" {
+		if nextEdge.Target == "" {
 			parent.Status = InvocationEnded
 			parent.CallID = ""
-		} else if nextJoinIdx >= 0 {
+		} else if nextEdge.Join != nil {
 			parent.Status = InvocationJoined
 			parent.CallID = ""
-			parent.Node = nextTarget
+			parent.Node = nextEdge.Target
 		} else {
 			parent.Status = InvocationReady
 			parent.CallID = model.AllocID(&l.header.NextID, "c")
-			parent.Node = nextTarget
+			parent.Node = nextEdge.Target
 			l.readyNodes++
-			l.nodeQueue.push(taskRef{id: parent.ID, slot: parentSlot, nodeIdx: nextNodeIdx, isJoin: false})
+			l.nodeQueue.push(taskRef{id: parent.ID, slot: parentSlot, isJoin: false})
 		}
 	}
 	if parent.Status.Resolved() && parent.GroupID != "" {

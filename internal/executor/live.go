@@ -63,11 +63,7 @@ func initLiveStart[S any](l *live[S], runID string, runner *Runner[S], state S) 
 		Status: InvocationReady,
 	}
 	l.groups = l.groupInline[:0]
-	nodeIdx := 0
-	if runner.entryIndex >= 0 {
-		nodeIdx = runner.entryIndex
-	}
-	l.nodeQueue.push(taskRef{id: "i1", slot: 0, nodeIdx: nodeIdx, isJoin: false})
+	l.nodeQueue.push(taskRef{id: "i1", slot: 0, isJoin: false})
 	l.readyNodes = 1
 	return l
 }
@@ -108,11 +104,7 @@ func initLive[S any](l *live[S], cp Checkpoint[S], runner *Runner[S]) *live[S] {
 
 	for i, inv := range l.invocations {
 		if inv.Status == InvocationReady {
-			nodeIdx := 0
-			if runner != nil && inv.Node == runner.entry && runner.entryIndex >= 0 {
-				nodeIdx = runner.entryIndex
-			}
-			l.nodeQueue.push(taskRef{id: inv.ID, slot: i, nodeIdx: nodeIdx, isJoin: false})
+			l.nodeQueue.push(taskRef{id: inv.ID, slot: i, isJoin: false})
 			l.readyNodes++
 		} else if inv.Status == InvocationWaiting {
 			l.waitingInvocations++

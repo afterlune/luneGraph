@@ -18,12 +18,11 @@ func canMergeFixture(predicate func(int, []BranchResult[int]) bool, clone Clone[
 			return parent, nil
 		},
 	}
-	runner := &Runner[int]{
-		definitionID: "machine",
-		clone:        clone,
-		joins:        []CompiledJoin[int]{{Spec: spec}},
-		joinIndex:    map[string]int{"join": 0},
-	}
+	runner := New(CompiledGraph[int]{
+		ID:    "machine",
+		Clone: clone,
+		Joins: []CompiledJoin[int]{{Spec: spec}},
+	})
 	secondStatus := InvocationReady
 	secondNode := "worker"
 	if allResolved {

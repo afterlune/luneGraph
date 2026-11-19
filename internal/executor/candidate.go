@@ -17,11 +17,6 @@ func findActivationGroup(groups []ActivationGroup, id string) *ActivationGroup {
 	return nil
 }
 
-type groupWorkItem struct {
-	id       string
-	children bool
-}
-
 // candidateWorkspace owns reusable, speculative topology slices. They never
 // alias the slices that store the accepted position. User states are borrowed
 // read-only until callback results transfer ownership through a Change.
@@ -32,7 +27,6 @@ type candidateWorkspace[S any] struct {
 	beforeGroups, afterGroups []ActivationGroup
 	membership                map[string]bool
 	groupsBefore              map[string]ActivationGroup
-	groupQueue                []groupWorkItem
 }
 
 type candidateMembers struct {
@@ -75,53 +69,40 @@ func (w *candidateWorkspace[S]) addInvocation(l *live[S], cp *candidatePosition[
 	cp.Invocations = append(cp.Invocations, v)
 }
 
-func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *candidatePosition[S], startID string, startChildren bool, m *candidateMembers) {
-	w.groupQueue = append(w.groupQueue[:0], groupWorkItem{id: startID, children: startChildren})
-	for len(w.groupQueue) > 0 {
-		curr := w.groupQueue[len(w.groupQueue)-1]
-		w.groupQueue = w.groupQueue[:len(w.groupQueue)-1]
-
-		id := curr.id
-		children := curr.children
-		if m.groups != nil {
-			if m.groups[id] {
-				continue
+func (w *candidateWorkspace[S]) addGroup(l *live[S], cp *candidatePosition[S], id string, children bool, m *candidateMembers) {
+	if m.groups != nil {
+		if m.groups[id] {
+			return
+		}
+	} else {
+		for _, g := range cp.Groups {
+			if g.ID == id {
+				return
 			}
-		} else {
-			found := false
+		}
+		if len(cp.Groups) >= invocationIndexThreshold {
+			m.groups = make(map[string]bool, len(cp.Groups)+1)
 			for _, g := range cp.Groups {
-				if g.ID == id {
-					found = true
-					break
-				}
-			}
-			if found {
-				continue
-			}
-			if len(cp.Groups) >= invocationIndexThreshold {
-				m.groups = make(map[string]bool, len(cp.Groups)+1)
-				for _, g := range cp.Groups {
-					m.groups[g.ID] = true
-				}
+				m.groups[g.ID] = true
 			}
 		}
-		g, ok := l.getGroup(id)
-		if !ok {
-			continue
-		}
-		if m.groups != nil {
-			m.groups[id] = true
-		}
-		cp.Groups = append(cp.Groups, g)
-		if children {
-			w.addInvocation(l, cp, g.ParentID, m)
-			for _, branch := range g.Branches {
-				child := branch.InvocationID
-				w.addInvocation(l, cp, child, m)
-				descendant, exists := l.getInvocation(child)
-				if nested := descendant.ChildGroupID; exists && nested != "" {
-					w.groupQueue = append(w.groupQueue, groupWorkItem{id: nested, children: true})
-				}
+	}
+	g, ok := l.getGroup(id)
+	if !ok {
+		return
+	}
+	if m.groups != nil {
+		m.groups[id] = true
+	}
+	cp.Groups = append(cp.Groups, g)
+	if children {
+		w.addInvocation(l, cp, g.ParentID, m)
+		for _, branch := range g.Branches {
+			child := branch.InvocationID
+			w.addInvocation(l, cp, child, m)
+			descendant, exists := l.getInvocation(child)
+			if nested := descendant.ChildGroupID; exists && nested != "" {
+				w.addGroup(l, cp, nested, true, m)
 			}
 		}
 	}

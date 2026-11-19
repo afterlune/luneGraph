@@ -117,11 +117,10 @@ func TestRunnerStartBudgetAndInputErrors(t *testing.T) {
 	}
 
 	cloneFailure := New(CompiledGraph[int]{
-		ID:        "clone",
-		Entry:     "node",
-		NodeIndex: map[string]int{"node": 0},
-		Clone:     func(int) (int, error) { return 0, errors.New("clone") },
-		Nodes:     []CompiledNode[int]{{Spec: executorTestNode("node", executorTestEnd, FailInvocation), FanOutJoinIndex: -1, ReturnEdge: CompiledEdge{TargetNodeIndex: -1, TargetJoinIndex: -1}}},
+		ID:    "clone",
+		Entry: "node",
+		Clone: func(int) (int, error) { return 0, errors.New("clone") },
+		Nodes: []CompiledNode[int]{{Spec: executorTestNode("node", executorTestEnd, FailInvocation)}},
 	})
 	if _, result, err := cloneFailure.Start(context.Background(), "clone-failure", 0, nil, Options{}); err == nil || result.Header.Revision != 0 {
 		t.Fatalf("clone failure = %+v, %v", result, err)

@@ -13,53 +13,51 @@ import (
 
 func executorTestRunner(t *testing.T, entry string, nodes []NodeSpec[int], joins []JoinSpec[int], edges map[string][]string, continuations map[string]Continuation[int], returnTargets map[string]string) *Runner[int] {
 	t.Helper()
-	compiled := CompiledGraph[int]{
-		ID:                "machine-v1",
-		Entry:             entry,
-		Clone:             func(value int) (int, error) { return value, nil },
-		NodeIndex:         make(map[string]int, len(nodes)),
-		JoinIndex:         make(map[string]int, len(joins)),
-		ContinuationIndex: make(map[string]int, len(continuations)),
-	}
-	for i, node := range nodes {
-		compiled.NodeIndex[node.Name] = i
+	nodeSeen := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		nodeSeen[node.Name] = true
 	}
 	for from := range returnTargets {
-		if _, ok := compiled.NodeIndex[from]; !ok {
-			compiled.NodeIndex[from] = len(nodes)
+		if !nodeSeen[from] {
+			nodeSeen[from] = true
 			nodes = append(nodes, NodeSpec[int]{Name: from})
 		}
 	}
-	for i, join := range joins {
-		compiled.JoinIndex[join.Name] = i
+	compiled := CompiledGraph[int]{
+		ID:         "machine-v1",
+		Entry:      entry,
+		Clone:      func(value int) (int, error) { return value, nil },
+		Nodes:      make([]CompiledNode[int], len(nodes)),
+		Joins:      make([]CompiledJoin[int], len(joins)),
+		NodeByName: make(map[string]*CompiledNode[int], len(nodes)),
+		JoinByName: make(map[string]*CompiledJoin[int], len(joins)),
 	}
-	compiled.EntryIndex = compiled.NodeIndex[entry]
-
-	joinBySource := make(map[string]int, len(joins))
-	for i, join := range joins {
-		joinBySource[join.FanOutSource] = i
-		next := ""
-		if targets := edges[join.Name]; len(targets) > 0 {
-			next = targets[0]
-		}
-		compiled.Joins = append(compiled.Joins, CompiledJoin[int]{Spec: join, NextEdge: compiled.ResolveTarget(next)})
-	}
-
 	for i, node := range nodes {
-		joinIndex, ok := joinBySource[node.Name]
-		if !ok {
-			joinIndex = -1
+		_, mounted := returnTargets[node.Name]
+		compiled.Nodes[i] = CompiledNode[int]{Spec: node, Mounted: mounted}
+		compiled.NodeByName[node.Name] = &compiled.Nodes[i]
+	}
+	joinBySource := make(map[string]*CompiledJoin[int], len(joins))
+	for i, join := range joins {
+		compiled.Joins[i] = CompiledJoin[int]{Spec: join}
+		compiled.JoinByName[join.Name] = &compiled.Joins[i]
+		joinBySource[join.FanOutSource] = &compiled.Joins[i]
+	}
+	for i, join := range joins {
+		if targets := edges[join.Name]; len(targets) > 0 {
+			compiled.Joins[i].NextEdge = compiled.ResolveTarget(targets[0])
 		}
-		target, mounted := returnTargets[node.Name]
-		start := len(compiled.Edges)
-		for _, to := range edges[node.Name] {
-			compiled.Edges = append(compiled.Edges, compiled.ResolveTarget(to))
+	}
+	for i, node := range nodes {
+		compiled.Nodes[i].FanOutJoin = joinBySource[node.Name]
+		compiled.Nodes[i].ReturnEdge = compiled.ResolveTarget(returnTargets[node.Name])
+		if targets := edges[node.Name]; len(targets) > 0 {
+			nodeEdges := make([]CompiledEdge[int], len(targets))
+			for j, to := range targets {
+				nodeEdges[j] = compiled.ResolveTarget(to)
+			}
+			compiled.Nodes[i].Edges = nodeEdges
 		}
-		compiled.Nodes = append(compiled.Nodes, CompiledNode[int]{
-			Spec: node, Index: i, FanOutJoinIndex: joinIndex,
-			ReturnEdge: compiled.ResolveTarget(target), Mounted: mounted,
-			EdgeStart: start, EdgeEnd: len(compiled.Edges),
-		})
 	}
 
 	keys := make([]string, 0, len(continuations))
@@ -67,9 +65,11 @@ func executorTestRunner(t *testing.T, entry string, nodes []NodeSpec[int], joins
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
+	compiled.Continuations = make([]CompiledContinuation[int], len(keys))
+	compiled.ContByKey = make(map[string]*Continuation[int], len(keys))
 	for i, key := range keys {
-		compiled.ContinuationIndex[key] = i
-		compiled.Continuations = append(compiled.Continuations, CompiledContinuation[int]{Key: key, Cont: continuations[key]})
+		compiled.Continuations[i] = CompiledContinuation[int]{Key: key, Cont: continuations[key]}
+		compiled.ContByKey[key] = &compiled.Continuations[i].Cont
 	}
 	return New(compiled)
 }

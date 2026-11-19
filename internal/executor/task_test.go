@@ -31,14 +31,13 @@ func TestPrepareTaskRejectsUnknownNode(t *testing.T) {
 			ref:    taskRef{id: "i1"},
 		},
 		{
-			name: "mismatched cached node index",
-			runner: &Runner[int]{
-				definitionID: "machine",
-				clone:        clone,
-				nodes:        []CompiledNode[int]{{Spec: NodeSpec[int]{Name: "known"}}},
-				nodeIndex:    map[string]int{"known": 0},
-			},
-			ref: taskRef{id: "i1", nodeIdx: 0},
+			name: "non-empty nodes without matching node",
+			runner: New(CompiledGraph[int]{
+				ID:    "machine",
+				Clone: clone,
+				Nodes: []CompiledNode[int]{{Spec: NodeSpec[int]{Name: "known"}}},
+			}),
+			ref: taskRef{id: "i1"},
 		},
 	}
 

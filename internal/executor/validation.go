@@ -170,8 +170,8 @@ func (r *Runner[S]) validateCheckpoint(cp Checkpoint[S]) error {
 		}
 		sourceNode := r.node(group.Source)
 		var expectedJoin string
-		if sourceNode != nil && sourceNode.FanOutJoinIndex >= 0 {
-			expectedJoin = r.joins[sourceNode.FanOutJoinIndex].Spec.Name
+		if sourceNode != nil && sourceNode.FanOutJoin != nil {
+			expectedJoin = sourceNode.FanOutJoin.Spec.Name
 		}
 		if group.JoinNode != expectedJoin {
 			return invalidCheckpoint("group %q has incompatible join", group.ID)
@@ -191,13 +191,13 @@ func (r *Runner[S]) validateCheckpoint(cp Checkpoint[S]) error {
 			}
 			edgeIdx := -1
 			if sourceNode != nil {
-				edgeIdx = findEdge(r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd], branch.Target)
+				edgeIdx = findEdge(sourceNode.Edges, branch.Target)
 			}
 			if edgeIdx < 0 || branch.EntryTimeout < 0 {
 				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
 			}
-			edge := r.edges[sourceNode.EdgeStart+edgeIdx]
-			if edge.TargetJoinIndex >= 0 && (group.JoinNode == "" || branch.Target != group.JoinNode || child.Status != InvocationJoined || child.Node != group.JoinNode || branch.EntryTimeout != 0) {
+			edge := sourceNode.Edges[edgeIdx]
+			if edge.Join != nil && (group.JoinNode == "" || branch.Target != group.JoinNode || child.Status != InvocationJoined || child.Node != group.JoinNode || branch.EntryTimeout != 0) {
 				return invalidCheckpoint("group %q has invalid branch metadata at index %d", group.ID, index)
 			}
 			if branch.EntryTimeout > 0 && child.Status != InvocationFailed && (child.Status != InvocationReady || child.Node != branch.Target) {
@@ -247,45 +247,34 @@ func (r *Runner[S]) validateCheckpoint(cp Checkpoint[S]) error {
 		}
 	}
 	groupVisit := make([]uint8, len(cp.Groups))
-	for gIdx := range cp.Groups {
-		if groupVisit[gIdx] == 2 {
-			continue
+	var checkAncestry func(int) error
+	checkAncestry = func(gIdx int) error {
+		switch groupVisit[gIdx] {
+		case 1:
+			return invalidCheckpoint("group %q has cyclic ancestry", cp.Groups[gIdx].ID)
+		case 2:
+			return nil
 		}
-		curr := gIdx
-		for curr >= 0 {
-			if groupVisit[curr] == 1 {
-				return invalidCheckpoint("group %q has cyclic ancestry", cp.Groups[curr].ID)
-			}
-			if groupVisit[curr] == 2 {
-				break
-			}
-			groupVisit[curr] = 1
-			pIdx, pExists := invIndices[cp.Groups[curr].ParentID]
-			if !pExists {
-				return invalidCheckpoint("group %q has missing ancestor", cp.Groups[curr].ID)
-			}
-			parentGroupID := cp.Invocations[pIdx].GroupID
-			if parentGroupID == "" {
-				break
-			}
+		groupVisit[gIdx] = 1
+		pIdx, pExists := invIndices[cp.Groups[gIdx].ParentID]
+		if !pExists {
+			return invalidCheckpoint("group %q has missing ancestor", cp.Groups[gIdx].ID)
+		}
+		if parentGroupID := cp.Invocations[pIdx].GroupID; parentGroupID != "" {
 			nextGIdx, gExists := groupIndices[parentGroupID]
 			if !gExists {
-				return invalidCheckpoint("group %q has missing ancestor", cp.Groups[curr].ID)
+				return invalidCheckpoint("group %q has missing ancestor", cp.Groups[gIdx].ID)
 			}
-			curr = nextGIdx
+			if err := checkAncestry(nextGIdx); err != nil {
+				return err
+			}
 		}
-		curr = gIdx
-		for curr >= 0 {
-			if groupVisit[curr] == 2 {
-				break
-			}
-			groupVisit[curr] = 2
-			pIdx := invIndices[cp.Groups[curr].ParentID]
-			parentGroupID := cp.Invocations[pIdx].GroupID
-			if parentGroupID == "" {
-				break
-			}
-			curr = groupIndices[parentGroupID]
+		groupVisit[gIdx] = 2
+		return nil
+	}
+	for gIdx := range cp.Groups {
+		if err := checkAncestry(gIdx); err != nil {
+			return err
 		}
 	}
 	if cp.Completed {

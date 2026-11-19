@@ -119,9 +119,9 @@ func (r *Runner[S]) applyTransition(pos *candidatePosition[S], index *invocation
 	}
 }
 
-func (r *Runner[S]) applyEdgeTransition(pos *candidatePosition[S], inv *Invocation[S], state S, edge CompiledEdge) error {
+func (r *Runner[S]) applyEdgeTransition(pos *candidatePosition[S], inv *Invocation[S], state S, edge CompiledEdge[S]) error {
 	source := inv.Node
-	if edge.TargetJoinIndex >= 0 {
+	if edge.Join != nil {
 		if err := checkJoinDestination(inv.ID, edge, invocationJoin(pos, inv)); err != nil {
 			return &TransitionError{InvocationID: inv.ID, Node: source, Cause: err}
 		}
@@ -176,8 +176,8 @@ func invocationJoin[S any](pos *candidatePosition[S], inv *Invocation[S]) string
 	return ""
 }
 
-func checkJoinDestination(invocationID string, edge CompiledEdge, expected string) error {
-	if edge.TargetJoinIndex >= 0 && edge.Target != expected {
+func checkJoinDestination[S any](invocationID string, edge CompiledEdge[S], expected string) error {
+	if edge.Join != nil && edge.Target != expected {
 		return fmt.Errorf("invocation %q reached join %q outside its activation group", invocationID, edge.Target)
 	}
 	return nil
@@ -193,8 +193,8 @@ func (r *Runner[S]) checkJoinTargets(groups []ActivationGroup, inv *Invocation[S
 		}
 		var expected string
 		if len(targets) > 1 {
-			if n := r.node(inv.Node); n != nil && n.FanOutJoinIndex >= 0 {
-				expected = r.joins[n.FanOutJoinIndex].Spec.Name
+			if n := r.node(inv.Node); n != nil && n.FanOutJoin != nil {
+				expected = n.FanOutJoin.Spec.Name
 			}
 		} else if inv.GroupID != "" {
 			group := findActivationGroup(groups, inv.GroupID)
@@ -241,8 +241,8 @@ func (r *Runner[S]) route(pos *candidatePosition[S], index *invocationIndex, id,
 		return fmt.Errorf("reserve fan-out IDs: %w", ErrExecutionLimit)
 	}
 	joinNode := ""
-	if n := r.node(source); n != nil && n.FanOutJoinIndex >= 0 {
-		joinNode = r.joins[n.FanOutJoinIndex].Spec.Name
+	if n := r.node(source); n != nil && n.FanOutJoin != nil {
+		joinNode = n.FanOutJoin.Spec.Name
 	}
 	if joinNode != "" {
 		if !addIDs(1) { // join callback call ID
@@ -298,11 +298,8 @@ func (r *Runner[S]) validateFanOut(sourceNode *CompiledNode[S], source string, b
 	if sourceNode == nil {
 		return nil, fmt.Errorf("node %q is unknown", source)
 	}
-	var join *CompiledJoin[S]
-	if sourceNode.FanOutJoinIndex >= 0 {
-		join = &r.joins[sourceNode.FanOutJoinIndex]
-	}
-	edges := r.edges[sourceNode.EdgeStart:sourceNode.EdgeEnd]
+	join := sourceNode.FanOutJoin
+	edges := sourceNode.Edges
 	for branchIndex, branch := range branches {
 		if branch.EntryTimeout < 0 {
 			return nil, fmt.Errorf("branch %d timeout must not be negative", branchIndex)
@@ -311,7 +308,7 @@ func (r *Runner[S]) validateFanOut(sourceNode *CompiledNode[S], source string, b
 		if i < 0 {
 			return nil, fmt.Errorf("node %q selected undeclared branch target %q", source, branch.Target)
 		}
-		if edges[i].TargetNodeIndex < 0 {
+		if edges[i].Node == nil {
 			return nil, fmt.Errorf("branch target %q is not an executable node", branch.Target)
 		}
 	}
@@ -391,8 +388,8 @@ func (r *Runner[S]) fanOut(pos *candidatePosition[S], index *invocationIndex, pa
 	return nil
 }
 
-func (r *Runner[S]) setTargetEdge(pos *candidatePosition[S], inv *Invocation[S], edge CompiledEdge) error {
-	if edge.TargetJoinIndex >= 0 {
+func (r *Runner[S]) setTargetEdge(pos *candidatePosition[S], inv *Invocation[S], edge CompiledEdge[S]) error {
+	if edge.Join != nil {
 		if inv.GroupID == "" {
 			return fmt.Errorf("invocation %q reached join %q outside a group", inv.ID, edge.Target)
 		}
@@ -406,7 +403,7 @@ func (r *Runner[S]) setTargetEdge(pos *candidatePosition[S], inv *Invocation[S],
 		inv.Status = InvocationJoined
 		inv.CallID = ""
 	} else {
-		if edge.TargetNodeIndex < 0 {
+		if edge.Node == nil {
 			return fmt.Errorf("unknown node %q", edge.Target)
 		}
 		if pos.NextID == math.MaxUint64 {
@@ -420,13 +417,5 @@ func (r *Runner[S]) setTargetEdge(pos *candidatePosition[S], inv *Invocation[S],
 }
 
 func (r *Runner[S]) setTarget(pos *candidatePosition[S], inv *Invocation[S], target string) error {
-	nIdx := -1
-	if idx, ok := r.nodeIndex[target]; ok {
-		nIdx = idx
-	}
-	jIdx := -1
-	if idx, ok := r.joinIndex[target]; ok {
-		jIdx = idx
-	}
-	return r.setTargetEdge(pos, inv, CompiledEdge{Target: target, TargetNodeIndex: nIdx, TargetJoinIndex: jIdx})
+	return r.setTargetEdge(pos, inv, CompiledEdge[S]{Target: target, Node: r.node(target), Join: r.join(target)})
 }

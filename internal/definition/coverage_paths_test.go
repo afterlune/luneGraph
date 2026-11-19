@@ -21,13 +21,7 @@ func TestRegisterJSONContinuationDecodesTypedPayload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var continuation model.Continuation[int]
-	for _, c := range g.continuations {
-		if c.Key == "resume-json" {
-			continuation = c.Cont
-			break
-		}
-	}
+	continuation := g.continuations["resume-json"]
 	value, err := continuation.Decode([]byte(`{"delta":4}`))
 	if err != nil {
 		t.Fatal(err)

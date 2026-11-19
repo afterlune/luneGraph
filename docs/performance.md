@@ -591,15 +591,9 @@ Compared clean baseline with the data-oriented design (DOD) and CPU profiling-dr
 | SingleRunCheckpoint cold-recover (2048 waiters) | 1 | 5,392,910 B / 26,626 allocs | 3,960,453 B / 22,531 allocs | **3,960,453 B / 22,531 allocs** (**-26.6% heap bytes**, **-15.4% allocs**) |
 | Observation fanout (noop observer) | - | 324 allocs/op | 288 allocs/op | **288 allocs/op** (**-11.1% allocs**) |
 
-### Rust-style flat node vector, integer edges, and immediate subgraph flattening
+### Self-referential builder and pointer-linked compiled topology
 
-Eliminated all builder pointer self-references and recursive structures (`subgraphMount.graph *Graph[S]`) by adopting a contiguous flat node vector (`vertices []Vertex[S]`), integer-index directed edges (`Edge{From, To int}`), and immediate subgraph flattening with qualified index ranges (`MountInfo`).
-
-Key outcomes:
-1. **0 Call-Stack Recursion & 0 Pointer Cycles**: Complete structural elimination of self-referential graph pointer trees.
-2. **Compile-time allocation collapse**: 8,192-node graph compilation dropped from 24,902 allocs to 16,748 allocs (-32.7% allocs), compilation latency reduced to 6.69 ms.
-3. **Nested subgraph compile & run**: Reduced to 4.55 µs and 49 allocs (from 114 allocs in baseline, -57.0%).
-4. **Execution hot-path fidelity**: All execution benchmarks retain the zero-allocation per-step invariant (2 allocs/op across 1, 16, and 128 sequential steps).
+The graph builder (`Graph[S]`) models mounted subgraphs directly as a self-referential tree (`subgraphs map[string]*Graph[S]`) and expands them recursively into an immutable pointer-linked compiled topology (`CompiledNode[S]`, `CompiledJoin[S]`, `CompiledEdge[S]`), where edges and fan-out joins hold direct `*CompiledNode[S]` and `*CompiledJoin[S]` pointers while retaining the zero-allocation per-step sequential execution invariant (`2 allocs/op` across 1, 16, and 128 sequential steps).
 
 ## Repository checks
 
